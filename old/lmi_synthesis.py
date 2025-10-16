@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 import cvxpy as cp
 
@@ -58,7 +59,7 @@ def synthesize_state_feedback(A, B, Cz, Dzu, Sigma_nom, gamma, solver="MOSEK"):
     cons += [S >> 0]
 
     # Recover K = Y X^{-1}
-    K = Y @ cp.inverse(X)
+    K = Y @ np.linalg.inv(X)
     Cz_cl = Cz + Dzu @ K
 
     # Upper bound robust H2-like cost
