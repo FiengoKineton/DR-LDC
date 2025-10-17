@@ -36,31 +36,36 @@ def _pick_columns(headers: List[str], data: np.ndarray, prefix: str) -> np.ndarr
     block = data[:, cols].T  # (count x T)
     return block
 
-def _build_blocks_from_csv(path: str, delimiter: str = ",") -> Dict[str, np.ndarray]:
-    """
-    Reads CSV and returns dict with possibly-empty matrices X, U, Y, Z all shaped (var, T).
-    """
+def _build_blocks_from_csv(path: str, delimiter: str = ","):
     headers, data = _read_csv_with_headers(path, delimiter=delimiter)
-    # data is (T x total_cols). We want (vars x T)
+
     X = _pick_columns(headers, data, "x")
     U = _pick_columns(headers, data, "u")
     Y = _pick_columns(headers, data, "y")
     Z = _pick_columns(headers, data, "z")
-    T = data.shape[0]
+
     if X.size == 0 or U.size == 0:
         raise ValueError("CSV must contain at least x* and u* columns.")
-    # Trim all to a common horizon T-1 so we can form X_next
-    Tm1 = min(X.shape[1], U.shape[1])
-    if Y.size:
-        Tm1 = min(Tm1, Y.shape[1])
-    if Z.size:
-        Tm1 = min(Tm1, Z.shape[1])
-    # Use first Tm1 samples for regressors, next for targets
-    X_reg = X[:, :Tm1]                  # x_0..x_{T-2}
-    U_reg = U[:, :Tm1]                  # u_0..u_{T-2}
-    X_next = X[:, 1:Tm1+1]              # x_1..x_{T-1}
-    Y_reg = Y[:, :Tm1] if Y.size else None
-    Z_reg = Z[:, :Tm1] if Z.size else None
+
+    # Raw lengths
+    Tx = X.shape[1]
+    Tu = U.shape[1]
+    Ty = Y.shape[1] if Y.size else np.inf
+    Tz = Z.shape[1] if Z.size else np.inf
+
+    # We need pairs (x_t, u_t) and their successor x_{t+1}.
+    # So the maximum valid regressor length is (min(Tx, Tu, Ty, Tz) - 1).
+    Tpair = int(min(Tx, Tu, Ty, Tz)) - 1
+    if Tpair < 1:
+        raise ValueError(f"Not enough samples to form (X, X_next): got Tx={Tx}, Tu={Tu}, Ty={Ty}, Tz={Tz}")
+
+    # Build aligned blocks with identical column counts
+    X_reg  = X[:, :Tpair]          # x_0..x_{Tpair-1}
+    U_reg  = U[:, :Tpair]          # u_0..u_{Tpair-1}
+    X_next = X[:, 1:Tpair+1]       # x_1..x_{Tpair}
+    Y_reg  = Y[:, :Tpair] if Y.size else None
+    Z_reg  = Z[:, :Tpair] if Z.size else None
+
     return dict(X=X_reg, U=U_reg, X_next=X_next, Y=Y_reg, Z=Z_reg)
 
 # ------------------------- DDD ESTIMATION HELPERS -------------------------
@@ -130,10 +135,10 @@ def make_matrices_from_data(
       Y ≈ Cy X + Dyw R,   Z ≈ Cz X + Dzu U + Dzw R,
     with R = X_next - (A X + Bu U).
     """
-    rng = np.random.default_rng(seed)
 
     if not data_csv:
-        raise ValueError("Provide data_csv='path/to/file.csv' to read data.")
+        #raise ValueError("Provide data_csv='path/to/file.csv' to read data.")
+        return make_example_system(seed=seed)
 
     blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
     X = blocks["X"]          # (nx x T)
