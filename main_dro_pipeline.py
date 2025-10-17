@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from define_matrices import make_example_system, make_nominal_covariances
+from define_matrices import get_system, make_nominal_covariances
 from dro_lmi import build_and_solve_dro_lmi
 from recover_controller import (
     closed_loop_from_bar,
@@ -37,7 +37,7 @@ def save_json(path: Path, payload: dict):
 
 def main():
     # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-    plant, _ = make_example_system(seed=7)        # replace with your real matrices if needed
+    plant, _ = get_system(seed=7, FROM_DATA=True)
     Sigma_nom = make_nominal_covariances(plant.Bw.shape[1])
     gamma = 0.5                                   # Wasserstein radius (set as you wish)
 
@@ -48,7 +48,7 @@ def main():
         Sigma_nom=Sigma_nom,
         gamma=gamma,
         model=model,
-        solver="SCS",       # MOSEK if available, else SCS (set to "MOSEK" explicitly if you have it)
+        solver="MOSEK",       # MOSEK if available, else SCS (set to "MOSEK" explicitly if you have it)
         verbose=False
     )
 

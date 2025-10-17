@@ -1,6 +1,6 @@
 # run.py
 import numpy as np
-from define_matrices import make_example_system, make_nominal_covariances
+from define_matrices import get_system, make_nominal_covariances
 from ambiguity import Ambiguity
 from optim_problem import optimize_controller, simulate_cost
 from compose import compose_closed_loop
@@ -16,7 +16,7 @@ def run_once(seed_plant: int = 7,
              model="correlated"):
     
     # 1) Define system
-    plant, ctrl0 = make_example_system(seed=seed_plant)
+    plant, ctrl0 = get_system(seed=seed_plant, FROM_DATA=True)
     nx, nw, nu, nz, ny = plant.dims()
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 

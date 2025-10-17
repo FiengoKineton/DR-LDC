@@ -29,6 +29,8 @@ def build_and_solve_dro_lmi(
     gamma: float,
     model: str = "correlated",  # or "independent"
     eps_def: float = 1e-5,
+    alpha_cap: float = 1e2,  # keep X, Y from exploding
+    fro_cap: float = 1e2,  # keep K, L, M, N from exploding
     solver: str | None = None,
     verbose: bool = False,
 ) -> DROLMIResult:
@@ -74,10 +76,8 @@ def build_and_solve_dro_lmi(
 
     cons = []
     # Avoid explosions
-    alpha_cap = 1e2  # keep X, Y from exploding
     cons += [X << alpha_cap * np.eye(nx), Y << alpha_cap * np.eye(nx)]
     # optional: bound Frobenius norms of “gain-like” variables
-    fro_cap = 1e2
     cons += [cp.norm(K, 'fro') <= fro_cap,
             cp.norm(L, 'fro') <= fro_cap,
             cp.norm(M, 'fro') <= fro_cap,
@@ -94,10 +94,6 @@ def build_and_solve_dro_lmi(
         + 0.1*cp.sum_squares(M) + 0.1*cp.sum_squares(N)
     )
     obj = cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2) + reg
-
-    # Negative definiteness helpers (strict -> with epsilon)
-    def negdef(M):
-        return M << -eps_def * np.eye(M.shape[0])
 
     # Negative definiteness helpers (strict -> with epsilon)
     def negdef(M):
@@ -156,8 +152,8 @@ def build_and_solve_dro_lmi(
     if solver is not None:
         solve_kwargs["solver"] = solver
         if solver.upper() == "SCS":
-            solve_kwargs.update(dict(max_iters=150000, eps=1e-6))
-            solve_kwargs.update(dict(acceleration_lookback=20, normalize=True, scale=5.0))
+            solve_kwargs.update(dict(max_iters=150000, eps=5e-7))
+            solve_kwargs.update(dict(acceleration_lookback=50, normalize=True, scale=5.0))
         if solver.upper() == "MOSEK":
             # if you have it, enjoy your life
             pass

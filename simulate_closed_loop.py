@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from define_matrices import make_example_system
+from define_matrices import get_system
 from systems import Plant, Controller
 
 def simulate_closed_loop(plant: Plant,
@@ -132,7 +132,7 @@ def save_npz(sim, fname="cl_timeseries.npz"):
 
 if __name__ == "__main__":
     # Use the same plant as the optimization example (seed=7)
-    plant, _ = make_example_system(seed=7)
+    plant, _ = get_system(seed=7, FROM_DATA=False)
 
     Ac = np.array([
         [ 0.3449, -0.4085,  0.    ,  0.    ],
