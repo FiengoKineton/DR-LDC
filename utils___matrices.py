@@ -1,5 +1,6 @@
-import re, json, yaml
+import re, json, yaml, sys
 import numpy as np
+from scipy.linalg import sqrtm
 from utils___systems import Plant, Controller
 from typing import Tuple, Optional, List
 from numpy.linalg import eigvals, norm
@@ -578,6 +579,52 @@ class MatricesAPI():
         # Residual and Bw
         R = X_next - (A @ X + Bu @ U)  # (nx x T)
         Bw, *_ = _bw_from_residual(R, nw=nw)
+
+        def gaussian_w2(S1, S2):
+            S1 = 0.5*(S1+S1.T); S2 = 0.5*(S2+S2.T); S2h = sqrtm(S2)            
+            M = sqrtm(S2h @ S1 @ S2h)
+            return float(np.sqrt(max(np.trace(S1)+np.trace(S2)-2*np.trace(np.real(M)), 0.0)))
+
+        def estimate_sigma_nom_from_innovations(e, K=None, Bw=None):
+            """
+            e: innovations array (T, ny)
+            K: Kalman gain mapping innovations to state noise; if None, treat Bw=I and use e directly
+            Bw: disturbance input matrix; if given and full column rank, back-project
+            Returns Sigma_nom in R^{n_w x n_w}.
+            """
+            E = e - e.mean(axis=0, keepdims=True)
+            if K is not None:
+                W_eff = E @ K.T        # in state coordinates
+            else:
+                W_eff = E              # treat as direct process noise sample
+            # If Bw provided and tall/full col rank, least-squares inversion to get w
+            if Bw is not None and Bw.shape[1] <= Bw.shape[0]:
+                # Solve min_w ||Bw w - W_eff||_F
+                Bw_pinv = np.linalg.pinv(Bw)
+                W_hat = (Bw_pinv @ W_eff).T
+            else:
+                W_hat = W_eff
+            return W_hat, np.cov(W_hat, rowvar=False)
+
+        def bootstrap_gamma(Sigma_nom, samples, beta=0.05, B=200, rng=None):
+            """
+            samples: array (T, n_w) of surrogate w_t
+            Returns a (1-beta) quantile of W2 distance to Sigma_nom.
+            """
+            rng = np.random.default_rng() if rng is None else rng
+            T = samples.shape[0]
+            dists = []
+            for _ in range(B):
+                idx = rng.integers(0, T, size=T)
+                S = np.cov(samples[idx], rowvar=False)
+                dists.append(gaussian_w2(S, Sigma_nom))
+            return float(np.quantile(dists, 1.0 - beta))
+        
+        What, sigma_nom = estimate_sigma_nom_from_innovations(R, Bw=Bw)
+        gamma = bootstrap_gamma(sigma_nom, What, beta=0.05, B=200)
+
+        print(f"sigma_nom:\n{sigma_nom}")
+        print(f"gamma:\n{gamma}")
 
         """
             Y = blocks["Y"]          # may be None

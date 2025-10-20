@@ -470,7 +470,6 @@ class Open_Loop():
         nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 
         plant_est, ctrl0 = api.make_matrices_from_data(
-            data_csv=csv_path,
             delimiter=delimiter,
             ridge=ridge,
         )
@@ -707,6 +706,6 @@ if __name__ == "__main__":
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=True, PLOT=True, yaml_path=yaml_path)
+    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False, yaml_path=yaml_path)
 
 

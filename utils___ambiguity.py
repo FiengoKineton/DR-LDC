@@ -1,6 +1,9 @@
 import numpy as np
 from numpy.linalg import cholesky
 from scipy.linalg import sqrtm
+import yaml
+import matplotlib.pyplot as plt
+
 
 class WassersteinAmbiguitySet:
     """
@@ -8,12 +11,28 @@ class WassersteinAmbiguitySet:
     - W_ind: iid disturbances with that marginal
     - W_cor: arbitrary temporal correlation but each marginal in the ball
     """
-    def __init__(self, Sigma_nom: np.ndarray, gamma: float, rng: np.random.Generator = None):
-        Sigma_nom = 0.5 * (Sigma_nom + Sigma_nom.T)
-        self.Sigma_nom = Sigma_nom
-        self.gamma = float(gamma)
-        self.rng = np.random.default_rng() if rng is None else rng
+    def __init__(self, yaml_path = "problem___parameters.yaml"):
+        if yaml is None:
+            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        p = cfg.get("params", {})
+        set = p.get("ambiguity", {})
+        sim = p.get("simulation", {})
+        Sigma_nom = np.array(set["Sigma_nom"], dtype=float) 
+        gamma = float(set.get("gamma", 0.0))
+        Tf = sim.get("TotTime", 100)
+        self.ts = sim.get("ts", 0.5)
+        
+        self.mode = p.get("model", "independent")
+        self.T = int(Tf / self.ts)
+        self.Sigma_nom = 0.5 * (Sigma_nom + Sigma_nom.T)
+        self.gamma = gamma
+        self.rng = np.random.default_rng()
         self._chol_nom = None
+        self.time = np.arange(self.T)*self.ts
+
 
     @staticmethod
     def _sym(A):
@@ -74,6 +93,22 @@ class WassersteinAmbiguitySet:
                 break
         return cov_on_geodesic(hi)
 
+
+    # ---------- sampling utilities ----------
+
+    def sample(self) -> np.ndarray:
+        """
+        Sample a disturbance sequence of length T from the ambiguity set.
+        Uses the specified mode ("independent" or "correlated").
+        Returns array shape (T, n).
+        """
+        if self.mode == "independent":
+            return self.sample_iid(T=self.T)
+        elif self.mode == "correlated":
+            return self.sample_correlated(T=self.T)
+        else:
+            raise ValueError(f"Unknown ambiguity mode: {self.mode}")
+
     def sample_iid(self, T: int, Sigma: np.ndarray = None) -> np.ndarray:
         """
         Sample an iid sequence in W_ind.
@@ -91,7 +126,7 @@ class WassersteinAmbiguitySet:
         z = self.rng.standard_normal(size=(T, n))
         return z @ L.T
 
-    def sample_correlated(self, T: int, rho: float = 0.8, Sigma: np.ndarray = None) -> np.ndarray:
+    def sample_correlated(self, T: int, rho: float = 0.9, Sigma: np.ndarray = None) -> np.ndarray:
         """
         Sample a correlated sequence in W_cor using an AR(1) model:
             w_{t+1} = F w_t + eps_t,   eps_t ~ N(0,Q)
@@ -134,3 +169,25 @@ class WassersteinAmbiguitySet:
         """Check membership by plugging in the sample covariance into the Gaussian W2 formula."""
         S = self.empirical_marginal_cov(w)
         return self.is_member_gaussian(S)
+
+
+if __name__ == "__main__":
+    # simple test
+    wass = WassersteinAmbiguitySet()
+    print("Nominal Sigma:\n", wass.Sigma_nom)
+    print("Gamma:", wass.gamma)
+    print("Mode:", wass.mode)
+
+    # sample iid
+    t = wass.time
+    w = wass.sample()
+    print(wass.is_member_empirical(w))
+
+    plt.figure()
+    plt.title(f"{wass.mode} samples")
+    plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
+    plt.plot(t, w)
+    plt.xlabel("Time")
+    plt.grid()
+    plt.legend()
+    plt.show()
