@@ -1,27 +1,8 @@
 # dro_lmi.py
 import numpy as np
 import cvxpy as cp
-from dataclasses import dataclass
-from utilis___systems import Plant
+from utilis___systems import Plant, DROLMIResult
 
-@dataclass
-class DROLMIResult:
-    status: str
-    obj_value: float | None
-    gamma: float
-    lambda_opt: float | None
-    Q: np.ndarray | None
-    X: np.ndarray | None
-    Y: np.ndarray | None
-    K: np.ndarray | None
-    L: np.ndarray | None
-    M: np.ndarray | None
-    N: np.ndarray | None
-    Pbar: np.ndarray | None
-    Abar: np.ndarray | None
-    Bbar: np.ndarray | None
-    Cbar: np.ndarray | None
-    Dbar: np.ndarray | None
 
 def build_and_solve_dro_lmi(
     plant: Plant,

@@ -3,11 +3,14 @@ params:
   model: "correlated"   # "independent" | "correlated"
   solver: "SCS"         # "SCS" | "MOSEK"
   FROM_DATA: true      # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
-  ts: 0.05
+
+  simulation:
+    ts: 0.05
+    TotTime: 25
   
   directories:
     data: "./out/data/session_01"
-    artifacts: "./out/artifacts/session_01"
+    artifacts: "./out/artifacts/"
 
   plant:
     #type: explicit  # change to random_stable if there a change of dimensions

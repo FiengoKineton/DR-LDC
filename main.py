@@ -1,5 +1,5 @@
 # main.py
-import json, argparse, yaml
+import json, argparse, yaml, sys
 import numpy as np
 from pathlib import Path
 
@@ -14,36 +14,21 @@ from utilis___matrices import Recover, MatricesAPI
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self, params: dict, out: Path):
+    def __init__(self, out: Path):
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
-        FROM_DATA = params.get("FROM_DATA", False)
-        if FROM_DATA:
-            print("Evaluating plant from data files.")
-
-        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(FROM_DATA=FROM_DATA)
+        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once()
 
         # Persist everything needed for reproducible simulation
-        json_path = out / f"___results_run.json"
+        json_path = out + f"___results_run.json"
         self.save_results_json(json_path, Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant)
-
-        # Also stash arrays for quick re-loads
-        npz_path = out / f"___results_run_arrays.npz"
-        np.savez_compressed(
-            npz_path,
-            Sigma_eff=Sigma_eff,
-            Ac=ctrl_opt.Ac, Bc=ctrl_opt.Bc, Cc=ctrl_opt.Cc, Dc=ctrl_opt.Dc,
-            A=plant.A, Bw=plant.Bw, Bu=plant.Bu, Cz=plant.Cz, Dzw=plant.Dzw, Dzu=plant.Dzu, Cy=plant.Cy, Dyw=plant.Dyw,
-            baseline_cost=np.array(base_cost), optimized_cost=np.array(cost_opt), spectral_radius_Acl=np.array(rho),
-        )
         print(f"[saved] {json_path}")
-        print(f"[saved] {npz_path}")
 
         # Load back the exact same objects and simulate
         Sigma_loaded, ctrl_loaded, plant_loaded, _ = self.load_results_json(json_path)
-        sim = cl.simulate_closed_loop(plant_loaded, ctrl_loaded, Sigma_loaded, T=800, seed=11)
-        out_npz = out / f"___closed_loop_run.npz"
+        sim = cl.simulate_closed_loop(plant_loaded, ctrl_loaded, Sigma_loaded)
+        out_npz = out + f"___closed_loop_run.npz"
         cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
@@ -110,17 +95,14 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict):
+    def __init__(self, params: dict, out: Path):
 
         recover = Recover()
         api = MatricesAPI()
-        FROM_DATA = params.get("FROM_DATA", False)
-        if FROM_DATA:
-            print("Evaluating plant from data files.")
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        plant, _ = api.get_system(seed=7, FROM_DATA=FROM_DATA)
-        Sigma_nom = api.make_nominal_covariances(plant.Bw.shape[1])
+        plant, _ = api.get_system()
+        Sigma_nom = api.make_nominal_covariances()
 
         solver = params.get("solver", "SCS")                     # "MOSEK" or "SCS"
         gamma = params.get("ambiguity", {}).get("gamma", 0.5)    # Wasserstein radius (set as you wish)
@@ -194,14 +176,14 @@ class lmi_pipeline_optim_problem():
             "recovery_residuals_rel": residuals,  # dimensionless relative errors
         }
 
-        out_json = out / f"___dro_pipeline.json"
+        out_json = out + f"___results_run.json"
         self.save_json(out_json, payload)
         print(f"[saved] {out_json}")
 
         # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
         #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
-        sim = cl.simulate_closed_loop(plant, ctrl_rec, Sigma_nom, T=800, seed=11)
-        out_npz = out / f"___dro_pipeline.npz"
+        sim = cl.simulate_closed_loop(plant, ctrl_rec, Sigma_nom)
+        out_npz = out + f"___closed_loop_run.npz"
         cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
@@ -243,23 +225,21 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
-    out = p.get("directories", {}).get("artifacts", "./out/artifacts/session_01")
+    out = p.get("directories", {}).get("artifacts", "./out/artifacts/")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent")
-    _data = "DDD" if bool(p.get("FROM_DATA", False)) else "MBD"
+    FROM_DATA = bool(p.get("FROM_DATA", False))
+    _data = "DDD" if FROM_DATA else "MBD"
 
-    csv_path = out + f"___{_type}_{_model}_{_data}.csv"
+    path_name = f"/run_01___{_type}_{_model}_{_data}"
+    print(("\nEvaluating plant from data files." if FROM_DATA else "\nEvaluating plant from model-based design."))
 
-    out = Path(csv_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
 
     if args.base:
-        print("Running baseline optimization...")
-        out = Path(out).with_suffix("").as_posix() + "_baseline"
-        out.mkdir(exist_ok=True)
+        print("Running baseline optimization...\n\n")
+        out = Path(out).with_suffix("").as_posix() + "/baseline" + path_name
         baseline_optim_problem(params=p, out=out)
     if args.lmi:
-        print("Running LMI pipeline optimization...")
-        out = Path(out).with_suffix("").as_posix() + "_lmi"
-        out.mkdir(exist_ok=True)
+        print("Running LMI pipeline optimization...\n\n")
+        out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name
         lmi_pipeline_optim_problem(params=p, out=out)

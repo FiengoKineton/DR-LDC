@@ -22,7 +22,7 @@ class Optim_Problem():
         We estimate by Monte Carlo with one long trajectory. Increase T for better accuracy.
         """
         rng = np.random.default_rng(seed)
-        nx, nw, nu, nz, ny = plant.dims()
+        nx, nw, *_ = plant.dims()
         nxc = ctrl.dims()
 
         A_cl, B_cl, C_cl, D_cl = compose_closed_loop(plant, ctrl)
@@ -86,7 +86,7 @@ class Optim_Problem():
         ctrl = Controller(Ac, Bc, Cc, Dc)
 
         # Compose and check stability
-        A_cl, B_cl, C_cl, D_cl = compose_closed_loop(plant, ctrl)
+        A_cl, *_ = compose_closed_loop(plant, ctrl)
         stable, rho = self.is_stable_discrete(A_cl)
         penalty = 0.0
         if not stable:
@@ -135,9 +135,7 @@ class Optim_Problem():
 
 # ------------------------- SINGLE RUN FUNCTION --------------------------
 
-def run_once(FROM_DATA: bool = False,
-             seed_plant: int = 7,
-             T_cost_init: int = 2000,
+def run_once(T_cost_init: int = 2000,
              T_cost_opt: int = 2500,
              burnin_init: int = 200,
              burnin_opt: int = 300,
@@ -148,12 +146,12 @@ def run_once(FROM_DATA: bool = False,
     api = MatricesAPI()
 
     # 1) Define system
-    plant, ctrl0 = api.get_system(seed=seed_plant, FROM_DATA=FROM_DATA)
+    plant, ctrl0 = api.get_system()
     nx, nw, nu, nz, ny = plant.dims()
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 
     # 2) Define ambiguity set (W2-ball around N(0, Σ_nom) with radius γ)
-    Sigma_nom = api.make_nominal_covariances(nw)
+    Sigma_nom = api.make_nominal_covariances()
     amb = Ambiguity(Sigma_nom)
     Sigma_eff = amb.sigma_effective()
     print("Effective Σ_w:\n", Sigma_eff)

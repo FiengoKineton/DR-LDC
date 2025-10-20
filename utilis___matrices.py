@@ -163,11 +163,17 @@ class MatricesAPI():
             cfg = yaml.safe_load(f)
 
         self.p = cfg.get("params", {})
+        out = self.p.get("directories", {}).get("data", "./out/data/session_01")
+        _type = self.p.get("plant", {}).get("type", "explicit")
+        _model = self.p.get("model", "independent")
+        _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
+        self.csv_path = out + f"___{_type}_{_model}_{_data}.csv"
+        
 
-    def make_nominal_covariances(self, nw):
+    def make_nominal_covariances(self):
         # nominal zero-mean Gaussian covariance for w
-        Sigma_nom = 0.5 * np.eye(nw)
+        Sigma_nom = 0.5 * np.eye(self.p.get("dimensions", {}).get("nw", 2))
         return Sigma_nom
 
 
@@ -441,7 +447,6 @@ class MatricesAPI():
 
     def make_matrices_from_data(
         self, 
-        data_csv: str = "out/data/session01_explicit.csv",
         delimiter: str = ",",
         ridge: float = 1e-6,
     ):
@@ -553,6 +558,8 @@ class MatricesAPI():
             Bw = vecs[:, :nw] @ np.diag(np.sqrt(np.maximum(vals[:nw], eps)))
             return Bw, nw, S
 
+
+        data_csv = str(self.csv_path)
 
         if not data_csv:
             print("Provide data_csv='path/to/file.csv' to read data.")

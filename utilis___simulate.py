@@ -12,6 +12,16 @@ from utilis___systems import Plant, Controller
 
 class Closed_Loop():
     def __init__(self, TEST=False):
+        if yaml is None:
+            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        self.p = cfg.get("params", {})
+        sim = self.p.get("simulation", {})
+        self.Tf = sim.get("TotTime", 25)
+        self.ts = sim.get("ts", 0.5)
+
         if TEST: self.test()
     
     def test(self):
@@ -58,8 +68,7 @@ class Closed_Loop():
     def simulate_closed_loop(self, plant: Plant,
                             ctrl: Controller,
                             Sigma_w: np.ndarray,
-                            T: int = 500,
-                            seed: int = 0,
+                            seed: int = 11,
                             x0: np.ndarray | None = None,
                             xc0: np.ndarray | None = None):
         """
@@ -83,6 +92,7 @@ class Closed_Loop():
         nxc = Ac.shape[0]
 
         # Initial conditions
+        T = int(self.Tf / self.ts)
         x = np.zeros((nx, 1)) if x0 is None else np.asarray(x0, float).reshape(nx, 1)
         xc = np.zeros((nxc, 1)) if xc0 is None else np.asarray(xc0, float).reshape(nxc, 1)
 
@@ -555,7 +565,6 @@ class Open_Loop():
         nsteps: int = 60,
         x0_mode: str = "e1",   # "e1" | "ones" | "random"
         seed: int = 0,
-        save_dir: str | None = None,
         show: bool = True
     ):
         """
