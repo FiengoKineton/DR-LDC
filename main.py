@@ -18,11 +18,11 @@ class baseline_optim_problem():
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
-        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(Sigma_nom=Sigma_nom)
+        Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(Sigma_nom=Sigma_nom)
 
         # Persist everything needed for reproducible simulation
         json_path = out + f"___results_run.json"
-        self.save_results_json(json_path, Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant)
+        self.save_results_json(json_path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant)
         print(f"[saved] {json_path}")
 
         # Load back the exact same objects and simulate
@@ -64,9 +64,9 @@ class baseline_optim_problem():
             Dc=np.array(d["Dc"], dtype=float),
         )
 
-    def save_results_json(self, path, Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant):
+    def save_results_json(self, path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant):
         payload = {
-            "Sigma_eff": Sigma_eff.tolist(),
+            "Sigma_nom": Sigma_nom.tolist(),
             "baseline_cost": base_cost,
             "optimizer_status": msg,
             "optimized_cost": cost_opt,
@@ -80,7 +80,7 @@ class baseline_optim_problem():
     def load_results_json(self, path):
         with open(path, "r", encoding="utf-8") as f:
             d = json.load(f)
-        Sigma_eff = np.array(d["Sigma_eff"], dtype=float)
+        Sigma_nom = np.array(d["Sigma_nom"], dtype=float)
         ctrl = self.controller_from_dict(d["controller"])
         plant = self.plant_from_dict(d["plant"])
         meta = {
@@ -89,7 +89,7 @@ class baseline_optim_problem():
             "optimizer_status": d["optimizer_status"],
             "spectral_radius_Acl": d["spectral_radius_Acl"],
         }
-        return Sigma_eff, ctrl, plant, meta
+        return Sigma_nom, ctrl, plant, meta
 
 
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
@@ -315,7 +315,7 @@ def compare_baseline_vs_lmi(out_root: str, path_name: str) -> None:
 
     print(f"[compare] loading baseline: {base_json}")
     db = _load_json(base_json)
-    Sigma_b = np.array(db.get("Sigma_eff"), dtype=float)
+    Sigma_b = np.array(db.get("Sigma_nom"), dtype=float)
     plant_b = _plant_from_dict(db["plant"])
     ctrl_b  = _controller_from_dict(db["controller"])
     meta_b  = {
@@ -422,9 +422,9 @@ if __name__ == "__main__":
     FROM_DATA = bool(p.get("FROM_DATA", False))
     _data = "DDD" if FROM_DATA else "MBD"
 
-    Sigma_nom = np.array(p.get("ambiguity", {}).get("Sigma_nom", dtype=float))
+    Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
-    path_name = f"/run_01___{_type}_{_model}_{_data}"
+    path_name = f"/run_02___{_type}_{_model}_{_data}"
     print(("\nEvaluating plant from data files." if FROM_DATA else "\nEvaluating plant from model-based design."))
 
     if args.comp:

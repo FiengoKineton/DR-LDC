@@ -61,7 +61,7 @@ class Recover():
         Dbar = np.array(d["Dbar"], dtype=float)
         return Pbar, Abar, Bbar, Cbar, Dbar, d
 
-    def closed_loop_from_bar(self, Pbar, Abar, Bbar, Cbar, Dbar, jitter=1e-9):
+    def __closed_loop_from_bar(self, Pbar, Abar, Bbar, Cbar, Dbar, jitter=1e-9):
         """
         Direct gauge: set T = I, P = Pbar. Then:
         A_cl = Pbar^{-1} Abar
@@ -92,6 +92,30 @@ class Recover():
         C_cl = Cbar
         D_cl = Dbar
         return A_cl, B_cl, C_cl, D_cl
+
+    def closed_loop_from_bar(self, Pbar, Abar, Bbar, Cbar, Dbar, jitter=1e-9):
+        Pbar = np.asarray(Pbar, float); Abar = np.asarray(Abar, float)
+        Bbar = np.asarray(Bbar, float); Cbar = np.asarray(Cbar, float)
+        Dbar = np.asarray(Dbar, float)
+
+        # Symmetrize and make PD
+        Pbar = 0.5 * (Pbar + Pbar.T)
+        w, V = np.linalg.eigh(Pbar)
+        w_clip = np.maximum(w, jitter)
+        Pbar_pd = (V * w_clip) @ V.T
+
+        # Choose a congruence factor T with T^T T = Pbar (lower chol)
+        T = np.linalg.cholesky(Pbar_pd)     # lower-triangular
+        Tinv = np.linalg.inv(T)
+
+        # Undo the congruence:
+        # Using lower chol: Acl = Tinv @ Abar @ T, Bcl = Tinv @ Bbar, Ccl = Cbar @ T
+        A_cl = Tinv @ Abar @ T
+        B_cl = Tinv @ Bbar
+        C_cl = Cbar @ T
+        D_cl = Dbar
+        return A_cl, B_cl, C_cl, D_cl
+
 
     def recover_controller_from_closed_loop(self, plant: Plant, A_cl, B_cl, C_cl, D_cl):
         """
