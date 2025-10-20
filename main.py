@@ -14,9 +14,7 @@ from utilis___matrices import Recover, MatricesAPI
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self, params: dict):
-        ARTIFACTS = Path("out/artifacts/baseline")
-        ARTIFACTS.mkdir(exist_ok=True)
+    def __init__(self, params: dict, out: Path):
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
@@ -27,11 +25,11 @@ class baseline_optim_problem():
         Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(FROM_DATA=FROM_DATA)
 
         # Persist everything needed for reproducible simulation
-        json_path = ARTIFACTS / "results_run.json"
+        json_path = out / f"___results_run.json"
         self.save_results_json(json_path, Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant)
 
         # Also stash arrays for quick re-loads
-        npz_path = ARTIFACTS / "results_run_arrays.npz"
+        npz_path = out / f"___results_run_arrays.npz"
         np.savez_compressed(
             npz_path,
             Sigma_eff=Sigma_eff,
@@ -43,9 +41,9 @@ class baseline_optim_problem():
         print(f"[saved] {npz_path}")
 
         # Load back the exact same objects and simulate
-        Sigma_loaded, ctrl_loaded, plant_loaded, meta = self.load_results_json(json_path)
+        Sigma_loaded, ctrl_loaded, plant_loaded, _ = self.load_results_json(json_path)
         sim = cl.simulate_closed_loop(plant_loaded, ctrl_loaded, Sigma_loaded, T=800, seed=11)
-        out_npz = ARTIFACTS / "closed_loop_run_seed11_T800.npz"
+        out_npz = out / f"___closed_loop_run.npz"
         cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
@@ -113,8 +111,6 @@ class baseline_optim_problem():
 
 class lmi_pipeline_optim_problem(): 
     def __init__(self, params: dict):
-        ART = Path("out/artifacts/lmi")
-        ART.mkdir(exist_ok=True)
 
         recover = Recover()
         api = MatricesAPI()
@@ -198,14 +194,14 @@ class lmi_pipeline_optim_problem():
             "recovery_residuals_rel": residuals,  # dimensionless relative errors
         }
 
-        out_json = ART / f"dro_pipeline_{model}.json"
+        out_json = out / f"___dro_pipeline.json"
         self.save_json(out_json, payload)
         print(f"[saved] {out_json}")
 
         # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
         #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
         sim = cl.simulate_closed_loop(plant, ctrl_rec, Sigma_nom, T=800, seed=11)
-        out_npz = ART / f"dro_pipeline_{model}_sim_T800_seed11.npz"
+        out_npz = out / f"___dro_pipeline.npz"
         cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
@@ -247,11 +243,23 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
+    out = p.get("directories", {}).get("artifacts", "./out/artifacts/session_01")
+    _type = p.get("plant", {}).get("type", "explicit")
+    _model = p.get("model", "independent")
+    _data = "DDD" if bool(p.get("FROM_DATA", False)) else "MBD"
 
+    csv_path = out + f"___{_type}_{_model}_{_data}.csv"
+
+    out = Path(csv_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     if args.base:
         print("Running baseline optimization...")
-        baseline_optim_problem(params=p)
+        out = Path(out).with_suffix("").as_posix() + "_baseline"
+        out.mkdir(exist_ok=True)
+        baseline_optim_problem(params=p, out=out)
     if args.lmi:
         print("Running LMI pipeline optimization...")
-        lmi_pipeline_optim_problem(params=p)
+        out = Path(out).with_suffix("").as_posix() + "_lmi"
+        out.mkdir(exist_ok=True)
+        lmi_pipeline_optim_problem(params=p, out=out)

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-import argparse
+import argparse, csv, yaml
 import numpy as np
-import csv
 from pathlib import Path
 from utilis___matrices import MatricesAPI
 
@@ -185,118 +184,40 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True, out = "out/data/session01.csv", yaml_path="problem___parameters.yaml"):
-        if MAKE_DATA: self.make_data(yaml_path=yaml_path, out = out)
-        if EVAL_FROM_PATH: self.evaluate_from_path(csv_path=out, ridge=1e-6)
+    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False, yaml_path="problem___parameters.yaml"):
+        if yaml is None:
+            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        self.p = cfg.get("params", {})
+        out = self.p.get("directories", {}).get("data", "./out/data/session_01")
+        _type = self.p.get("plant", {}).get("type", "explicit")
+        _model = self.p.get("model", "independent")
+        _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
+
+        self.csv_path = out + f"___{_type}_{_model}_{_data}.csv"
+
+        self.out = Path(self.csv_path)
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        self.estim_path = self.out.with_suffix("").as_posix() + "_estmMat.npz"
+        self.truth_path = self.out.with_suffix("").as_posix() + "_trueMat.npz"
+
+
+
+        if MAKE_DATA: self.make_data()
+        if EVAL_FROM_PATH: self.evaluate_from_path()
+        if PLOT: 
+            metrics = self.plot_est_vs_truth(nsteps=80, x0_mode="e1", show=True)
+            print("\n[PLT] Plotting completed. Metrics:", metrics)
 
     
     """
     python simulate_pe_openloop.py --T 3000 --nx 4 --nu 2 --nw 2 --ny 2 --nz 3 --input multisine --amp 1.0 --w_std 0.1 --seed 42 --out out/data/session01.csv
     """
 
-    def stable_A(self, nx, seed):
-        rng = np.random.default_rng(seed)
-        # Random orthogonal Q via QR, diagonal with decays < 1
-        M = rng.normal(size=(nx, nx))
-        Q, _ = np.linalg.qr(M)
-        eig = 0.7 + 0.25 * rng.random(nx)  # in (0.7, 0.95)
-        A = Q @ np.diag(eig) @ Q.T
-        return A
 
-    def prbs(self, nu, T, shift=7, seed=0, amp=1.0):
-        """ PRBS generator per input channel. shift sets LFSR length. """
-        rng = np.random.default_rng(seed)
-        U = np.zeros((nu, T))
-        for i in range(nu):
-            # primitive-ish taps for small shift values
-            taps = {
-                5: (5, 2), 6: (6, 1), 7: (7, 1), 9: (9, 5),
-                10: (10, 3), 11: (11, 2), 15: (15, 1)
-            }
-            s = shift if shift in taps else 7
-            reg = rng.integers(1, 2**s, dtype=np.int64)
-            ti, tj = taps[s]
-            seq = np.empty(T)
-            for t in range(T):
-                bit = (reg >> (ti - 1)) ^ (reg >> (tj - 1))
-                bit &= 1
-                reg = ((reg << 1) & ((1 << s) - 1)) | bit
-                seq[t] = 1.0 if (reg & 1) else -1.0
-            U[i, :] = amp * seq
-        return U
-
-    def multisine(self, nu, T, ntones=8, seed=0, amp=1.0):
-        """ Sum of randomized sines and cosines per channel. """
-        rng = np.random.default_rng(seed)
-        U = np.zeros((nu, T))
-        t = np.arange(T)
-        for i in range(nu):
-            freqs = rng.choice(np.arange(1, max(2, T // 10)), size=ntones, replace=False)
-            phases = 2 * np.pi * rng.random(ntones)
-            ui = np.zeros(T)
-            for k, f in enumerate(freqs):
-                ui += np.sin(2 * np.pi * f * t / T + phases[k])
-                ui += np.cos(2 * np.pi * f * t / T + phases[k] / 3.0)
-            ui /= np.max(np.abs(ui)) + 1e-12
-            U[i, :] = amp * ui
-        return U
-
-    def pe_check(self, X, U):
-        """ Report condition number of DD^T where D=[X;U]. """
-        D = np.vstack([X, U])
-        G = D @ D.T
-        svals = np.linalg.svd(G, compute_uv=False)
-        cond = np.inf if svals[-1] <= 1e-14 else svals[0] / svals[-1]
-        return cond, svals
-
-    def simulate_open_loop(self, A, Bu, Bw, T, x0, U, w_std=0.1, seed=0):
-        rng = np.random.default_rng(seed)
-        nx, nu = Bu.shape
-        nw = Bw.shape[1]
-        X = np.zeros((nx, T))
-        X[:, 0] = x0
-        W = rng.normal(0.0, 1.0, size=(nw, T)) * w_std
-        for t in range(T - 1):
-            X[:, t + 1] = (A @ X[:, t] + Bu @ U[:, t] + Bw @ W[:, t])
-        return X, W
-
-    def synth_outputs(self, X, U, R, ny, nz):
-        nx, T = X.shape
-        nu = U.shape[0]
-        # Measured output: pick first ny states, no direct disturbance by default
-        ny = min(ny, nx)
-        Cy = np.zeros((ny, nx))
-        Cy[np.arange(ny), np.arange(ny)] = 1.0
-        Dyw = np.zeros((ny, nx))  # maps residual proxy to y; keep zero unless you know better
-        Y = Cy @ X[:, :-1] + Dyw @ R  # aligned to t=0..T-2
-
-        # Performance output: states + mild control penalty, no Dzw
-        nz_eff = min(nz, nx)
-        Cz = np.zeros((nz, nx))
-        for i in range(nz_eff):
-            Cz[i, i] = 1.0
-        Dzu = 0.05 * np.eye(nz, nu)
-        Dzw = np.zeros((nz, nx))
-        Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
-        return Y, Z
-
-    def synth_outputs_with_mats(self, X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny, nz):
-        """
-        Returns Y, Z plus the exact matrices used to generate them:
-        Cy, Dyw, Cz, Dzu, Dzw.
-        Shapes:
-        X: (nx,T), U: (nu,T), R: (nx,T-1)
-        Y: (ny,T-1), Z: (nz,T-1)
-        """
-        nx, T = X.shape
-        nu = U.shape[0]
-        Y = Cy @ X[:, :-1] + Dyw @ R        # aligned to t = 0..T-2
-        Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
-
-        return Y, Z
-
-
-    def make_data(self, yaml_path="problem___parameters.yaml", out = "out/data/session01.csv"):
+    def make_data(self):
         ap = argparse.ArgumentParser(description="Simulate open-loop with persistently exciting input and save CSV.")
         ap.add_argument("--T", type=int, default=3000, help="number of time steps")
         ap.add_argument("--seed", type=int, default=0)
@@ -306,24 +227,117 @@ class Open_Loop():
         ap.add_argument("--delimiter", type=str, default=",")
         args = ap.parse_args()
 
+
+        def prbs(nu, T, shift=7, seed=0, amp=1.0):
+            """ PRBS generator per input channel. shift sets LFSR length. """
+            rng = np.random.default_rng(seed)
+            U = np.zeros((nu, T))
+            for i in range(nu):
+                # primitive-ish taps for small shift values
+                taps = {
+                    5: (5, 2), 6: (6, 1), 7: (7, 1), 9: (9, 5),
+                    10: (10, 3), 11: (11, 2), 15: (15, 1)
+                }
+                s = shift if shift in taps else 7
+                reg = rng.integers(1, 2**s, dtype=np.int64)
+                ti, tj = taps[s]
+                seq = np.empty(T)
+                for t in range(T):
+                    bit = (reg >> (ti - 1)) ^ (reg >> (tj - 1))
+                    bit &= 1
+                    reg = ((reg << 1) & ((1 << s) - 1)) | bit
+                    seq[t] = 1.0 if (reg & 1) else -1.0
+                U[i, :] = amp * seq
+            return U
+
+        def multisine(nu, T, ntones=8, seed=0, amp=1.0):
+            """ Sum of randomized sines and cosines per channel. """
+            rng = np.random.default_rng(seed)
+            U = np.zeros((nu, T))
+            t = np.arange(T)
+            for i in range(nu):
+                freqs = rng.choice(np.arange(1, max(2, T // 10)), size=ntones, replace=False)
+                phases = 2 * np.pi * rng.random(ntones)
+                ui = np.zeros(T)
+                for k, f in enumerate(freqs):
+                    ui += np.sin(2 * np.pi * f * t / T + phases[k])
+                    ui += np.cos(2 * np.pi * f * t / T + phases[k] / 3.0)
+                ui /= np.max(np.abs(ui)) + 1e-12
+                U[i, :] = amp * ui
+            return U
+
+        def pe_check(X, U):
+            """ Report condition number of DD^T where D=[X;U]. """
+            D = np.vstack([X, U])
+            G = D @ D.T
+            svals = np.linalg.svd(G, compute_uv=False)
+            cond = np.inf if svals[-1] <= 1e-14 else svals[0] / svals[-1]
+            return cond, svals
+
+        def simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=0.1, seed=0):
+            rng = np.random.default_rng(seed)
+            nx, nu = Bu.shape
+            nw = Bw.shape[1]
+            X = np.zeros((nx, T))
+            X[:, 0] = x0
+            W = rng.normal(0.0, 1.0, size=(nw, T)) * w_std
+            for t in range(T - 1):
+                X[:, t + 1] = (A @ X[:, t] + Bu @ U[:, t] + Bw @ W[:, t])
+            return X, W
+
+        def synth_outputs(X, U, R, ny, nz):
+            nx, T = X.shape
+            nu = U.shape[0]
+            # Measured output: pick first ny states, no direct disturbance by default
+            ny = min(ny, nx)
+            Cy = np.zeros((ny, nx))
+            Cy[np.arange(ny), np.arange(ny)] = 1.0
+            Dyw = np.zeros((ny, nx))  # maps residual proxy to y; keep zero unless you know better
+            Y = Cy @ X[:, :-1] + Dyw @ R  # aligned to t=0..T-2
+
+            # Performance output: states + mild control penalty, no Dzw
+            nz_eff = min(nz, nx)
+            Cz = np.zeros((nz, nx))
+            for i in range(nz_eff):
+                Cz[i, i] = 1.0
+            Dzu = 0.05 * np.eye(nz, nu)
+            Dzw = np.zeros((nz, nx))
+            Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
+            return Y, Z
+
+        def synth_outputs_with_mats(X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny, nz):
+            """
+            Returns Y, Z plus the exact matrices used to generate them:
+            Cy, Dyw, Cz, Dzu, Dzw.
+            Shapes:
+            X: (nx,T), U: (nu,T), R: (nx,T-1)
+            Y: (ny,T-1), Z: (nz,T-1)
+            """
+            nx, T = X.shape
+            nu = U.shape[0]
+            Y = Cy @ X[:, :-1] + Dyw @ R        # aligned to t = 0..T-2
+            Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
+
+            return Y, Z
+
+
         T = args.T
         rng = np.random.default_rng(args.seed)
 
         api = MatricesAPI()
-        A, Bu, Bw = api.build_AB_from_yaml(yaml_path=yaml_path)
-        Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices(yaml_path=yaml_path)
-        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml(yaml_path=yaml_path)
-        
+        A, Bu, Bw = api.build_AB_from_yaml()
+        Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices()
+        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 
         # Persistently exciting input
         if args.input == "prbs":
-            U = self.prbs(nu, T, shift=11, seed=args.seed + 17, amp=args.amp)
+            U = prbs(nu, T, shift=11, seed=args.seed + 17, amp=args.amp)
         else:
-            U = self.multisine(nu, T, ntones=12, seed=args.seed + 23, amp=args.amp)
+            U = multisine(nu, T, ntones=12, seed=args.seed + 23, amp=args.amp)
 
         # Simulate
         x0 = rng.normal(0, 1.0, size=nx)
-        X, W = self.simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=args.w_std, seed=args.seed + 101)
+        X, W = simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=args.w_std, seed=args.seed + 101)
 
         # One-step alignment and residual proxy R = X+ - AX - BU
         X_reg = X[:, :-1]       # x_0..x_{T-2}
@@ -331,15 +345,13 @@ class Open_Loop():
         R = X_next - (A @ X_reg + Bu @ U[:, :-1])  # nx x (T-1)
 
         # Outputs Y,Z and the exact matrices used to generate them
-        #Y, Z = self.synth_outputs_with_mats(X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny=ny, nz=nz)
+        #Y, Z = synth_outputs_with_mats(X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny=ny, nz=nz)
 
         # PE sanity check
-        cond, svals = self.pe_check(X_reg, U[:, :-1])
+        cond, svals = pe_check(X_reg, U[:, :-1])
         print(f"[PE] cond( D D^T ) = {cond:.2e}   rank={np.sum(svals>1e-10)}/{nx+nu}")
 
         # Save CSV
-        out = Path(out)
-        out.parent.mkdir(parents=True, exist_ok=True)
 
         headers = []
         for i in range(nx): headers.append(f"x{i+1}")
@@ -360,17 +372,16 @@ class Open_Loop():
                 row.extend(Z[:, -1].tolist())"""
             rows.append(row)
 
-        with open(out, "w", newline="", encoding="utf-8") as f:
+        with open(self.out, "w", newline="", encoding="utf-8") as f:
             wr = csv.writer(f, delimiter=args.delimiter)
             wr.writerow(headers)
             wr.writerows(rows)
 
-        print(f"[OK] Saved {out} with shape ({len(rows)} rows, {len(headers)} cols).")
+        print(f"[OK] Saved {self.out} with shape ({len(rows)} rows, {len(headers)} cols).")
 
         # >>> NEW: save ground-truth matrices and minimal metadata <<<
-        truth_path = out.with_suffix("").as_posix() + "_truth.npz"
         np.savez_compressed(
-            truth_path,
+            self.truth_path,
             # true plant
             A=A, Bu=Bu, Bw=Bw,
             # true output/performance blocks used to synthesize Y,Z
@@ -379,16 +390,11 @@ class Open_Loop():
             nx=nx, nu=nu, nw=nw, ny=ny, nz=nz, T=T,
             seed=args.seed, input=args.input, amp=args.amp, w_std=args.w_std
         )
-        print(f"[OK] Saved ground-truth matrices to {truth_path}")
-
+        print(f"[OK] Saved ground-truth matrices to {self.truth_path}")
 
     def evaluate_from_path(
         self, 
-        csv_path: str,
         ridge: float = 1e-6,
-        ny: int | None = None,
-        nz: int | None = None,
-        nw: int | None = None,
         delimiter: str = ",",
     ):
         """
@@ -447,15 +453,16 @@ class Open_Loop():
             return B @ R
 
 
-        csv_path = str(csv_path)
+        csv_path = str(self.csv_path)
         print(f"\n[DDD] Loading CSV: {csv_path}")
 
         api = MatricesAPI()
+        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
+
         plant_est, ctrl0 = api.make_matrices_from_data(
             data_csv=csv_path,
             delimiter=delimiter,
             ridge=ridge,
-            ny=ny, nz=nz, nw=nw,
         )
 
         Ahat, Buhat, Bwhat = plant_est.A, plant_est.Bu, plant_est.Bw
@@ -472,7 +479,7 @@ class Open_Loop():
         _print_block("Dzuhat", Dzuhat)
         _print_block("Dzwhat", Dzwhat)
 
-        truth_npz = Path(csv_path).with_suffix("").as_posix() + "_truth.npz" #truth_npz=out.with_suffix("").as_posix() + "_truth.npz"
+        truth_npz = Path(csv_path).with_suffix("").as_posix() + "_trueMat.npz" #truth_npz=out.with_suffix("").as_posix() + "_truth.npz"
         if truth_npz is None:
             print("\n[DDD] No ground-truth .npz provided. Skipping comparisons.")
             return plant_est, ctrl0
@@ -528,16 +535,169 @@ class Open_Loop():
         cmp("Dzuhat", Dzuhat, "Dzu")
         cmp("Dzwhat", Dzwhat, "Dzw")
 
+
+        np.savez_compressed(
+            self.estim_path,
+            # true plant
+            Ahat=Ahat, Buhat=Buhat, Bwhat=Bwhat,
+            # true output/performance blocks used to synthesize Y,Z
+            Cyhat=Cyhat, Dywhat=Dywhat, Czhat=Czhat, Dzuhat=Dzuhat, Dzwhat=Dzwhat,
+            # optional metadata for reproducibility
+            nx=nx, nu=nu, nw=nw, ny=ny, nz=nz,
+        )
+        print(f"[OK] Saved ground-estimated matrices to {self.estim_path}")
+
+
         return plant_est, ctrl0
+
+    def plot_est_vs_truth(
+        self,
+        nsteps: int = 60,
+        x0_mode: str = "e1",   # "e1" | "ones" | "random"
+        seed: int = 0,
+        save_dir: str | None = None,
+        show: bool = True
+    ):
+        """
+        Compare estimated vs true matrices with a set of informative plots.
+
+        - Loads A (true) from `truth_path` and Ahat from `estim_path` (.npz files).
+        - Simulates autonomous trajectories x_{t+1} = A x_t and Ahat x_t
+          from identical initial states and overlays them.
+        - Plots eigenvalues on the complex plane, singular values, and heatmaps.
+
+        Parameters
+        ----------
+        estim_path : str | None
+            Path to .npz containing Ahat (and optional Buhat, etc.).
+            Defaults to <csv_path base>_estmMat.npz.
+        truth_path : str | None
+            Path to .npz containing A (and optional Bu, etc.).
+            Defaults to <csv_path base>_trueMat.npz.
+        nsteps : int
+            Number of steps for the autonomous simulation.
+        x0_mode : {"e1","ones","random"}
+            Initial state used for unit response style comparison.
+        seed : int
+            RNG seed when x0_mode == "random".
+        save_dir : str | None
+            Directory where figures are saved as PNG. Defaults next to csv.
+        show : bool
+            Whether to call plt.show() at the end.
+
+        Returns
+        -------
+        dict
+            A dictionary of basic metrics for programmatic checks.
+        """
+        # Resolve default paths
+        base = Path(self.csv_path).with_suffix("")
+        estim_path = Path(self.estim_path)
+        truth_path = Path(self.truth_path)
+
+        if not estim_path.exists():
+            raise FileNotFoundError(f"Estimated matrices file not found: {estim_path}")
+        if not truth_path.exists():
+            raise FileNotFoundError(f"Ground-truth matrices file not found: {truth_path}")
+
+        E = np.load(estim_path)
+        T = np.load(truth_path)
+        if "Ahat" not in E:
+            raise KeyError(f"'Ahat' not found in {estim_path}")
+        if "A" not in T:
+            raise KeyError(f"'A' not found in {truth_path}")
+
+        Ahat = E["Ahat"]
+        Atru = T["A"]
+        if Ahat.shape != Atru.shape:
+            raise ValueError(f"Shape mismatch: Ahat {Ahat.shape} vs A {Atru.shape}")
+        nx = Atru.shape[0]
+
+        # initial condition
+        rng = np.random.default_rng(seed)
+        if x0_mode == "e1":
+            x0 = np.zeros(nx); x0[0] = 1.0
+        elif x0_mode == "ones":
+            x0 = np.ones(nx) / np.sqrt(nx)
+        elif x0_mode == "random":
+            x0 = rng.normal(0, 1, size=nx)
+            nrm = np.linalg.norm(x0)
+            if nrm > 0:
+                x0 = x0 / nrm
+        else:
+            raise ValueError("x0_mode must be 'e1', 'ones', or 'random'")
+
+        # simulate autonomous responses
+        def sim(A, x0, Tn):
+            X = np.zeros((nx, Tn))
+            X[:, 0] = x0
+            for t in range(Tn - 1):
+                X[:, t + 1] = A @ X[:, t]
+            return X
+
+        Xtru = sim(Atru, x0, nsteps)
+        Xhat = sim(Ahat, x0, nsteps)
+        t = np.arange(nsteps)
+
+        # metrics
+        fro_A = float(np.linalg.norm(Atru, "fro"))
+        fro_diff = float(np.linalg.norm(Ahat - Atru, "fro"))
+        rel_err = float(fro_diff / (fro_A + 1e-12))
+        traj_rel = float(np.linalg.norm(Xhat - Xtru) / (np.linalg.norm(Xtru) + 1e-12))
+        rho_true = float(max(abs(np.linalg.eigvals(Atru))))
+        rho_hat  = float(max(abs(np.linalg.eigvals(Ahat))))
+        metrics = {
+            "fro_rel_error": rel_err,
+            "traj_rel_error": traj_rel,
+            "rho_true": rho_true,
+            "rho_hat": rho_hat,
+        }
+        print("[A vs Ahat] metrics:", metrics)
+
+        # 1) trajectories overlay
+        plt.figure(figsize=(9, 5))
+        for i in range(nx):
+            plt.plot(t, Xtru[i], linestyle="-", label="true" if i == 0 else None)
+            plt.plot(t, Xhat[i], linestyle="--", label="est" if i == 0 else None)
+        plt.title(f"Autonomous response from x0='{x0_mode}'")
+        plt.xlabel("t"); plt.ylabel("state"); plt.grid(True, alpha=0.3); plt.legend()
+
+        # 2) error norm over time
+        err = np.linalg.norm(Xhat - Xtru, axis=0)
+        plt.figure(figsize=(8, 4))
+        plt.plot(t, err, marker="o")
+        plt.title("State error norm over time  ||x̂_t − x_t||₂")
+        plt.xlabel("t"); plt.ylabel("error norm"); plt.grid(True, alpha=0.3)
+
+        # 3) eigenvalues
+        evals_true = np.linalg.eigvals(Atru)
+        evals_hat  = np.linalg.eigvals(Ahat)
+        theta = np.linspace(0, 2*np.pi, 400)
+        plt.figure(figsize=(6, 6))
+        plt.plot(np.cos(theta), np.sin(theta))                 # unit circle
+        plt.scatter(evals_true.real, evals_true.imag, marker="o", label="eig(A)")
+        plt.scatter(evals_hat.real,  evals_hat.imag,  marker="x", label="eig(Ahat)")
+        plt.axhline(0, linewidth=0.8); plt.axvline(0, linewidth=0.8)
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Eigenvalues"); plt.grid(True, alpha=0.3); plt.legend()
+
+        if show:
+            plt.show()
+        else:
+            plt.close("all")
+
+        return metrics
 
 
 ## ------------------------------ MAIN ENTRY POINT ---------------------------------
 
 if __name__ == "__main__":
+    yaml_path="problem___parameters.yaml"
+
     CL = False
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, yaml_path="problem___parameters.yaml", out="out/data/session01_explicit.csv")
+    if OL: Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=True, PLOT=True, yaml_path=yaml_path)
 
 

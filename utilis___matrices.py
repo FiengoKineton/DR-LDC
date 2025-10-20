@@ -92,7 +92,7 @@ class Recover():
         D_cl = Dbar
         return A_cl, B_cl, C_cl, D_cl
 
-    def recover_controller_from_closed_loop(self, plant: Plant, A_cl, B_cl, C_cl, D_cl, rcond=1e-9):
+    def recover_controller_from_closed_loop(self, plant: Plant, A_cl, B_cl, C_cl, D_cl):
         """
         Solve for Dc, Cc, Bc, Ac using least-squares when needed.
         Returns Controller and a residual report.
@@ -145,7 +145,7 @@ class Recover():
         return Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc), res
 
     def recover_controller_from_dro_json(self, json_path: str, plant: Plant):
-        Pbar, Abar, Bbar, Cbar, Dbar, meta = self.load_dro_json(json_path)
+        Pbar, Abar, Bbar, Cbar, Dbar, _ = self.load_dro_json(json_path)
         A_cl, B_cl, C_cl, D_cl = self.closed_loop_from_bar(Pbar, Abar, Bbar, Cbar, Dbar)
         ctrl, residuals = self.recover_controller_from_closed_loop(plant, A_cl, B_cl, C_cl, D_cl)
         # Quick stability peek on composite A
@@ -156,8 +156,14 @@ class Recover():
 # ------------------------- PUBLIC API -----------------------------------------
 
 class MatricesAPI():
-    def __init__(self):
-        pass
+    def __init__(self, yaml_path="problem___parameters.yaml"):
+        if yaml is None:
+            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        self.p = cfg.get("params", {})
+
 
     def make_nominal_covariances(self, nw):
         # nominal zero-mean Gaussian covariance for w
@@ -165,7 +171,7 @@ class MatricesAPI():
         return Sigma_nom
 
 
-    def get_system(self, seed=0, FROM_DATA=False, **kwargs):
+    def get_system(self, **kwargs):
         """
         If FROM_DATA=True, pass data_csv="path/to/file.csv" (and optional settings).
         Example:
@@ -175,7 +181,7 @@ class MatricesAPI():
                     nw=None, ny=None, nz=None,
                     ridge=1e-6)
         """
-        if FROM_DATA:
+        if self.p.get("FROM_DATA", False):
             return self.make_matrices_from_data(**kwargs)
         else:
             return self.make_example_system()
@@ -183,7 +189,7 @@ class MatricesAPI():
 
     # ------------------------- EXAMPLE SYSTEM CONSTRUCTION -------------------------
 
-    def build_out_matrices(self, yaml_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def build_out_matrices(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
         # ======================================================================
         # Output-construction helpers (drop-in, no mystery defaults elsewhere)
@@ -287,17 +293,14 @@ class MatricesAPI():
         If PyYAML is unavailable, raise a helpful error.
         """
 
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
 
-        p = cfg.get("params", {})
-        dims = p.get("dimensions", {})
+        dims = self.p.get("dimensions", {})
         nx = int(dims.get("nx"))
         nw = int(dims.get("nw"))
         nu = int(dims.get("nu"))
         ny = int(dims.get("ny"))
 
-        outspec = p.get("outputs", {})
+        outspec = self.p.get("outputs", {})
         mode = str(outspec.get("mode", "A")).upper().strip()
 
         meas = outspec.get("measured", {}) or {}
@@ -331,7 +334,7 @@ class MatricesAPI():
 
         return Cz, Dzw, Dzu, Cy, Dyw
 
-    def build_AB_from_yaml(self, yaml_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def build_AB_from_yaml(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Build (A, Bu, Bw) from YAML.
         YAML schema example:
@@ -370,15 +373,9 @@ class MatricesAPI():
             Q, _ = np.linalg.qr(rng.normal(size=(nx, nx)))
             return Q[:, :rank] * scale
 
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-
-        p = cfg.get("params", {})
-        dims = p.get("dimensions", {})
+        dims = self.p.get("dimensions", {})
         nx = int(dims["nx"]); nw = int(dims["nw"]); nu = int(dims["nu"])
-        plant_cfg = p.get("plant", {}) or {}
+        plant_cfg = self.p.get("plant", {}) or {}
         ptype = str(plant_cfg.get("type", "random_stable")).lower()
         seed = int(plant_cfg.get("seed", 0))
         rng = np.random.default_rng(seed)
@@ -416,26 +413,29 @@ class MatricesAPI():
 
         return A, Bu, Bw
 
-    def get_dimensions_from_yaml(self, yaml_path: str) -> tuple[int, int, int, int, int]:
+    def get_dimensions_from_yaml(self) -> tuple[int, int, int, int, int]:
         """
         Extract (nx, nw, nu, ny, nz) from YAML file.
         """
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
 
-        p = cfg.get("params", {})
-        dims = p.get("dimensions", {})
+        dims = self.p.get("dimensions", {})
         nx = int(dims.get("nx", 0))
         nw = int(dims.get("nw", 0))
         nu = int(dims.get("nu", 0))
         ny = int(dims.get("ny", 0))
 
-        out = p.get("outputs", {})
+        out = self.p.get("outputs", {})
         mode = str(out.get("mode", "A")).upper().strip()
         nz = nx + nu if mode == "A" else ny + nu
         return nx, nw, nu, ny, nz
+
+    def build_initial_Mc(self, nxc: int, ny: int, nu: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        Ac0 = 0.0 * np.eye(nxc)
+        Bc0 = 0.1 * np.eye(nxc, ny)
+        Cc0 = 0.1 * np.eye(nu, nxc)
+        Dc0 = 0.0 * np.eye(nu, ny)
+
+        return Ac0, Bc0, Cc0, Dc0
 
     # ------------------------- DATA-DRIVEN DDD CONSTRUCTION -------------------------
 
@@ -443,9 +443,6 @@ class MatricesAPI():
         self, 
         data_csv: str = "out/data/session01_explicit.csv",
         delimiter: str = ",",
-        nw: Optional[int] = None,
-        ny: Optional[int] = None,
-        nz: Optional[int] = None,
         ridge: float = 1e-6,
     ):
         """
@@ -566,8 +563,7 @@ class MatricesAPI():
         U = blocks["U"]          # (nu x T)
         X_next = blocks["X_next"]
 
-        nx, T = X.shape
-        nu = U.shape[0]
+        nx, nw, nu, ny, nz = self.get_dimensions_from_yaml()
 
         # Data-driven A, Bu by right-inverse projection
         D = np.vstack([X, U])       # (nx+nu) x T
@@ -649,17 +645,13 @@ class MatricesAPI():
                         Dzw = np.vstack([Dzw, np.zeros((pad, Dzw.shape[1]))])
         """
 
-        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices(yaml_path="problem___parameters.yaml")
+        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
 
         # Build plant
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
 
         # Neutral controller seed (full-order, tiny static gains)
-        nxc = nx
-        Ac0 = np.zeros((nxc, nxc))
-        Bc0 = 0.05 * np.eye(nxc, Cy.shape[0])
-        Cc0 = 0.05 * np.eye(Bu.shape[1], nxc)
-        Dc0 = np.zeros((Bu.shape[1], Cy.shape[0]))
+        Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nx, ny=Cy.shape[0], nu=Bu.shape[1])
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
 
         return plant, ctrl0
@@ -667,32 +659,24 @@ class MatricesAPI():
 
     # ------------------------- LEGACY EXAMPLE (unchanged) -------------------------
 
-    def make_example_system(self, yaml_path="problem___parameters.yaml"):
+    def make_example_system(self):
         """
         Replace this with your real matrices.
         Discrete-time example with modest dimensions.
         """
 
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
 
-        p = cfg.get("params", {})
-        dims = p.get("dimensions", {})
+        dims = self.p.get("dimensions", {})
         nx = int(dims["nx"]); ny = int(dims["ny"]); nu = int(dims["nu"])
 
-        A, Bu, Bw = self.build_AB_from_yaml(yaml_path=yaml_path)
-        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices(yaml_path=yaml_path)
+        A, Bu, Bw = self.build_AB_from_yaml()
+        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
 
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
 
         # Full-order controller as a starting point; zero dynamics + small static gain
         nxc = nx
-        Ac0 = 0.0 * np.eye(nxc)
-        Bc0 = 0.1 * np.eye(nxc, ny)
-        Cc0 = 0.1 * np.eye(nu, nxc)
-        Dc0 = 0.0 * np.eye(nu, ny)
+        Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nxc, ny=ny, nu=nu)
 
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
         return plant, ctrl0

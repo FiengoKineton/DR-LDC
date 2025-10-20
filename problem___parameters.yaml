@@ -2,15 +2,20 @@ params:
   dimensions: {nx: 4, nu: 2, nw: 2, ny: 2}
   model: "correlated"   # "independent" | "correlated"
   solver: "SCS"         # "SCS" | "MOSEK"
-  FROM_DATA: true
+  FROM_DATA: true      # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
+  ts: 0.05
+  
+  directories:
+    data: "./out/data/session_01"
+    artifacts: "./out/artifacts/session_01"
 
   plant:
-    type: explicit  # change to random_stable if there a change of dimensions
+    #type: explicit  # change to random_stable if there a change of dimensions
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]
     Bu_mat: [[0.3,0.0],[0.0,0.3],[0.1,-0.2],[0.0,0.1]]
     Bw_mat: [[1,0],[0,1],[0,0],[0,0]]
 
-    #type: random_stable
+    type: random_stable
     seed: 42
     A: {eig_min: 0.7, eig_max: 0.95}
 
