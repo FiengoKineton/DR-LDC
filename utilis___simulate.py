@@ -11,7 +11,7 @@ from utilis___systems import Plant, Controller
 ## ------------------------- CLOSED-LOOP SIMULATION CLASS --------------------------
 
 class Closed_Loop():
-    def __init__(self, TEST=False):
+    def __init__(self, yaml_path="problem___parameters.yaml", TEST=False):
         if yaml is None:
             raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
         with open(yaml_path, "r", encoding="utf-8") as f:
