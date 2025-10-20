@@ -3,8 +3,7 @@ import argparse
 import numpy as np
 import csv
 from pathlib import Path
-from utilis___matrices import make_matrices_from_data as ddd_make
-from utilis___matrices import get_system
+from utilis___matrices import MatricesAPI
 
 import matplotlib.pyplot as plt
 from utilis___systems import Plant, Controller
@@ -18,7 +17,8 @@ class Closed_Loop():
     
     def test(self):
         # Use the same plant as the optimization example (seed=7)
-        plant, _ = get_system(seed=7, FROM_DATA=False)
+        api = MatricesAPI()
+        plant, _ = api.get_system(seed=7, FROM_DATA=False)
 
         Ac = np.array([
             [ 0.3449, -0.4085,  0.    ,  0.    ],
@@ -471,7 +471,9 @@ class Open_Loop():
 
         csv_path = str(csv_path)
         print(f"\n[DDD] Loading CSV: {csv_path}")
-        plant_est, ctrl0 = ddd_make(
+
+        api = MatricesAPI()
+        plant_est, ctrl0 = api.make_matrices_from_data(
             seed=seed,
             data_csv=csv_path,
             delimiter=delimiter,
@@ -551,6 +553,7 @@ class Open_Loop():
         return plant_est, ctrl0
 
 
+## ------------------------------ MAIN ENTRY POINT ---------------------------------
 
 if __name__ == "__main__":
     CL = False

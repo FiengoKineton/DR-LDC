@@ -1,5 +1,5 @@
 import numpy as np
-from utilis___matrices import get_system, make_nominal_covariances, compose_closed_loop
+from utilis___matrices import MatricesAPI, compose_closed_loop
 
 from numpy.linalg import eigvals
 from scipy.optimize import minimize
@@ -146,13 +146,15 @@ def run_once(seed_plant: int = 7,
              model="correlated"):
     
     opt = Optim_Problem()
+    api = MatricesAPI()
+
     # 1) Define system
-    plant, ctrl0 = get_system(seed=seed_plant, FROM_DATA=True)
+    plant, ctrl0 = api.get_system(seed=seed_plant, FROM_DATA=True)
     nx, nw, nu, nz, ny = plant.dims()
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 
     # 2) Define ambiguity set (W2-ball around N(0, Σ_nom) with radius γ)
-    Sigma_nom = make_nominal_covariances(nw)
+    Sigma_nom = api.make_nominal_covariances(nw)
     amb = Ambiguity(Sigma_nom, gamma, model=model, alpha=None)
     Sigma_eff = amb.sigma_effective()
     print("Effective Σ_w:\n", Sigma_eff)

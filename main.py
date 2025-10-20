@@ -8,10 +8,7 @@ from problem___dro_lmi import build_and_solve_dro_lmi
 
 from utilis___systems import Plant, Controller
 from utilis___simulate import Closed_Loop 
-from utilis___matrices import (
-    get_system, make_nominal_covariances,
-    closed_loop_from_bar, recover_controller_from_closed_loop,
-)
+from utilis___matrices import Recover, MatricesAPI
 
 
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
@@ -115,9 +112,12 @@ class lmi_pipeline_optim_problem():
         ART = Path("out/artifacts/lmi")
         ART.mkdir(exist_ok=True)
 
+        recover = Recover()
+        api = MatricesAPI()
+
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        plant, _ = get_system(seed=7, FROM_DATA=True)
-        Sigma_nom = make_nominal_covariances(plant.Bw.shape[1])
+        plant, _ = api.get_system(seed=7, FROM_DATA=True)
+        Sigma_nom = api.make_nominal_covariances(plant.Bw.shape[1])
         gamma = 0.5                                   # Wasserstein radius (set as you wish)
 
         cl = Closed_Loop()  # instantiate simulation class
@@ -141,10 +141,10 @@ class lmi_pipeline_optim_problem():
             "Cbar", np.shape(res.Cbar), "Dbar", np.shape(res.Dbar), "Pbar", np.shape(res.Pbar))
 
         # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
-        Acl, Bcl, Ccl, Dcl = closed_loop_from_bar(res.Pbar, res.Abar, res.Bbar, res.Cbar, res.Dbar)
+        Acl, Bcl, Ccl, Dcl = recover.closed_loop_from_bar(res.Pbar, res.Abar, res.Bbar, res.Cbar, res.Dbar)
 
         # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
-        ctrl_rec, residuals = recover_controller_from_closed_loop(plant, Acl, Bcl, Ccl, Dcl)
+        ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, Acl, Bcl, Ccl, Dcl)
         rho = float(np.max(np.abs(np.linalg.eigvals(Acl))))
         print(f"spectral radius(Acl) ≈ {rho:.6g}")
         if not np.isfinite(rho) or rho >= 1.05:
