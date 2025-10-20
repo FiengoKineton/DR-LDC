@@ -1,9 +1,9 @@
 # main.py
-import json, argparse
+import json, argparse, yaml
 import numpy as np
 from pathlib import Path
 
-from pronlem___baseline import run_once
+from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi
 
 from utilis___systems import Plant, Controller
@@ -14,13 +14,17 @@ from utilis___matrices import Recover, MatricesAPI
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self):
+    def __init__(self, params: dict):
         ARTIFACTS = Path("out/artifacts/baseline")
         ARTIFACTS.mkdir(exist_ok=True)
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
-        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once()
+        FROM_DATA = params.get("FROM_DATA", False)
+        if FROM_DATA:
+            print("Evaluating plant from data files.")
+
+        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(FROM_DATA=FROM_DATA)
 
         # Persist everything needed for reproducible simulation
         json_path = ARTIFACTS / "results_run.json"
@@ -108,28 +112,33 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self):
+    def __init__(self, params: dict):
         ART = Path("out/artifacts/lmi")
         ART.mkdir(exist_ok=True)
 
         recover = Recover()
         api = MatricesAPI()
+        FROM_DATA = params.get("FROM_DATA", False)
+        if FROM_DATA:
+            print("Evaluating plant from data files.")
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        plant, _ = api.get_system(seed=7, FROM_DATA=True)
+        plant, _ = api.get_system(seed=7, FROM_DATA=FROM_DATA)
         Sigma_nom = api.make_nominal_covariances(plant.Bw.shape[1])
-        gamma = 0.5                                   # Wasserstein radius (set as you wish)
+
+        solver = params.get("solver", "SCS")                     # "MOSEK" or "SCS"
+        gamma = params.get("ambiguity", {}).get("gamma", 0.5)    # Wasserstein radius (set as you wish)
 
         cl = Closed_Loop()  # instantiate simulation class
 
         # 2) Solve DRO-LMI (choose "correlated" or "independent")
-        model = "independent"                          # \in {"correlated", "independent"}
+        model = params.get("model", "independent")                          # \in {"correlated", "independent"}
         res = build_and_solve_dro_lmi(
             plant=plant,
             Sigma_nom=Sigma_nom,
             gamma=gamma,
             model=model,
-            solver="SCS",       # MOSEK if available, else SCS (set to "MOSEK" explicitly if you have it)
+            solver=solver,       # MOSEK if available, else SCS (set to "MOSEK" explicitly if you have it)
             verbose=False
         )
 
@@ -232,10 +241,17 @@ if __name__ == "__main__":
     parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
     args = parser.parse_args()
 
+    if yaml is None:
+        raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+    with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    p = cfg.get("params", {})
+
 
     if args.base:
         print("Running baseline optimization...")
-        baseline_optim_problem()
+        baseline_optim_problem(params=p)
     if args.lmi:
         print("Running LMI pipeline optimization...")
-        lmi_pipeline_optim_problem()
+        lmi_pipeline_optim_problem(params=p)

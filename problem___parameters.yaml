@@ -1,6 +1,8 @@
 params:
   dimensions: {nx: 4, nu: 2, nw: 2, ny: 2}
-  model: "correlated"   # "independent"
+  model: "correlated"   # "independent" | "correlated"
+  solver: "SCS"         # "SCS" | "MOSEK"
+  FROM_DATA: false
 
   plant:
     type: explicit  # change to random_stable if there a change of dimensions

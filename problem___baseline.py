@@ -135,26 +135,26 @@ class Optim_Problem():
 
 # ------------------------- SINGLE RUN FUNCTION --------------------------
 
-def run_once(seed_plant: int = 7,
+def run_once(FROM_DATA: bool = False,
+             seed_plant: int = 7,
              T_cost_init: int = 2000,
              T_cost_opt: int = 2500,
              burnin_init: int = 200,
              burnin_opt: int = 300,
              seeds_opt = (0,1,2,3,4),
-             maxiter: int = 120, 
-             model="correlated"):
+             maxiter: int = 120):
     
     opt = Optim_Problem()
     api = MatricesAPI()
 
     # 1) Define system
-    plant, ctrl0 = api.get_system(seed=seed_plant, FROM_DATA=True)
+    plant, ctrl0 = api.get_system(seed=seed_plant, FROM_DATA=FROM_DATA)
     nx, nw, nu, nz, ny = plant.dims()
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 
     # 2) Define ambiguity set (W2-ball around N(0, Σ_nom) with radius γ)
     Sigma_nom = api.make_nominal_covariances(nw)
-    amb = Ambiguity(Sigma_nom, alpha=None)
+    amb = Ambiguity(Sigma_nom)
     Sigma_eff = amb.sigma_effective()
     print("Effective Σ_w:\n", Sigma_eff)
 

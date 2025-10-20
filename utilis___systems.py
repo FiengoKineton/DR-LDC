@@ -44,7 +44,7 @@ class Ambiguity:
     Data is limited; exact tight factors depend on cost structure. Use α as a knob.
     """
 
-    def __init__(self, Sigma_nom: np.ndarray, gamma: float, alpha: float = None):
+    def __init__(self, Sigma_nom: np.ndarray):
         """
         model ∈ {"correlated","independent"} just tags your modeling assumption.
         alpha: if None, we pick alpha = gamma (units: same as Σ entries).
