@@ -26,6 +26,7 @@ params:
   ambiguity:
     model: "W2"               # "W2" => Wasserstein-2 | "KL" => Kullback-Leibler
     gamma: 0.5                # radius of the ambiguity set
+    Sigma_nom: [[0.5, 0.2], [0.2, 0.5]]
   
 
   outputs:

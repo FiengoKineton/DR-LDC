@@ -1,7 +1,7 @@
 # dro_lmi.py
 import numpy as np
 import cvxpy as cp
-from utilis___systems import Plant, DROLMIResult
+from utils___systems import Plant, DROLMIResult
 
 
 def build_and_solve_dro_lmi(

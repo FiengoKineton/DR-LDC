@@ -1,6 +1,6 @@
 import re, json, yaml
 import numpy as np
-from utilis___systems import Plant, Controller
+from utils___systems import Plant, Controller
 from typing import Tuple, Optional, List
 from numpy.linalg import eigvals, norm
 
@@ -169,12 +169,6 @@ class MatricesAPI():
         _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
         self.csv_path = out + f"___{_type}_{_model}_{_data}.csv"
-        
-
-    def make_nominal_covariances(self):
-        # nominal zero-mean Gaussian covariance for w
-        Sigma_nom = 0.5 * np.eye(self.p.get("dimensions", {}).get("nw", 2))
-        return Sigma_nom
 
 
     def get_system(self, **kwargs):

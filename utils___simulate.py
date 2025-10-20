@@ -2,10 +2,10 @@
 import argparse, csv, yaml
 import numpy as np
 from pathlib import Path
-from utilis___matrices import MatricesAPI
+from utils___matrices import MatricesAPI
 
 import matplotlib.pyplot as plt
-from utilis___systems import Plant, Controller
+from utils___systems import Plant, Controller
 
 
 ## ------------------------- CLOSED-LOOP SIMULATION CLASS --------------------------

@@ -6,19 +6,19 @@ from pathlib import Path
 from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi
 
-from utilis___systems import Plant, Controller
-from utilis___simulate import Closed_Loop 
-from utilis___matrices import Recover, MatricesAPI
+from utils___systems import Plant, Controller
+from utils___simulate import Closed_Loop 
+from utils___matrices import Recover, MatricesAPI
 
 
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self, out: Path):
+    def __init__(self, out: Path, Sigma_nom: np.ndarray):
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
-        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once()
+        Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(Sigma_nom=Sigma_nom)
 
         # Persist everything needed for reproducible simulation
         json_path = out + f"___results_run.json"
@@ -95,14 +95,13 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path):
+    def __init__(self, params: dict, out: Path, Sigma_nom: np.ndarray):
 
         recover = Recover()
         api = MatricesAPI()
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
         plant, _ = api.get_system()
-        Sigma_nom = api.make_nominal_covariances()
 
         solver = params.get("solver", "SCS")                     # "MOSEK" or "SCS"
         gamma = params.get("ambiguity", {}).get("gamma", 0.5)    # Wasserstein radius (set as you wish)
@@ -423,6 +422,8 @@ if __name__ == "__main__":
     FROM_DATA = bool(p.get("FROM_DATA", False))
     _data = "DDD" if FROM_DATA else "MBD"
 
+    Sigma_nom = np.array(p.get("ambiguity", {}).get("Sigma_nom", dtype=float))
+
     path_name = f"/run_01___{_type}_{_model}_{_data}"
     print(("\nEvaluating plant from data files." if FROM_DATA else "\nEvaluating plant from model-based design."))
 
@@ -433,8 +434,8 @@ if __name__ == "__main__":
         if args.base:
             print("Running baseline optimization...\n\n")
             out = Path(out).with_suffix("").as_posix() + "/baseline" + path_name
-            baseline_optim_problem(params=p, out=out)
+            baseline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom)
         if args.lmi:
             print("Running LMI pipeline optimization...\n\n")
             out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name
-            lmi_pipeline_optim_problem(params=p, out=out)
+            lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom)

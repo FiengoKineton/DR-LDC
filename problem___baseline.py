@@ -1,9 +1,9 @@
 import numpy as np
-from utilis___matrices import MatricesAPI, compose_closed_loop
+from utils___matrices import MatricesAPI, compose_closed_loop
 
 from numpy.linalg import eigvals
 from scipy.optimize import minimize
-from utilis___systems import Plant, Controller, Ambiguity
+from utils___systems import Plant, Controller
 
 
 # ------------------------- SUPPORTING FUNCTIONS FOR OPTIMIZATION --------
@@ -135,7 +135,8 @@ class Optim_Problem():
 
 # ------------------------- SINGLE RUN FUNCTION --------------------------
 
-def run_once(T_cost_init: int = 2000,
+def run_once(Sigma_nom: np.ndarray = np.array([[1.0, 0.0], [0.0, 1.0]]),
+             T_cost_init: int = 2000,
              T_cost_opt: int = 2500,
              burnin_init: int = 200,
              burnin_opt: int = 300,
@@ -150,21 +151,15 @@ def run_once(T_cost_init: int = 2000,
     nx, nw, nu, nz, ny = plant.dims()
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 
-    # 2) Define ambiguity set (W2-ball around N(0, Σ_nom) with radius γ)
-    Sigma_nom = api.make_nominal_covariances()
-    amb = Ambiguity(Sigma_nom)
-    Sigma_eff = amb.sigma_effective()
-    print("Effective Σ_w:\n", Sigma_eff)
-
     # 3) Baseline cost with initial controller
-    base_cost = opt.simulate_cost(plant, ctrl0, Sigma_eff, T=T_cost_init, burnin=burnin_init, seed=0)
+    base_cost = opt.simulate_cost(plant, ctrl0, Sigma_nom, T=T_cost_init, burnin=burnin_init, seed=0)
     print(f"Baseline long-run cost E||z||^2 ≈ {base_cost:.4f}")
 
     # 4) Optimize
     ctrl_opt, res = opt.optimize_controller(
         plant,
         ctrl0,
-        Sigma_eff,
+        Sigma_nom,
         T=T_cost_opt,
         burnin=burnin_opt,
         seeds=seeds_opt,
@@ -173,7 +168,7 @@ def run_once(T_cost_init: int = 2000,
     print("Optimizer status:", res.message)
 
     # 5) Evaluate optimized controller
-    cost_opt = opt.simulate_cost(plant, ctrl_opt, Sigma_eff, T=4000, burnin=400, seed=11)
+    cost_opt = opt.simulate_cost(plant, ctrl_opt, Sigma_nom, T=4000, burnin=400, seed=11)
     print(f"Optimized long-run cost E||z||^2 ≈ {cost_opt:.4f}")
 
     # 6) Report closed-loop stability
@@ -189,11 +184,11 @@ def run_once(T_cost_init: int = 2000,
     print("Cc=\n", ctrl_opt.Cc)
     print("Dc=\n", ctrl_opt.Dc)
 
-    return Sigma_eff, float(base_cost), str(res.message), float(cost_opt), rho, ctrl_opt, plant
+    return Sigma_nom, float(base_cost), str(res.message), float(cost_opt), rho, ctrl_opt, plant
 
 
 # ------------------------- MAIN SCRIPT ENTRY POINT ----------------------
 
 if __name__ == "__main__":
-    Sigma_eff, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once()
+    Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once()
     np.set_printoptions(suppress=True, linewidth=140, precision=4)
