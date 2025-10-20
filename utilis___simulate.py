@@ -538,6 +538,6 @@ if __name__ == "__main__":
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, yaml_path="problem___parameters.yaml", out="out/data/session_temp.csv")
+    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, yaml_path="problem___parameters.yaml", out="out/data/session01_explicit.csv")
 
 

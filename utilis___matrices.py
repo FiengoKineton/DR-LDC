@@ -441,7 +441,7 @@ class MatricesAPI():
 
     def make_matrices_from_data(
         self, 
-        data_csv: str = "",
+        data_csv: str = "out/data/session01_explicit.csv",
         delimiter: str = ",",
         nw: Optional[int] = None,
         ny: Optional[int] = None,
@@ -558,7 +558,7 @@ class MatricesAPI():
 
 
         if not data_csv:
-            #raise ValueError("Provide data_csv='path/to/file.csv' to read data.")
+            print("Provide data_csv='path/to/file.csv' to read data.")
             return self.make_example_system()
 
         blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)

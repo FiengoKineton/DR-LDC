@@ -1,268 +1,152 @@
-# README.md
+# Distributionally-Robust Output-Feedback Control  
+### (Baseline Monte Carlo H₂ vs. DRO-LMI)
 
-## Interconnection Diagram
-simulate_pe_openloop.py → define_matrices.py (Direct Data-Driven Estimation)
+This repository implements two pipelines for discrete-time output-feedback controller synthesis and evaluation:
+
+1. **Baseline** — stochastic H₂ optimization via Monte Carlo simulation.  
+2. **DRO-LMI** — distributionally-robust control synthesis via convex LMIs and controller recovery.
+
+Both produce controllers for the same plant model and evaluate closed-loop performance.
+
+---
+
+## 🧭 Repository Structure
+
+```
+.
+├── main.py                     # CLI entry point
+├── problem___baseline.py       # Baseline H₂ optimization (Monte Carlo + L-BFGS-B)
+├── problem___dro_lmi.py        # Distributionally-Robust LMI formulation & solver
+├── problem___parameters.yaml   # Central configuration (dimensions, solver, ambiguity, etc.)
 │
-▼
-Plant, Controller₀
+├── utilis___systems.py         # Plant & controller data structures
+├── utilis___matrices.py        # Closed-loop composition and controller recovery
+├── utilis___simulate.py        # Simulation and plotting utilities
 │
-▼
-compose.py → dro_lmi.py → recover_controller.py
-│ │
-▼ ▼
-simulate_closed_loop.py ← main_dro_pipeline.py ← run.py
-│
-▼
-main.py
+└── out/                        # Folder created automatically for JSON/NPZ artifacts
+```
 
 ---
 
-## List of Files
+## ⚙️ How It Works
 
-1. `ambiguity.py`  
-2. `systems.py`  
-3. `define_matrices.py`  
-4. `compose.py`  
-5. `dro_lmi.py`  
-6. `recover_controller.py`  
-7. `optim_problem.py`  
-8. `simulate_closed_loop.py`  
-9. `simulate_pe_openloop.py`  
-10. `run.py`  
-11. `main_dro_pipeline.py`  
-12. `main.py`
+### Overview
+The repository supports two synthesis modes:
 
-
-This pipeline performs **data-driven distributionally robust control (DRO-LDC)** synthesis and validation.
-It links data generation, system identification, convex LMI synthesis, controller recovery, and closed-loop evaluation.
+| Mode | Description | Run Command |
+|------|--------------|--------------|
+| **Baseline** | Minimizes expected output energy under Gaussian disturbance using Monte Carlo rollouts. | `python main.py --base` |
+| **DRO-LMI** | Solves a distributionally-robust H₂ problem using LMIs and recovers a controller. | `python main.py --lmi` |
 
 ---
 
-## Mathematical and Algorithmic Overview
+## 🧩 System Diagram
 
-### 1. `ambiguity.py`
-Implements the **Wasserstein ambiguity model** defining the uncertainty ball:
+```mermaid
+flowchart TD
+    P1[problem___parameters.yaml] --> A1[utilis___systems.py<br>Plant & Controller classes]
+    A1 --> A2[utilis___matrices.py<br>Compose (A,B,C,D)]
+    A2 --> A3[problem___baseline.py<br>Monte Carlo Optimization]
+    A2 --> A4[problem___dro_lmi.py<br>DRO-LMI Synthesis]
+    A3 --> S1[utilis___simulate.py<br>Closed-Loop Simulation]
+    A4 --> R1[Recover Controller]
+    R1 --> S1
+    S1 --> OUT[out/artifacts/ JSON + NPZ]
+```
+
+---
+
+## 🧠 Baseline Monte-Carlo H₂ Method
+
+**Goal:**  
+Minimize  
 \[
-\mathbb{B}_\gamma(\mathbb{P}_{\Sigma_{\text{nom}}}) = \{ \mathbb{Q} \mid W_2(\mathbb{Q}, \mathbb{P}_{\Sigma_{\text{nom}}}) \le \gamma \}.
+J = \mathbb{E}\big[ \|z_t\|^2 \big]
 \]
-For tractability, the ambiguity set is replaced by an inflated covariance:
-\[
-\Sigma_{\text{eff}} = \Sigma_{\text{nom}} + \alpha I,
-\]
-where α depends on the Wasserstein radius γ.  
-This upper-bounds the worst-case second moment within the ball.
+for the closed-loop system under white noise \( w_t \).
+
+**Procedure:**
+1. Randomly initialize controller matrices \( A_c,B_c,C_c,D_c \).  
+2. Compose the closed-loop dynamics \((\mathcal{A}, \mathcal{B}, \mathcal{C}, \mathcal{D})\).  
+3. Simulate for multiple trajectories and compute empirical H₂ cost.  
+4. Optimize parameters with **L-BFGS-B**.  
+5. Penalize instability and project back into stable region if necessary.
+
+**Artifacts:**
+- JSON: cost, plant/controller matrices, stability info.  
+- NPZ: trajectories and numerical data.  
+- Plots: state, control input, output evolution.
 
 ---
 
-### 2. `systems.py`
-Defines two main data structures:
-- **Plant**: stores system matrices \((A, B_w, B_u, C_z, D_{zw}, D_{zu}, C_y, D_{yw})\)
-  describing
-  \[
-  \begin{aligned}
-  x^+ &= Ax + B_uu + B_ww, \\
-  z &= C_zx + D_{zu}u + D_{zw}w, \\
-  y &= C_yx + D_{yw}w.
-  \end{aligned}
-  \]
-- **Controller**: stores feedback matrices \((A_c, B_c, C_c, D_c)\)
-  in
-  \[
-  x_c^+ = A_cx_c + B_cy, \quad u = C_cx_c + D_cy.
-  \]
-Both include dimension getters for use in simulation and optimization.
+## 🧮 DRO-LMI Method
+
+**Goal:**  
+Design a controller minimizing the worst-case H₂ cost under covariance uncertainty within a Wasserstein-2 ball.
+
+**Steps:**
+1. Construct the **block matrices**  
+   \[
+   \mathbb{P}, \mathbb{A}, \mathbb{B}, \mathbb{C}, \mathbb{D}
+   \]
+   using the plant and ambiguity model (correlated or independent).
+2. Formulate LMIs with decision variables \( X, Y, Q, \lambda, K, L, M, N \).  
+3. Solve using **MOSEK** or **SCS** (configured in YAML).  
+4. Recover a realizable controller \((A_c,B_c,C_c,D_c)\) via structured least squares.  
+5. Simulate and store results as JSON/NPZ artifacts.
 
 ---
 
-### 3. `define_matrices.py`
-Responsible for **creating system matrices**, either synthetically or from experimental data.
+## 📊 Configuration (problem___parameters.yaml)
 
-#### Direct Data-Driven Estimation
-Given CSV data with columns `[x, u, y, z]`, it estimates:
-\[
-X^+ = [A \; B_u] 
-\begin{bmatrix} X \\ U \end{bmatrix}, \quad
-[A \; B_u] = X^+ D^\top (D D^\top)^{-1}, \quad D = [X; U].
-\]
+Key fields:
 
-Residuals \(R = X^+ - A X - B_u U\) define \(B_w\):
-\[
-\Sigma_R = \frac{1}{T} R R^\top, \quad
-B_w = V \operatorname{diag}(\sqrt{\lambda_i}),
-\]
-where \(V\) and \(\lambda_i\) are eigenvectors/values of \(\Sigma_R\).
-
-Static outputs:
-- \(C_y, C_z\): identity/selection matrices for measured/performance outputs.
-- \(D_{zu}, D_{zw}, D_{yw}\): small or zero random matrices ensuring full-rank mappings.
+| Field | Description |
+|--------|--------------|
+| `params.dimensions` | System sizes (`nx`, `nw`, `nu`, `ny`). |
+| `params.outputs.mode` | Output configuration for cost definition. |
+| `params.ambiguity` | Wasserstein radius `gamma` and regularization `alpha`. |
+| `params.solver` | Choose between `MOSEK` or `SCS`. |
+| `params.plant` | Randomization seed and scaling for system generation. |
 
 ---
 
-### 4. `compose.py`
-Constructs **closed-loop augmented matrices**:
-\[
-\mathcal{A}, \mathcal{B}, \mathcal{C}, \mathcal{D}
-\]
-from plant and controller components:
-\[
-\mathcal{A} = 
-\begin{bmatrix}
-A + B_uD_cC_y & B_uC_c \\
-B_cC_y & A_c
-\end{bmatrix}, \quad
-\mathcal{B} =
-\begin{bmatrix}
-B_w + B_uD_cD_{yw} \\ 
-B_cD_{yw}
-\end{bmatrix}.
-\]
-These are the matrices used in LMI-based control synthesis.
+## ▶️ Running Experiments
+
+### Baseline Optimization
+```bash
+python main.py --base
+```
+Artifacts stored in `out/artifacts/baseline/`.
+
+### DRO-LMI Synthesis
+```bash
+python main.py --lmi
+```
+Artifacts stored in `out/artifacts/lmi/`.
 
 ---
 
-### 5. `dro_lmi.py`
-Solves the **distributionally robust LMI synthesis**:
-\[
-\begin{aligned}
-&\min_{P,Q,\lambda} \; \text{tr}(Q \Sigma_{\text{eff}}) + \lambda \gamma^2 \\
-\text{s.t.} &\quad
-\begin{bmatrix}
-A^\top P A - P + C^\top C & A^\top P B + C^\top D \\
-B^\top P A + D^\top C & B^\top P B + D^\top D - Q
-\end{bmatrix} \prec 0, \\
-&\quad P \succ 0, \; \lambda \ge 0.
-\end{aligned}
-\]
+## 📦 Outputs
 
-This problem arises from convexifying the robust \(H_2\) control objective:
-\[
-J = \sup_{w\in\mathbb{B}_\gamma} \mathbb{E}[\|z\|^2],
-\]
-under Wasserstein uncertainty, as developed by Scherer & Yan (2025):contentReference[oaicite:0]{index=0}.
-
-Outputs are serialized (`artifacts_lmi/*.json`).
+Each run generates:
+- `*.json` → parameters, matrices, metadata  
+- `*.npz` → trajectories and arrays  
+- `.png` plots under the same directory  
 
 ---
 
-### 6. `recover_controller.py`
-Reconstructs \(A_c, B_c, C_c, D_c\) from the LMI solution using block decomposition.
+## 🧠 Dependencies
 
-Given closed-loop solution matrices \(\mathcal{A}, \mathcal{B}, \mathcal{C}, \mathcal{D}\) and transformation \(P = T^\top T\), it recovers controller parameters by solving:
-\[
-\mathcal{A} = T^{-1} A_{cl} T, \quad
-A_{cl} = 
-\begin{bmatrix}
-A + B_u D_c C_y & B_u C_c \\
-B_c C_y & A_c
-\end{bmatrix}.
-\]
-Least-squares regression yields the controller blocks ensuring matching dimensions.
+- Python ≥ 3.10  
+- NumPy, SciPy, Matplotlib  
+- CVXPY with a solver (MOSEK or SCS)  
+- PyYAML for configuration  
 
 ---
 
-### 7. `optim_problem.py`
-Implements a **numerical performance optimizer** over controller matrices via simulation.
-Objective:
-\[
-J(A_c,B_c,C_c,D_c) = \mathbb{E}[\|z_t\|^2].
-\]
-It samples controllers, simulates their performance, and selects the one minimizing the empirical cost.
+## 🧾 Citation
 
----
+If used in research or coursework, please acknowledge this repository as:
 
-### 8. `simulate_closed_loop.py`
-Simulates the **interconnected plant-controller** system:
-\[
-\begin{aligned}
-x_{t+1} &= A x_t + B_u u_t + B_w w_t, \\
-x_{c,t+1} &= A_c x_{c,t} + B_c y_t, \\
-u_t &= C_c x_{c,t} + D_c y_t, \\
-y_t &= C_y x_t + D_{yw} w_t, \\
-z_t &= C_z x_t + D_{zu} u_t + D_{zw} w_t.
-\end{aligned}
-\]
-It logs trajectories, checks stability (\(\rho(\mathcal{A}) < 1\)), and can visualize outputs.
-
----
-
-### 9. `simulate_pe_openloop.py`
-Generates persistently exciting (PE) data for identification.  
-Inputs \(U_t\) are PRBS or multisine:
-\[
-u_t = \sum_i a_i \sin(\omega_i t + \phi_i).
-\]
-Simulates
-\[
-x_{t+1}=Ax_t+B_uu_t+B_ww_t,
-\]
-stores `(x,u,y,z)` trajectories, and exports:
-- CSV with signals,
-- NPZ with ground-truth matrices.
-
-Also includes `evaluate_from_path()` to estimate matrices from the saved CSV and compare to the truth.
-
----
-
-### 10. `run.py`
-Executes the DRO control synthesis:
-1. Load plant (`define_matrices.get_system()`).
-2. Define ambiguity set (`Ambiguity`).
-3. Call LMI solver (`dro_lmi.solve()`).
-4. Recover controller (`recover_controller.py`).
-5. Evaluate closed-loop stability and cost.
-
-It thus provides a **one-shot synthesis routine**.
-
----
-
-### 11. `main_dro_pipeline.py`
-High-level orchestrator integrating all steps:
-1. Data-driven system reconstruction.
-2. DRO LMI synthesis.
-3. Controller recovery.
-4. Closed-loop simulation.
-5. Artifact saving and plotting.
-
-It functions as the **master experiment pipeline** coordinating all subsystems.
-
----
-
-### 12. `main.py`
-Entry point for ad-hoc tests — can call the pipeline or run components in isolation for debugging.
-
----
-
-## Mathematical Interdependencies Summary
-
-| Module | Mathematical Role | Inputs | Outputs | Depends On |
-|--------|--------------------|---------|----------|-------------|
-| `simulate_pe_openloop.py` | Generate PE dataset | A,Bu,Bw,noise | CSV, NPZ | — |
-| `define_matrices.py` | Estimate system matrices | CSV | A,Bu,Bw,C,D | numpy |
-| `compose.py` | Build closed-loop matrices | A,Bu,Bw,C,D,controller | 𝒜,𝒝,𝒞,𝒟 | systems |
-| `dro_lmi.py` | Solve convex DRO-LMI | 𝒜,𝒝,𝒞,𝒟,Σeff | Ā,B̄,C̄,D̄,P̄ | cvxpy |
-| `recover_controller.py` | Extract Ac,Bc,Cc,Dc | Ā,B̄,C̄,D̄,P̄ | Controller | numpy |
-| `simulate_closed_loop.py` | Validate controller | Plant, Controller | performance metrics | compose |
-| `run.py` | Execute synthesis | Plant | Results | all above |
-| `main_dro_pipeline.py` | Full automation | — | final artifacts | all above |
-
----
-
-## Algorithmic Flow Summary
-
-1. **Data generation** (PE simulation)
-   - Ensure \(D D^\top\) full rank (persistency of excitation).
-   - Compute regression matrices.
-2. **Identification**
-   - Estimate \(A,B_u,B_w\) by least-squares + residual eigen-decomposition.
-3. **DRO Synthesis**
-   - Formulate convex LMI minimizing worst-case cost.
-   - Solve for feasible \(P, Q, \lambda\).
-4. **Controller Recovery**
-   - Factorize transformation \(P=T^\top T\).
-   - Recover controller blocks.
-5. **Simulation**
-   - Integrate plant + controller forward in time.
-   - Compute expected cost and verify stability.
-
----
-
+> Hybrid Baseline & DRO-LMI Pipeline for Robust Output-Feedback Control (2025)
