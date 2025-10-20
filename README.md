@@ -266,9 +266,3 @@ Entry point for ad-hoc tests — can call the pipeline or run components in isol
 
 ---
 
-## References
-- **Scherer & Yan (2025)** – *Distributionally Robust LMI Synthesis for LTI Systems*:contentReference[oaicite:1]{index=1}  
-- **Taskesen et al. (2023)** – *Distributionally Robust Linear Quadratic Control*  
-- **Villani (2008)** – *Optimal Transport: Old and New*
-
----

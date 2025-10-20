@@ -1,0 +1,7 @@
+params:
+  dimensions:
+    nx: 4
+    nw: 2
+    nu: 2
+    nz: 3
+    ny: 2

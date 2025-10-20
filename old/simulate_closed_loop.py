@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from define_matrices import get_system
+from matrices import get_system
 from systems import Plant, Controller
 
 def simulate_closed_loop(plant: Plant,

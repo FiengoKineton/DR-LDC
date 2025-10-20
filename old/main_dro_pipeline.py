@@ -3,13 +3,12 @@ import json
 from pathlib import Path
 import numpy as np
 
-from define_matrices import get_system, make_nominal_covariances
 from dro_lmi import build_and_solve_dro_lmi
-from recover_controller import (
-    closed_loop_from_bar,
-    recover_controller_from_closed_loop,
+from matrices import (
+    get_system, make_nominal_covariances,
+    closed_loop_from_bar, recover_controller_from_closed_loop,
 )
-from simulate_closed_loop import simulate_closed_loop, plot_timeseries, save_npz
+from simulate import Closed_Loop #simulate_closed_loop, plot_timeseries, save_npz
 from systems import Plant, Controller
 
 
@@ -40,6 +39,8 @@ def main():
     plant, _ = get_system(seed=7, FROM_DATA=True)
     Sigma_nom = make_nominal_covariances(plant.Bw.shape[1])
     gamma = 0.5                                   # Wasserstein radius (set as you wish)
+
+    cl = Closed_Loop()  # instantiate simulation class
 
     # 2) Solve DRO-LMI (choose "correlated" or "independent")
     model = "independent"                          # \in {"correlated", "independent"}
@@ -114,13 +115,13 @@ def main():
 
     # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
     #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
-    sim = simulate_closed_loop(plant, ctrl_rec, Sigma_nom, T=800, seed=11)
+    sim = cl.simulate_closed_loop(plant, ctrl_rec, Sigma_nom, T=800, seed=11)
     out_npz = ART / f"dro_pipeline_{model}_sim_T800_seed11.npz"
-    save_npz(sim, str(out_npz))
+    cl.save_npz(sim, str(out_npz))
     print(f"[saved] {out_npz}")
 
     # 7) Plot results
-    plot_timeseries(sim)
+    cl.plot_timeseries(sim)
 
 if __name__ == "__main__":
     main()

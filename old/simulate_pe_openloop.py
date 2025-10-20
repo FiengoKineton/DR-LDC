@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import csv
 from pathlib import Path
-from define_matrices import make_matrices_from_data as ddd_make
+from matrices import make_matrices_from_data as ddd_make
 
 
 """
@@ -101,8 +101,8 @@ def synth_outputs_with_mats(X, U, R, ny, nz):
     Returns Y, Z plus the exact matrices used to generate them:
     Cy, Dyw, Cz, Dzu, Dzw.
     Shapes:
-      X: (nx,T), U: (nu,T), R: (nx,T-1)
-      Y: (ny,T-1), Z: (nz,T-1)
+    X: (nx,T), U: (nu,T), R: (nx,T-1)
+    Y: (ny,T-1), Z: (nz,T-1)
     """
     nx, T = X.shape
     nu = U.shape[0]
@@ -234,7 +234,7 @@ def evaluate_from_path(
     prints relative errors.
 
     truth_npz (optional) must contain any subset of:
-      A, Bu, Bw, Cy, Dyw, Cz, Dzu, Dzw
+    A, Bu, Bw, Cy, Dyw, Cz, Dzu, Dzw
     Anything missing will just be skipped in the comparison.
     """
 
