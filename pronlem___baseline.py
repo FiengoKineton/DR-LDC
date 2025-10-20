@@ -136,7 +136,6 @@ class Optim_Problem():
 # ------------------------- SINGLE RUN FUNCTION --------------------------
 
 def run_once(seed_plant: int = 7,
-             gamma: float = 0.2,
              T_cost_init: int = 2000,
              T_cost_opt: int = 2500,
              burnin_init: int = 200,
@@ -155,7 +154,7 @@ def run_once(seed_plant: int = 7,
 
     # 2) Define ambiguity set (W2-ball around N(0, Σ_nom) with radius γ)
     Sigma_nom = api.make_nominal_covariances(nw)
-    amb = Ambiguity(Sigma_nom, gamma, model=model, alpha=None)
+    amb = Ambiguity(Sigma_nom, alpha=None)
     Sigma_eff = amb.sigma_effective()
     print("Effective Σ_w:\n", Sigma_eff)
 

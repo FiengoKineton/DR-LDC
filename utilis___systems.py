@@ -1,5 +1,5 @@
-# systems.py
 import numpy as np
+import yaml
 from dataclasses import dataclass
 
 @dataclass
@@ -44,15 +44,24 @@ class Ambiguity:
     Data is limited; exact tight factors depend on cost structure. Use α as a knob.
     """
 
-    def __init__(self, Sigma_nom: np.ndarray, gamma: float, model: str = "correlated", alpha: float = None):
+    def __init__(self, Sigma_nom: np.ndarray, gamma: float, alpha: float = None):
         """
         model ∈ {"correlated","independent"} just tags your modeling assumption.
         alpha: if None, we pick alpha = gamma (units: same as Σ entries).
         """
+        if yaml is None:
+            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+        with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        p = cfg.get("params", {})
+        amb = p.get("ambiguity", {})
+
+        self.model = p.get("model", "correlated")
+        self.gamma = float(amb.get("gamma", 0.0))
+        self.alpha = float(amb.get("alpha", self.gamma))
         self.Sigma_nom = Sigma_nom
-        self.gamma = float(gamma)
-        self.model = model
-        self.alpha = self.gamma if alpha is None else float(alpha)
+
 
     def sigma_effective(self):
         n = self.Sigma_nom.shape[0]

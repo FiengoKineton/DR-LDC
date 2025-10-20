@@ -185,11 +185,11 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True):
-        if MAKE_DATA: self.make_data()
-        if EVAL_FROM_PATH: self.evaluate_from_path("out/data/session01.csv", truth_npz="out/data/session01_truth.npz", ridge=1e-6)
+    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True, out = "out/data/session01.csv", yaml_path="problem___parameters.yaml"):
+        if MAKE_DATA: self.make_data(yaml_path=yaml_path, out = out)
+        if EVAL_FROM_PATH: self.evaluate_from_path(csv_path=out, ridge=1e-6)
 
-
+    
     """
     python simulate_pe_openloop.py --T 3000 --nx 4 --nu 2 --nw 2 --ny 2 --nz 3 --input multisine --amp 1.0 --w_std 0.1 --seed 42 --out out/data/session01.csv
     """
@@ -280,7 +280,7 @@ class Open_Loop():
         Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
         return Y, Z
 
-    def synth_outputs_with_mats(self, X, U, R, ny, nz):
+    def synth_outputs_with_mats(self, X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny, nz):
         """
         Returns Y, Z plus the exact matrices used to generate them:
         Cy, Dyw, Cz, Dzu, Dzw.
@@ -290,50 +290,30 @@ class Open_Loop():
         """
         nx, T = X.shape
         nu = U.shape[0]
-
-        ny_eff = min(ny, nx)
-        Cy = np.zeros((ny_eff, nx))
-        Cy[np.arange(ny_eff), np.arange(ny_eff)] = 1.0
-        Dyw = np.zeros((ny_eff, nx))        # no direct disturbance-to-sensor by default
         Y = Cy @ X[:, :-1] + Dyw @ R        # aligned to t = 0..T-2
-
-        nz_eff = nz
-        Cz = np.zeros((nz_eff, nx))
-        for i in range(min(nz_eff, nx)):
-            Cz[i, i] = 1.0
-        Dzu = 0.05 * np.eye(nz_eff, nu)     # mild control penalty
-        Dzw = np.zeros((nz_eff, nx))        # no direct disturbance-to-performance by default
         Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
 
-        return Y, Z, Cy, Dyw, Cz, Dzu, Dzw
+        return Y, Z
 
 
-    def make_data(self):
+    def make_data(self, yaml_path="problem___parameters.yaml", out = "out/data/session01.csv"):
         ap = argparse.ArgumentParser(description="Simulate open-loop with persistently exciting input and save CSV.")
-        ap.add_argument("--T", type=int, default=2000, help="number of time steps")
-        ap.add_argument("--nx", type=int, default=4)
-        ap.add_argument("--nu", type=int, default=2)
-        ap.add_argument("--nw", type=int, default=2)
-        ap.add_argument("--ny", type=int, default=2)
-        ap.add_argument("--nz", type=int, default=3)
+        ap.add_argument("--T", type=int, default=3000, help="number of time steps")
         ap.add_argument("--seed", type=int, default=0)
         ap.add_argument("--input", choices=["multisine", "prbs"], default="multisine")
         ap.add_argument("--amp", type=float, default=1.0, help="input amplitude")
         ap.add_argument("--w_std", type=float, default=0.1, help="disturbance std scaling")
-        ap.add_argument("--out", type=str, default="data_openloop.csv")
         ap.add_argument("--delimiter", type=str, default=",")
         args = ap.parse_args()
 
+        T = args.T
         rng = np.random.default_rng(args.seed)
 
-        nx, nu, nw, ny, nz, T = args.nx, args.nu, args.nw, args.ny, args.nz, args.T
-
-        # System matrices
-        A = self.stable_A(nx, seed=args.seed)
-        Bu = rng.normal(0, 0.5, size=(nx, nu))
-        # Build Bw with orthonormal columns; disturbance amplitude comes from w_std during sim
-        Q, _ = np.linalg.qr(rng.normal(size=(nx, nx)))
-        Bw = Q[:, :nw]
+        api = MatricesAPI()
+        A, Bu, Bw = api.build_AB_from_yaml(yaml_path=yaml_path)
+        Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices(yaml_path=yaml_path)
+        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml(yaml_path=yaml_path)
+        
 
         # Persistently exciting input
         if args.input == "prbs":
@@ -351,33 +331,33 @@ class Open_Loop():
         R = X_next - (A @ X_reg + Bu @ U[:, :-1])  # nx x (T-1)
 
         # Outputs Y,Z and the exact matrices used to generate them
-        Y, Z, Cy, Dyw, Cz, Dzu, Dzw = self.synth_outputs_with_mats(X, U, R, ny=ny, nz=nz)
+        #Y, Z = self.synth_outputs_with_mats(X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny=ny, nz=nz)
 
         # PE sanity check
         cond, svals = self.pe_check(X_reg, U[:, :-1])
         print(f"[PE] cond( D D^T ) = {cond:.2e}   rank={np.sum(svals>1e-10)}/{nx+nu}")
 
         # Save CSV
-        out = Path(args.out)
+        out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
 
         headers = []
         for i in range(nx): headers.append(f"x{i+1}")
         for j in range(nu): headers.append(f"u{j+1}")
-        for k in range(ny): headers.append(f"y{k+1}")
-        for k in range(nz): headers.append(f"z{k+1}")
+        """for k in range(ny): headers.append(f"y{k+1}")
+        for k in range(nz): headers.append(f"z{k+1}")"""
 
         rows = []
         for t in range(T):
             row = []
             row.extend(X[:, t].tolist())
             row.extend(U[:, t].tolist())
-            if t < T-1:
+            """if t < T-1:
                 row.extend(Y[:, t].tolist())
                 row.extend(Z[:, t].tolist())
             else:
                 row.extend(Y[:, -1].tolist())
-                row.extend(Z[:, -1].tolist())
+                row.extend(Z[:, -1].tolist())"""
             rows.append(row)
 
         with open(out, "w", newline="", encoding="utf-8") as f:
@@ -405,13 +385,11 @@ class Open_Loop():
     def evaluate_from_path(
         self, 
         csv_path: str,
-        truth_npz: str | None = None,
         ridge: float = 1e-6,
         ny: int | None = None,
         nz: int | None = None,
         nw: int | None = None,
         delimiter: str = ",",
-        seed: int = 0,
     ):
         """
         Rebuilds the plant directly from CSV (x*, u*, optional y*, z*),
@@ -438,7 +416,7 @@ class Open_Loop():
             print(f"{name:<4} shape={M.shape}  ||·||_F={np.linalg.norm(M, 'fro'):.4g}")
             # tiny preview to avoid screen spam
             r, c = M.shape
-            rshow, cshow = min(r, 5), min(c, 7)
+            rshow, cshow = min(r, 15), min(c, 15)
             preview = M[:rshow, :cshow]
             with np.printoptions(precision=3, suppress=True):
                 print(pad + str(preview))
@@ -474,7 +452,6 @@ class Open_Loop():
 
         api = MatricesAPI()
         plant_est, ctrl0 = api.make_matrices_from_data(
-            seed=seed,
             data_csv=csv_path,
             delimiter=delimiter,
             ridge=ridge,
@@ -495,6 +472,7 @@ class Open_Loop():
         _print_block("Dzuhat", Dzuhat)
         _print_block("Dzwhat", Dzwhat)
 
+        truth_npz = Path(csv_path).with_suffix("").as_posix() + "_truth.npz" #truth_npz=out.with_suffix("").as_posix() + "_truth.npz"
         if truth_npz is None:
             print("\n[DDD] No ground-truth .npz provided. Skipping comparisons.")
             return plant_est, ctrl0
@@ -560,6 +538,6 @@ if __name__ == "__main__":
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True)
+    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, yaml_path="problem___parameters.yaml", out="out/data/session_temp.csv")
 
 

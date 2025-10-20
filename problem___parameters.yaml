@@ -1,7 +1,32 @@
 params:
-  dimensions:
-    nx: 4
-    nw: 2
-    nu: 2
-    nz: 3
-    ny: 2
+  dimensions: {nx: 4, nu: 2, nw: 2, ny: 2}
+  model: "correlated"   # "independent"
+
+  plant:
+    type: explicit  # change to random_stable if there a change of dimensions
+    A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]
+    Bu_mat: [[0.3,0.0],[0.0,0.3],[0.1,-0.2],[0.0,0.1]]
+    Bw_mat: [[1,0],[0,1],[0,0],[0,0]]
+
+    #type: random_stable
+    seed: 42
+    A: {eig_min: 0.7, eig_max: 0.95}
+
+
+  ambiguity:
+    model: "W2"               # "W2" => Wasserstein-2 | "KL" => Kullback-Leibler
+    gamma: 0.5                # radius of the ambiguity set
+  
+
+  outputs:
+    mode: "A"                # (penalize states & inputs directly) | "A" => z = [ Qx^{1/2} x ; Ru^{1/2} u ]
+    #mode: "B"                # (penalize measured output & inputs) | "B" => z = [ W_y y ; Ru^{1/2} u ], with y = C_y x + D_yw w
+
+    Qx_diag: [1.0, 1.0, 0.3, 0.1]   # diag entries of Q_x  (size nx)
+    Ru_diag: [0.1, 0.1]            # diag entries of R_u  (size nu)
+    Wy_diag: [1.0, 1.0]      # diag entries of W_y  (size ny)
+
+
+    measured:
+      select: "first"        # or "random"
+      dyw_zero: true         # Dyw = 0 unless you really measure w
