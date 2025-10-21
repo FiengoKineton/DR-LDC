@@ -1,15 +1,14 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
-  model: "correlated"                       # "independent" | "correlated"
-  FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
-  PAPER_LIKE: true
+  model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
+  FROM_DATA: false                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
 
   simulation:
     ts: 0.05
     TotTime: 25
   
   directories:
-    data: "./out/data/session_01"
+    data: "./out/data/session_02"
     artifacts: "./out/artifacts/"
 
   plant:
@@ -18,7 +17,7 @@ params:
     Bu_mat: [[0.3,0.0],[0.0,0.3],[0.1,-0.2],[0.0,0.1]]
     Bw_mat: [[1,0],[0,1],[0,0],[0,0]]
 
-    type: random_stable
+    type: PaperLike                       # Keep this
     seed: 42
     A: {eig_min: 0.7, eig_max: 0.95}
 

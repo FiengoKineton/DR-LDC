@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import argparse, csv, yaml
+import argparse, csv, yaml, sys
 import numpy as np
 from pathlib import Path
-from utils___matrices import MatricesAPI
-
 import matplotlib.pyplot as plt
+from utils___matrices import MatricesAPI
 from utils___systems import Plant, Controller
+from utils___ambiguity import WassersteinAmbiguitySet
 
 
 yaml_path="problem___parameters.yaml"
@@ -210,12 +210,14 @@ class Open_Loop():
         self.estim_path = self.out.with_suffix("").as_posix() + "_estmMat.npz"
         self.truth_path = self.out.with_suffix("").as_posix() + "_trueMat.npz"
 
+        self.ts = self.p.get("simulation", {}).get("ts", 0.05)
+        self.Tf = self.p.get("simulation", {}).get("TotTime", 0.05)
 
 
         if MAKE_DATA: self.make_data()
         if EVAL_FROM_PATH: self.evaluate_from_path()
         if PLOT: 
-            metrics = self.plot_est_vs_truth(nsteps=80, x0_mode="e1", show=True)
+            metrics = self.plot_est_vs_truth(x0_mode="e1", show=True)
             print("\n[PLT] Plotting completed. Metrics:", metrics)
 
     
@@ -233,6 +235,19 @@ class Open_Loop():
         ap.add_argument("--w_std", type=float, default=0.1, help="disturbance std scaling")
         ap.add_argument("--delimiter", type=str, default=",")
         args = ap.parse_args()
+
+
+        T = args.T
+        rng = np.random.default_rng(args.seed)
+
+        wass = WassersteinAmbiguitySet()
+        W = wass.sample(T=T).T
+        api = MatricesAPI()
+        plant, _ = api.get_system(Generating_data=True)
+        A, Bu, Bw, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bu, plant.Bw, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
+        #A, Bu, Bw = api.build_AB_from_yaml()
+        #Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices()
+        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 
 
         def prbs(nu, T, shift=7, seed=0, amp=1.0):
@@ -282,37 +297,15 @@ class Open_Loop():
             return cond, svals
 
         def simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=0.1, seed=0):
-            rng = np.random.default_rng(seed)
-            nx, nu = Bu.shape
-            nw = Bw.shape[1]
+            # rng = np.random.default_rng(seed); W = rng.normal(0.0, 1.0, size=(nw, T)) * w_std
+
             X = np.zeros((nx, T))
             X[:, 0] = x0
-            W = rng.normal(0.0, 1.0, size=(nw, T)) * w_std
             for t in range(T - 1):
                 X[:, t + 1] = (A @ X[:, t] + Bu @ U[:, t] + Bw @ W[:, t])
-            return X, W
+            return X
 
-        def synth_outputs(X, U, R, ny, nz):
-            nx, T = X.shape
-            nu = U.shape[0]
-            # Measured output: pick first ny states, no direct disturbance by default
-            ny = min(ny, nx)
-            Cy = np.zeros((ny, nx))
-            Cy[np.arange(ny), np.arange(ny)] = 1.0
-            Dyw = np.zeros((ny, nx))  # maps residual proxy to y; keep zero unless you know better
-            Y = Cy @ X[:, :-1] + Dyw @ R  # aligned to t=0..T-2
-
-            # Performance output: states + mild control penalty, no Dzw
-            nz_eff = min(nz, nx)
-            Cz = np.zeros((nz, nx))
-            for i in range(nz_eff):
-                Cz[i, i] = 1.0
-            Dzu = 0.05 * np.eye(nz, nu)
-            Dzw = np.zeros((nz, nx))
-            Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
-            return Y, Z
-
-        def synth_outputs_with_mats(X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny, nz):
+        def synth_outputs_with_mats(X, U):
             """
             Returns Y, Z plus the exact matrices used to generate them:
             Cy, Dyw, Cz, Dzu, Dzw.
@@ -320,21 +313,13 @@ class Open_Loop():
             X: (nx,T), U: (nu,T), R: (nx,T-1)
             Y: (ny,T-1), Z: (nz,T-1)
             """
-            nx, T = X.shape
-            nu = U.shape[0]
-            Y = Cy @ X[:, :-1] + Dyw @ R        # aligned to t = 0..T-2
-            Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ R
+
+            Y = Cy @ X[:, :-1] + Dyw @ W[:, :-1]
+            Z = Cz @ X[:, :-1] + Dzu @ U[:, :-1] + Dzw @ W[:, :-1]
 
             return Y, Z
 
 
-        T = args.T
-        rng = np.random.default_rng(args.seed)
-
-        api = MatricesAPI()
-        A, Bu, Bw = api.build_AB_from_yaml()
-        Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices()
-        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 
         # Persistently exciting input
         if args.input == "prbs":
@@ -344,7 +329,7 @@ class Open_Loop():
 
         # Simulate
         x0 = rng.normal(0, 1.0, size=nx)
-        X, W = simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=args.w_std, seed=args.seed + 101)
+        X = simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=args.w_std, seed=args.seed + 101)
 
         # One-step alignment and residual proxy R = X+ - AX - BU
         X_reg = X[:, :-1]       # x_0..x_{T-2}
@@ -352,7 +337,7 @@ class Open_Loop():
         R = X_next - (A @ X_reg + Bu @ U[:, :-1])  # nx x (T-1)
 
         # Outputs Y,Z and the exact matrices used to generate them
-        #Y, Z = synth_outputs_with_mats(X, U, R, Cy, Dyw, Cz, Dzu, Dzw, ny=ny, nz=nz)
+        Y, Z = synth_outputs_with_mats(X, U)
 
         # PE sanity check
         cond, svals = pe_check(X_reg, U[:, :-1])
@@ -363,20 +348,20 @@ class Open_Loop():
         headers = []
         for i in range(nx): headers.append(f"x{i+1}")
         for j in range(nu): headers.append(f"u{j+1}")
-        """for k in range(ny): headers.append(f"y{k+1}")
-        for k in range(nz): headers.append(f"z{k+1}")"""
+        for k in range(ny): headers.append(f"y{k+1}")
+        for k in range(nz): headers.append(f"z{k+1}")
 
         rows = []
         for t in range(T):
             row = []
             row.extend(X[:, t].tolist())
             row.extend(U[:, t].tolist())
-            """if t < T-1:
+            if t < T-1:
                 row.extend(Y[:, t].tolist())
                 row.extend(Z[:, t].tolist())
             else:
                 row.extend(Y[:, -1].tolist())
-                row.extend(Z[:, -1].tolist())"""
+                row.extend(Z[:, -1].tolist())
             rows.append(row)
 
         with open(self.out, "w", newline="", encoding="utf-8") as f:
@@ -466,7 +451,7 @@ class Open_Loop():
         api = MatricesAPI()
         nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 
-        plant_est, ctrl0 = api.make_matrices_from_data(
+        plant_est, _ = api.make_matrices_from_data(
             delimiter=delimiter,
             ridge=ridge,
         )
@@ -488,12 +473,12 @@ class Open_Loop():
         truth_npz = Path(csv_path).with_suffix("").as_posix() + "_trueMat.npz" #truth_npz=out.with_suffix("").as_posix() + "_truth.npz"
         if truth_npz is None:
             print("\n[DDD] No ground-truth .npz provided. Skipping comparisons.")
-            return plant_est, ctrl0
+            return plant_est
 
         truth_npz = str(truth_npz)
         if not Path(truth_npz).exists():
             print(f"\n[WARN] truth_npz file not found: {truth_npz}. Skipping comparisons.")
-            return plant_est, ctrl0
+            return plant_est
 
         truth = np.load(truth_npz)
         print(f"\n[GT ] Loaded ground truth: {truth_npz}")
@@ -554,52 +539,23 @@ class Open_Loop():
         print(f"[OK] Saved ground-estimated matrices to {self.estim_path}")
 
 
-        return plant_est, ctrl0
+        return plant_est
 
-    def plot_est_vs_truth(
-        self,
-        nsteps: int = 60,
-        x0_mode: str = "e1",   # "e1" | "ones" | "random"
-        seed: int = 0,
-        show: bool = True
-    ):
+
+    def plot_est_vs_truth(self, x0_mode="e1", seed=0, show=True):
         """
-        Compare estimated vs true matrices with a set of informative plots.
-
-        - Loads A (true) from `truth_path` and Ahat from `estim_path` (.npz files).
-        - Simulates autonomous trajectories x_{t+1} = A x_t and Ahat x_t
-          from identical initial states and overlays them.
-        - Plots eigenvalues on the complex plane, singular values, and heatmaps.
-
-        Parameters
-        ----------
-        estim_path : str | None
-            Path to .npz containing Ahat (and optional Buhat, etc.).
-            Defaults to <csv_path base>_estmMat.npz.
-        truth_path : str | None
-            Path to .npz containing A (and optional Bu, etc.).
-            Defaults to <csv_path base>_trueMat.npz.
-        nsteps : int
-            Number of steps for the autonomous simulation.
-        x0_mode : {"e1","ones","random"}
-            Initial state used for unit response style comparison.
-        seed : int
-            RNG seed when x0_mode == "random".
-        save_dir : str | None
-            Directory where figures are saved as PNG. Defaults next to csv.
-        show : bool
-            Whether to call plt.show() at the end.
-
-        Returns
-        -------
-        dict
-            A dictionary of basic metrics for programmatic checks.
+        DT diagnostic:
+        - Simulate x_{k+1} = A x_k and x_{k+1} = Ahat x_k from same x0.
+        - One subplot per state for trajectories.
+        - Eigenvalues on unit circle (DT).
+        - Matrix comparison figure: for every pair (K, Khat) found in the .npz files,
+        draw heatmaps [K_true, K_est, K_est - K_true] and run a shape check.
+        Returns metrics and a dict of dimension checks.
         """
-        # Resolve default paths
-        base = Path(self.csv_path).with_suffix("")
+
+        nsteps = int(self.Tf / self.ts)
         estim_path = Path(self.estim_path)
         truth_path = Path(self.truth_path)
-
         if not estim_path.exists():
             raise FileNotFoundError(f"Estimated matrices file not found: {estim_path}")
         if not truth_path.exists():
@@ -607,6 +563,8 @@ class Open_Loop():
 
         E = np.load(estim_path)
         T = np.load(truth_path)
+
+        # Required pair for trajectories
         if "Ahat" not in E:
             raise KeyError(f"'Ahat' not found in {estim_path}")
         if "A" not in T:
@@ -618,7 +576,7 @@ class Open_Loop():
             raise ValueError(f"Shape mismatch: Ahat {Ahat.shape} vs A {Atru.shape}")
         nx = Atru.shape[0]
 
-        # initial condition
+        # Initial condition
         rng = np.random.default_rng(seed)
         if x0_mode == "e1":
             x0 = np.zeros(nx); x0[0] = 1.0
@@ -626,31 +584,35 @@ class Open_Loop():
             x0 = np.ones(nx) / np.sqrt(nx)
         elif x0_mode == "random":
             x0 = rng.normal(0, 1, size=nx)
-            nrm = np.linalg.norm(x0)
-            if nrm > 0:
-                x0 = x0 / nrm
+            nrm = np.linalg.norm(x0);  x0 = x0 / (nrm + 1e-15)
         else:
             raise ValueError("x0_mode must be 'e1', 'ones', or 'random'")
 
-        # simulate autonomous responses
-        def sim(A, x0, Tn):
+        # DT simulation x_{k+1} = A x_k
+        def sim(A, x0, Tn, cap=1e8):
             X = np.zeros((nx, Tn))
             X[:, 0] = x0
             for t in range(Tn - 1):
                 X[:, t + 1] = A @ X[:, t]
+                if not np.isfinite(X[:, t + 1]).all() or np.linalg.norm(X[:, t + 1]) > cap:
+                    return X[:, :t+2]
             return X
 
         Xtru = sim(Atru, x0, nsteps)
         Xhat = sim(Ahat, x0, nsteps)
-        t = np.arange(nsteps)
+        Tlen = min(Xtru.shape[1], Xhat.shape[1])
+        t = np.arange(Tlen)
 
-        # metrics
+        # Metrics
         fro_A = float(np.linalg.norm(Atru, "fro"))
         fro_diff = float(np.linalg.norm(Ahat - Atru, "fro"))
         rel_err = float(fro_diff / (fro_A + 1e-12))
-        traj_rel = float(np.linalg.norm(Xhat - Xtru) / (np.linalg.norm(Xtru) + 1e-12))
-        rho_true = float(max(abs(np.linalg.eigvals(Atru))))
-        rho_hat  = float(max(abs(np.linalg.eigvals(Ahat))))
+        traj_rel = float(
+            np.linalg.norm(Xhat[:, :Tlen] - Xtru[:, :Tlen])
+            / (np.linalg.norm(Xtru[:, :Tlen]) + 1e-12)
+        )
+        rho_true = float(np.max(np.abs(np.linalg.eigvals(Atru))))
+        rho_hat  = float(np.max(np.abs(np.linalg.eigvals(Ahat))))
         metrics = {
             "fro_rel_error": rel_err,
             "traj_rel_error": traj_rel,
@@ -659,39 +621,100 @@ class Open_Loop():
         }
         print("[A vs Ahat] metrics:", metrics)
 
-        # 1) trajectories overlay
-        plt.figure(figsize=(9, 5))
+        # 1) Trajectories: one subplot per state
+        fig_traj, axs = plt.subplots(nx, 1, figsize=(9, max(3, 1.6*nx)), sharex=True)
+        if nx == 1:
+            axs = [axs]
         for i in range(nx):
-            plt.plot(t, Xtru[i], linestyle="-", label="true" if i == 0 else None)
-            plt.plot(t, Xhat[i], linestyle="--", label="est" if i == 0 else None)
-        plt.title(f"Autonomous response from x0='{x0_mode}'")
-        plt.xlabel("t"); plt.ylabel("state"); plt.grid(True, alpha=0.3); plt.legend()
+            axs[i].plot(t, Xtru[i, :Tlen], "-",  label="true")
+            axs[i].plot(t, Xhat[i, :Tlen], "--", label="est")
+            axs[i].grid(alpha=0.3)
+            axs[i].set_ylabel(f"x[{i}]")
+            if i == 0:
+                ttl = f"Autonomous DT response from x0='{x0_mode}'"
+                if rho_true >= 1 or rho_hat >= 1:
+                    ttl += "  [unstable eigenvalues detected]"
+                axs[i].set_title(ttl)
+        axs[-1].set_xlabel("k (steps)")
+        axs[0].legend()
 
-        # 2) error norm over time
-        err = np.linalg.norm(Xhat - Xtru, axis=0)
+        # 2) Error norm over time
+        err = np.linalg.norm(Xhat[:, :Tlen] - Xtru[:, :Tlen], axis=0)
         plt.figure(figsize=(8, 4))
-        plt.plot(t, err, marker="o")
-        plt.title("State error norm over time  ||x̂_t − x_t||₂")
-        plt.xlabel("t"); plt.ylabel("error norm"); plt.grid(True, alpha=0.3)
+        plt.plot(np.arange(Tlen), err, marker="o")
+        plt.title("State error norm over time  ||x̂_k − x_k||₂")
+        plt.xlabel("k (steps)"); plt.ylabel("error norm"); plt.grid(alpha=0.3)
 
-        # 3) eigenvalues
+        # 3) Eigenvalues on unit circle (DT)
         evals_true = np.linalg.eigvals(Atru)
         evals_hat  = np.linalg.eigvals(Ahat)
-        theta = np.linspace(0, 2*np.pi, 400)
+        theta = np.linspace(0, 2*np.pi, 600)
+        circle = np.c_[np.cos(theta), np.sin(theta)]
         plt.figure(figsize=(6, 6))
-        plt.plot(np.cos(theta), np.sin(theta))                 # unit circle
+        plt.plot(circle[:,0], circle[:,1], linewidth=1.0, label="unit circle")
         plt.scatter(evals_true.real, evals_true.imag, marker="o", label="eig(A)")
-        plt.scatter(evals_hat.real,  evals_hat.imag,  marker="x", label="eig(Ahat)")
+        plt.scatter(evals_hat.real,  evals_hat.imag,  marker="x", label="eig(Â)")
+        lim = max(1.1, np.max(np.abs(np.r_[evals_true.real, evals_true.imag,
+                                        evals_hat.real,  evals_hat.imag, 1.0])))*1.05
+        plt.xlim([-lim, lim]); plt.ylim([-lim, lim])
         plt.axhline(0, linewidth=0.8); plt.axvline(0, linewidth=0.8)
         plt.gca().set_aspect("equal", adjustable="box")
-        plt.title("Eigenvalues"); plt.grid(True, alpha=0.3); plt.legend()
+        plt.title("DT eigenvalues"); plt.grid(alpha=0.3); plt.legend()
+
+        # 4) Matrix comparison figure (true vs est vs diff) for all matched pairs
+        # Pair any key 'Khat' in E with 'K' in T
+        pairs = []
+        for k_est in E.files:
+            if not k_est.endswith("hat"):
+                continue
+            k_true = k_est[:-3]
+            if k_true in T.files:
+                pairs.append((k_true, k_est))
+
+        dim_checks = {}
+        if pairs:
+            nrows = len(pairs)
+            fig, axes = plt.subplots(nrows, 3, figsize=(12, max(3.0, 2.2*nrows)))
+            if nrows == 1:
+                axes = np.array([axes])
+            for i, (ktru, kest) in enumerate(pairs):
+                M_true = T[ktru]
+                M_est  = E[kest]
+                same_shape = (M_true.shape == M_est.shape)
+                dim_checks[(ktru, kest)] = {
+                    "true_shape": tuple(M_true.shape),
+                    "est_shape":  tuple(M_est.shape),
+                    "match": bool(same_shape),
+                }
+                if not same_shape:
+                    # scream into the plot so future-you notices
+                    fig.suptitle("WARNING: shape mismatches detected", color="crimson")
+                # heatmaps
+                ax1, ax2, ax3 = axes[i, 0], axes[i, 1], axes[i, 2]
+                im1 = ax1.imshow(M_true, aspect='auto'); ax1.set_title(f"{ktru} (true)"); ax1.grid(False)
+                im2 = ax2.imshow(M_est,  aspect='auto'); ax2.set_title(f"{kest} (est)");  ax2.grid(False)
+                # difference uses a symmetric colormap around 0
+                diff = M_est - M_true if same_shape else np.zeros_like(M_true)
+                vmax = np.max(np.abs(diff)) + 1e-12
+                im3 = ax3.imshow(diff, vmin=-vmax, vmax=vmax, aspect='auto'); ax3.set_title(f"{kest} − {ktru}"); ax3.grid(False)
+                for ax in (ax1, ax2, ax3):
+                    ax.set_xlabel("cols"); ax.set_ylabel("rows")
+                # optional colorbars (comment out if you hate margins)
+                fig.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+                fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+                fig.colorbar(im3, ax=ax3, fraction=0.046, pad=0.04)
+            fig.tight_layout()
+        else:
+            print("No matrix pairs found of the form (K in truth, KhAT in estim). Add keys like 'Bu' and 'Buhat' if you want them compared.")
 
         if show:
             plt.show()
         else:
             plt.close("all")
 
-        return metrics
+        # include dimension checks in return for programmatic gating
+        out = {"metrics": metrics, "dimension_checks": dim_checks}
+        return out
 
 
 ## ------------------------------ MAIN ENTRY POINT ---------------------------------
@@ -701,6 +724,6 @@ if __name__ == "__main__":
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False)
+    if OL: Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=True, PLOT=True)
 
 

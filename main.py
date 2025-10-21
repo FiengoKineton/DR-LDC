@@ -167,6 +167,7 @@ class lmi_pipeline_optim_problem():
         payload = {
             "meta": {
                 "model": model,
+                "solver": res.solver,
                 "status": res.status,
                 "objective": res.obj_value,
                 "gamma": res.gamma,
@@ -191,6 +192,8 @@ class lmi_pipeline_optim_problem():
                 "Bbar": None if res.Bbar is None else res.Bbar.tolist(),
                 "Cbar": None if res.Cbar is None else res.Cbar.tolist(),
                 "Dbar": None if res.Dbar is None else res.Dbar.tolist(),
+                "Tp": None if res.Tp is None else res.Tp.tolist(),
+                "P": None if res.P is None else res.P.tolist(),
             },
             "composite_closed_loop": {
                 "Acl": Acl.tolist(),
@@ -449,7 +452,7 @@ if __name__ == "__main__":
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
-    path_name = f"/run_02___{_type}_{_model}_{_data}"
+    path_name = f"/run_03___{_type}_{_model}_{_data}"
 
     if args.comp:
         print("\nRunning comparison between baseline and LMI pipeline...")
@@ -458,7 +461,7 @@ if __name__ == "__main__":
         if args.base:
             print("\nRunning baseline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/baseline" + path_name
-            baseline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom)
+            baseline_optim_problem(out=out, Sigma_nom=Sigma_nom)
         if args.lmi:
             print("\nRunning LMI pipeline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name

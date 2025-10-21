@@ -64,6 +64,21 @@ def build_and_solve_dro_lmi(
     Cbar = cp.hstack([Cbar_11, Cbar_12])        # nz x 2nx
     Dbar = Dbar_1                               # nz x nw
 
+    Tp = np.eye(2*nx)
+    Tp_t = Tp.T
+    Tp_inv, Tp_t_inv = np.linalg.inv(Tp), np.linalg.inv(Tp_t)
+
+
+    def get_Acl(Abar, Pbar):
+        P = Tp_t_inv @ Pbar @ Tp_inv
+        Acl = Tp_inv @ Abar @ np.linalg.inv(Tp_t @ P)
+        return Acl
+    
+    def is_stable(A, tol=1e-9):
+        eigvals = np.linalg.eigvals(A)
+        spectral_radius = np.max(np.abs(eigvals))
+        return spectral_radius < 1- tol
+
     cons = []
     if additional_constraints:
         # Avoid explosions
@@ -86,6 +101,7 @@ def build_and_solve_dro_lmi(
         )
     else:
         cons += [Pbar >> 0]
+        #cons += [is_stable(np.linalg.inv(Pbar.value) @ Abar.value)]
         reg = 0.0
 
     # Negative definiteness helpers (strict -> with epsilon)
@@ -142,8 +158,9 @@ def build_and_solve_dro_lmi(
     prob = cp.Problem(obj, cons)
 
     # Solve
-    success = False
-    print("Attempting to solve with MOSEK...")
+    success_MOSEK = success_CVXOPT = success_SCS = False
+    solver = "MOSEK"
+    print("\n===================================================\nAttempting to solve with MOSEK...")
     try:
         prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={
             'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-8,
@@ -153,17 +170,33 @@ def build_and_solve_dro_lmi(
         })
         print(f"MOSEK status: {prob.status}")
         if prob.status == cp.OPTIMAL:
-            success = True
+            success_MOSEK = True
     except Exception as mosek_e:
         print(f"MOSEK error: {mosek_e}")
 
-    if not success:
-        print("MOSEK failed, trying SCS...")
+    if not success_MOSEK:
+        solver = "CVXOPT"
+        print("\n===================================================\nMOSEK failed, trying CVXOPT...")
+        try:
+            prob.solve(solver=cp.CVXOPT,
+                    kktsolver='chol',  # if available; otherwise remove
+                    maxiters=80,       # you can increase if needed
+                    abstol=1e-9, reltol=1e-9, feastol=1e-9,
+                    verbose=True)
+            print(f"CVXOPT status: {prob.status}")
+            if prob.status in (cp.OPTIMAL,):
+                success_CVXOPT = True
+        except Exception as e:
+            print(f"CVXOPT error: {e}")
+
+    if not success_CVXOPT:
+        solver = "SCS"
+        print("\n===================================================\nCVXOPT failed, trying SCS...")
         try:
             prob.solve(solver=cp.SCS, verbose=True, eps=1e-4, max_iters=100000)
             print(f"SCS status: {prob.status}")
             if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-                success = True
+                success_SCS = True
                 if prob.status == cp.OPTIMAL_INACCURATE:
                     print("Warning: SCS returned 'optimal_inaccurate'.")
             else:
@@ -171,8 +204,8 @@ def build_and_solve_dro_lmi(
         except Exception as scs_e:
             print(f"SCS error: {scs_e}")
 
-    if not success:
-        print("Optimization error: Both solvers failed.")
+    if not success_SCS:
+        print("Optimization error: All solvers failed.")
         exit(1)
 
 
@@ -194,10 +227,12 @@ def build_and_solve_dro_lmi(
     Dbar_val = _val(Dbar.value) if "Dbar" in locals() else None  # guard if you didn’t build it
 
     return DROLMIResult(
+        solver=solver,
         status=status,
         obj_value=val,
         gamma=gamma,
         lambda_opt=lam_val,
         Q=Q_val, X=X_val, Y=Y_val, K=K_val, L=L_val, M=M_val, N=N_val,
-        Pbar=Pbar_val, Abar=Abar_val, Bbar=Bbar_val, Cbar=Cbar_val, Dbar=Dbar_val
+        Pbar=Pbar_val, Abar=Abar_val, Bbar=Bbar_val, Cbar=Cbar_val, Dbar=Dbar_val, 
+        Tp = Tp, P=Tp_t_inv @ Pbar_val @ Tp_inv
     )

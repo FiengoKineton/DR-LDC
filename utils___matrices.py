@@ -168,7 +168,7 @@ class MatricesAPI():
         self.csv_path = out + f"___{_type}_{_model}_{_data}.csv"
 
 
-    def get_system(self, **kwargs):
+    def get_system(self, Generating_data=False, **kwargs):
         """
         If FROM_DATA=True, pass data_csv="path/to/file.csv" (and optional settings).
         Example:
@@ -178,13 +178,14 @@ class MatricesAPI():
                     nw=None, ny=None, nz=None,
                     ridge=1e-6)
         """
-        if self.p.get("PAPER_LIKE", False):
-            print("\nBuilding paper-like system...\n\n")
-            return self.make_paper_like_system()
+
+        if self.p.get("FROM_DATA", False) and not Generating_data:
+            print("\nBuilding system from data...\n\n")
+            return self.make_matrices_from_data(**kwargs)
         else:
-            if self.p.get("FROM_DATA", False):
-                print("\nBuilding system from data...\n\n")
-                return self.make_matrices_from_data(**kwargs)
+            if self.p.get("plant", {}).get("type", None) == "PaperLike":
+                print("\nBuilding paper-like system...\n\n")
+                return self.make_paper_like_system()
             else:
                 print("\nBuilding example system from YAML...\n\n")
                 return self.make_example_system()
@@ -211,7 +212,7 @@ class MatricesAPI():
                 Cy = Q[:ny, :]
             else:
                 Cy = np.zeros((ny, nx))
-                if self.p.get("PAPER_LIKE", False):
+                if self.p.get("plant", {}).get("type", None) == "PaperLike":
                     idx = np.array([0, 2, 4])
                     Cy[np.arange(ny), idx] = 1.0
                 else:
@@ -632,11 +633,12 @@ class MatricesAPI():
         print(f"sigma_nom:\n{sigma_nom}")
         print(f"gamma:\n{gamma}")
 
-        """
-            Y = blocks["Y"]          # may be None
-            Z = blocks["Z"]          # may be None
+        Y = blocks["Y"]          # may be None
+        Z = blocks["Z"]          # may be None
 
-
+        if (Y is None or Y.size == 0) or (Z is None or Z.size == 0):
+            Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
+        else: 
             # Outputs: measured Y
             if Y is None or Y.size == 0:
                 # Educated defaults: measure first ny states; no direct disturbance to sensors
@@ -652,7 +654,7 @@ class MatricesAPI():
                 GY = ThetaY @ ThetaY.T + ridge * np.eye(2 * nx)
                 WY = Y @ ThetaY.T @ np.linalg.inv(GY)   # (ny x 2nx)
                 Cy = WY[:, :nx]
-                Dyw = WY[:, nx:]
+                Dyw = WY[:, nx:nx+nw]
                 # If desired ny < observed, truncate; if ny > observed, pad zeros
                 if Cy.shape[0] != ny:
                     if Cy.shape[0] > ny:
@@ -686,7 +688,7 @@ class MatricesAPI():
                 WZ = Z @ ThetaZ.T @ np.linalg.inv(GZ)       # (nz x (nx+nu+nx))
                 Cz  = WZ[:, :nx]
                 Dzu = WZ[:, nx:nx+nu]
-                Dzw = WZ[:, nx+nu:]
+                Dzw = WZ[:, nx+nu:nx+nu+nw]
                 if Cz.shape[0] != nz:
                     if Cz.shape[0] > nz:
                         Cz  = Cz[:nz, :]
@@ -697,9 +699,8 @@ class MatricesAPI():
                         Cz  = np.vstack([Cz,  np.zeros((pad, nx))])
                         Dzu = np.vstack([Dzu, np.zeros((pad, nu))])
                         Dzw = np.vstack([Dzw, np.zeros((pad, Dzw.shape[1]))])
-        """
 
-        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
+        
 
         # Build plant
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)

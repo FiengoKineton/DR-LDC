@@ -34,6 +34,7 @@ class Controller:
 
 @dataclass
 class DROLMIResult:
+    solver: str
     status: str
     obj_value: float | None
     gamma: float
@@ -50,5 +51,7 @@ class DROLMIResult:
     Bbar: np.ndarray | None
     Cbar: np.ndarray | None
     Dbar: np.ndarray | None
+    Tp: np.ndarray | None
+    P: np.ndarray | None
 
 
