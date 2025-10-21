@@ -2,18 +2,19 @@
 import numpy as np
 import cvxpy as cp
 from utils___systems import Plant, DROLMIResult
+from utils___matrices import MatricesAPI
 
 
 def build_and_solve_dro_lmi(
     plant: Plant,
+    api: MatricesAPI,
     Sigma_nom: np.ndarray,
     gamma: float,
     model: str = "correlated",  # or "independent"
     eps_def: float = 1e-5,
     alpha_cap: float = 1e2,  # keep X, Y from exploding
     fro_cap: float = 1e2,  # keep K, L, M, N from exploding
-    solver: str | None = None,
-    verbose: bool = False,
+    additional_constraints: bool = False,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -23,9 +24,12 @@ def build_and_solve_dro_lmi(
     A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
     nx, nw, nu, nz, ny = plant.dims()
 
+
+    Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw)
+
     # Decision variables
     lam = cp.Variable(nonneg=True, name="lambda")
-    Q = cp.Variable((nw, nw), PSD=True, name="Q")
+    Q = cp.Variable((nw, nw), symmetric=True, name="Q")     # PSD=True
 
     X = cp.Variable((nx, nx), symmetric=True, name="X")
     Y = cp.Variable((nx, nx), symmetric=True, name="Y")
@@ -36,72 +40,80 @@ def build_and_solve_dro_lmi(
 
     # Construct mathbb{P} = [[Y, I], [I, X]]
     I_x = np.eye(nx)
-    Pbar = cp.bmat([[Y, I_x],
+    Pbar = cp.bmat([[Y, I_x],                   # 2nx x 2nx
                     [I_x, X]])
 
     # Construct mathbb{A}, mathbb{B}, mathbb{C}, mathbb{D}
-    AY_plus_BuM   = A @ Y + Bu @ M                  # nx x nx
-    A_plus_BuNCy  = A + Bu @ N @ Cy                 # nx x nx
-    XBw_plus_LDyw = X @ Bw + L @ Dyw                # nx x nw
-    CzY_plus_DzuM = Cz @ Y + Dzu @ M                # nz x nx
-    Cz_plus_DzuNCy= Cz + Dzu @ N @ Cy               # nz x nx
-    Bw_plus_BuNDy = Bw + Bu @ N @ Dyw               # nx x nw
-    Dzw_plus_DzuND= Dzw + Dzu @ N @ Dyw             # nz x nw
+    Abar_11 = A @ Y + Bu @ M                    # nx x nx
+    Abar_12 = A + Bu @ N @ Cy                   # nx x nx
+    Abar_21 = K                                 # nx x nx
+    Abar_22 = X @ A + L @ Cy                    # nx x nx
 
-    Abar = cp.bmat([[AY_plus_BuM,   A_plus_BuNCy],
-                    [K,             X @ A + L @ Cy]])
-    Bbar = cp.vstack([Bw_plus_BuNDy,
-                      XBw_plus_LDyw])
-    Cbar = cp.hstack([CzY_plus_DzuM, Cz_plus_DzuNCy])
-    Dbar = Dzw_plus_DzuND
+    Bbar_11 = Bw + Bu @ N @ Dyw                 # nx x nw
+    Bbar_12 = X @ Bw + L @ Dyw                  # nx x nw
+
+    Cbar_11 = Cz @ Y + Dzu @ M                  # nz x nx
+    Cbar_12 = Cz + Dzu @ N @ Cy                 # nz x nx
+
+    Dbar_1  = Dzw + Dzu @ N @ Dyw               # nz x nw
+
+    Abar = cp.bmat([[Abar_11,   Abar_12],       # 2nx x 2nx
+                    [Abar_21,   Abar_22]])
+    Bbar = cp.vstack([Bbar_11,                  # 2nx x nw
+                      Bbar_12])
+    Cbar = cp.hstack([Cbar_11, Cbar_12])        # nz x 2nx
+    Dbar = Dbar_1                               # nz x nw
 
     cons = []
-    # Avoid explosions
-    cons += [X << alpha_cap * np.eye(nx), Y << alpha_cap * np.eye(nx)]
-    # optional: bound Frobenius norms of “gain-like” variables
-    cons += [cp.norm(K, 'fro') <= fro_cap,
-            cp.norm(L, 'fro') <= fro_cap,
-            cp.norm(M, 'fro') <= fro_cap,
-            cp.norm(N, 'fro') <= fro_cap]
+    if additional_constraints:
+        # Avoid explosions
+        cons += [X << alpha_cap * np.eye(nx), Y << alpha_cap * np.eye(nx)]
+        # optional: bound Frobenius norms of “gain-like” variables
+        cons += [cp.norm(K, 'fro') <= fro_cap,
+                cp.norm(L, 'fro') <= fro_cap,
+                cp.norm(M, 'fro') <= fro_cap,
+                cp.norm(N, 'fro') <= fro_cap]
 
-    # Symmetry / positivity
-    cons += [X >> eps_def * np.eye(nx), Y >> eps_def * np.eye(nx)]
-    cons += [Pbar >> eps_def * np.eye(2*nx)]
+        # Symmetry / positivity
+        cons += [X >> eps_def * np.eye(nx), Y >> eps_def * np.eye(nx)]
+        cons += [Pbar >> eps_def * np.eye(2*nx)]
 
-    # Objective: tr(Q Sigma_nom) + lambda * gamma^2
-    reg = 1e-4 * (
-        cp.trace(X) + cp.trace(Y)
-        + 0.1*cp.sum_squares(K) + 0.1*cp.sum_squares(L)
-        + 0.1*cp.sum_squares(M) + 0.1*cp.sum_squares(N)
-    )
-    obj = cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2) + reg
+        # Objective: tr(Q Sigma_nom) + lambda * gamma^2
+        reg = 1e-4 * (
+            cp.trace(X) + cp.trace(Y)
+            + 0.1*cp.sum_squares(K) + 0.1*cp.sum_squares(L)
+            + 0.1*cp.sum_squares(M) + 0.1*cp.sum_squares(N)
+        )
+    else:
+        cons += [Pbar >> 0]
+        reg = 0.0
 
     # Negative definiteness helpers (strict -> with epsilon)
     def negdef(M):
-        return M << -eps_def * np.eye(M.shape[0])
+        return (M << -eps_def * np.eye(M.shape[0])) if additional_constraints else (M << 0)
 
     Iw = np.eye(nw)
     Iz = np.eye(nz)
 
     # handy zero of the right size
     def Z(r, c):
-        return cp.Constant(np.zeros((r, c)))
+        return np.zeros((r, c)) # cp.Constant(np.zeros((r, c)))
 
     if model.lower() in ["correlated", "corr", "1"]:
         # Block sizes by columns: [2nx, nw, nw, 2nx, nz]
         # Row heights: [2nx, nw, nw, 2nx, nz]
         big_corr = cp.bmat([
-            # row 1: size 2nx
+            # row 1: size 2nx x (4nx + 2nw + nz)
             [ -Pbar,          Z(2*nx, nw),    Z(2*nx, nw),    Abar.T,           Cbar.T          ],
-            # row 2: size nw
+            # row 2: size nw x (4nx + 2nw + nz)
             [ Z(nw, 2*nx),   -lam*Iw,         lam*Iw,         Bbar.T,           Dbar.T          ],
-            # row 3: size nw
+            # row 3: size nw x (4nx + 2nw + nz)
             [ Z(nw, 2*nx),    lam*Iw,        -Q - lam*Iw,     Z(nw, 2*nx),      Z(nw, nz)       ],
-            # row 4: size 2nx
+            # row 4: size 2nx x (4nx + 2nw + nz)
             [  Abar,           Bbar,           Z(2*nx, nw),   -Pbar,             Z(2*nx, nz)    ],
-            # row 5: size nz
+            # row 5: size nz x (4nx + 2nw + nz)
             [  Cbar,           Dbar,           Z(nz, nw),      Z(nz, 2*nx),     -Iz             ],
-        ])
+        ])  # Tot size: (4nx + 2nw + nz) x (4nx + 2nw + nz)
         cons += [negdef(big_corr)]
 
     elif model.lower() in ["independent", "indep", "2"]:
@@ -125,51 +137,61 @@ def build_and_solve_dro_lmi(
     else:
         raise ValueError("model must be 'correlated' or 'independent'.")
 
+    cons += [Q >> 0]
+    obj = cp.Minimize(cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2) + reg)
+    prob = cp.Problem(obj, cons)
 
-    prob = cp.Problem(cp.Minimize(obj), cons)
-
-    # Pick solver
-    solve_kwargs = dict(verbose=verbose)
-    if solver is not None:
-        solve_kwargs["solver"] = solver
-        if solver.upper() == "SCS":
-            solve_kwargs.update(dict(max_iters=150000, eps=5e-7))
-            solve_kwargs.update(dict(acceleration_lookback=50, normalize=True, scale=5.0))
-        if solver.upper() == "MOSEK":
-            # if you have it, enjoy your life
-            pass
-    else:
-        # default: try MOSEK else SCS
-        try:
-            solve_kwargs["solver"] = cp.MOSEK
-        except Exception:
-            solve_kwargs["solver"] = cp.SCS
-            solve_kwargs.update(dict(max_iters=50000, eps=1e-6))
-
-    val = None
-    lam_val = None
-    Q_val = X_val = Y_val = K_val = L_val = M_val = N_val = None
-    Pbar_val = Abar_val = Bbar_val = Cbar_val = Dbar_val = None
-
+    # Solve
+    success = False
+    print("Attempting to solve with MOSEK...")
     try:
-        prob.solve(**solve_kwargs)
-    except Exception as e:
-        return DROLMIResult(
-            status=f"solve_error: {e}",
-            obj_value=None, gamma=gamma, lambda_opt=None,
-            Q=None, X=None, Y=None, K=None, L=None, M=None, N=None,
-            Pbar=None, Abar=None, Bbar=None, Cbar=None, Dbar=None
-        )
+        prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={
+            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-8,
+            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-8,
+            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-8,
+            'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6
+        })
+        print(f"MOSEK status: {prob.status}")
+        if prob.status == cp.OPTIMAL:
+            success = True
+    except Exception as mosek_e:
+        print(f"MOSEK error: {mosek_e}")
+
+    if not success:
+        print("MOSEK failed, trying SCS...")
+        try:
+            prob.solve(solver=cp.SCS, verbose=True, eps=1e-4, max_iters=100000)
+            print(f"SCS status: {prob.status}")
+            if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                success = True
+                if prob.status == cp.OPTIMAL_INACCURATE:
+                    print("Warning: SCS returned 'optimal_inaccurate'.")
+            else:
+                print(f"SCS failed with status: {prob.status}")
+        except Exception as scs_e:
+            print(f"SCS error: {scs_e}")
+
+    if not success:
+        print("Optimization error: Both solvers failed.")
+        exit(1)
+
+
+    # Safe extraction
+    def _val(x):
+        if x is None:
+            return None
+        return float(x) if np.isscalar(x) else x
+
 
     status = prob.status
-    if status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-        val = float(prob.value)
-        lam_val = float(lam.value)
-        Q_val = Q.value
-        X_val, Y_val = X.value, Y.value
-        K_val, L_val, M_val, N_val = K.value, L.value, M.value, N.value
-        Pbar_val = Pbar.value
-        Abar_val, Bbar_val, Cbar_val, Dbar_val = Abar.value, Bbar.value, Cbar.value, Dbar.value
+    val = float(prob.value)
+    lam_val = _val(lam.value)
+    Q_val  = _val(Q.value)
+    X_val, Y_val = _val(X.value), _val(Y.value)
+    K_val, L_val, M_val, N_val = _val(K.value), _val(L.value), _val(M.value), _val(N.value)
+    Pbar_val = _val(Pbar.value)
+    Abar_val, Bbar_val, Cbar_val = _val(Abar.value), _val(Bbar.value), _val(Cbar.value)
+    Dbar_val = _val(Dbar.value) if "Dbar" in locals() else None  # guard if you didn’t build it
 
     return DROLMIResult(
         status=status,

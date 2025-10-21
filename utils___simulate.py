@@ -8,15 +8,17 @@ import matplotlib.pyplot as plt
 from utils___systems import Plant, Controller
 
 
+yaml_path="problem___parameters.yaml"
+if yaml is None:
+    raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+with open(yaml_path, "r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
+
+
 ## ------------------------- CLOSED-LOOP SIMULATION CLASS --------------------------
 
 class Closed_Loop():
-    def __init__(self, yaml_path="problem___parameters.yaml", TEST=False):
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-
+    def __init__(self, TEST=False):
         self.p = cfg.get("params", {})
         sim = self.p.get("simulation", {})
         self.Tf = sim.get("TotTime", 25)
@@ -194,12 +196,7 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False, yaml_path="problem___parameters.yaml"):
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-
+    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False):
         self.p = cfg.get("params", {})
         out = self.p.get("directories", {}).get("data", "./out/data/session_01")
         _type = self.p.get("plant", {}).get("type", "explicit")
@@ -700,12 +697,10 @@ class Open_Loop():
 ## ------------------------------ MAIN ENTRY POINT ---------------------------------
 
 if __name__ == "__main__":
-    yaml_path="problem___parameters.yaml"
-
     CL = False
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False, yaml_path=yaml_path)
+    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False)
 
 

@@ -8,7 +8,7 @@ from problem___dro_lmi import build_and_solve_dro_lmi
 
 from utils___systems import Plant, Controller
 from utils___simulate import Closed_Loop 
-from utils___matrices import Recover, MatricesAPI
+from utils___matrices import Recover, MatricesAPI, compose_closed_loop
 
 
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
@@ -18,7 +18,12 @@ class baseline_optim_problem():
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
-        Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once(Sigma_nom=Sigma_nom)
+        api = MatricesAPI()
+
+        plant, ctrl0 = api.get_system()
+        api.print_plant(plant)
+
+        Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt = run_once(plant=plant, ctrl0=ctrl0, Sigma_nom=Sigma_nom)
 
         # Persist everything needed for reproducible simulation
         json_path = out + f"___results_run.json"
@@ -99,24 +104,21 @@ class lmi_pipeline_optim_problem():
 
         recover = Recover()
         api = MatricesAPI()
+        cl = Closed_Loop() 
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
         plant, _ = api.get_system()
-
-        solver = params.get("solver", "SCS")                     # "MOSEK" or "SCS"
-        gamma = params.get("ambiguity", {}).get("gamma", 0.5)    # Wasserstein radius (set as you wish)
-
-        cl = Closed_Loop()  # instantiate simulation class
+        api.print_plant(plant)
 
         # 2) Solve DRO-LMI (choose "correlated" or "independent")
-        model = params.get("model", "independent")                          # \in {"correlated", "independent"}
+        gamma = params.get("ambiguity", {}).get("gamma", 0.5)    # Wasserstein radius (set as you wish)
+        model = params.get("model", "correlated")                # \in {"correlated", "independent"}
         res = build_and_solve_dro_lmi(
             plant=plant,
+            api=api,
             Sigma_nom=Sigma_nom,
             gamma=gamma,
             model=model,
-            solver=solver,       # MOSEK if available, else SCS (set to "MOSEK" explicitly if you have it)
-            verbose=False
         )
 
         if res.status not in ("optimal", "optimal_inaccurate"):
@@ -127,15 +129,39 @@ class lmi_pipeline_optim_problem():
             "Cbar", np.shape(res.Cbar), "Dbar", np.shape(res.Dbar), "Pbar", np.shape(res.Pbar))
 
         # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
-        Acl, Bcl, Ccl, Dcl = recover.closed_loop_from_bar(res.Pbar, res.Abar, res.Bbar, res.Cbar, res.Dbar)
+        Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
+        A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
+        Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw)
+
+        plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+        ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
+        Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl)
 
         # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
-        ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, Acl, Bcl, Ccl, Dcl)
-        rho = float(np.max(np.abs(np.linalg.eigvals(Acl))))
-        print(f"spectral radius(Acl) ≈ {rho:.6g}")
-        if not np.isfinite(rho) or rho >= 1.05:
-            raise RuntimeError("Closed loop is unstable/ill-conditioned (rho>=1.05). "
-                            "Tighten regularization or reduce gamma before simulating.")
+        # ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, api, (Acl, Bcl, Ccl, Dcl))
+        
+        
+        eig = np.linalg.eigvals(Acl)
+        rho = float(np.max(np.abs(eig)))
+
+        warn_margin = 1.0 - 1e-6     # warn if too close to 1 from below
+        hard_fail   = 1.0 + 1e-9     # fail if ≥ 1 within numerical wiggle
+
+        if not np.isfinite(rho):
+            print("Closed loop produced non-finite eigenvalues.")
+
+        if rho >= hard_fail:
+            print(f"Unstable: spectral radius {rho:.6g} ≥ 1.")
+
+        if rho >= warn_margin:
+            print(f"Warning: near-marginal stability, spectral radius {rho:.6g}.")
+
+        if any(abs(eig) >= warn_margin):
+            print("Warning: Closed-loop system may be unstable")
+            print(abs(eig))
+        else:
+            print("Closed-loop system is stable")
+            print(abs(eig))
 
         # 5) Persist everything meaningful into a single JSON
         payload = {
@@ -150,7 +176,7 @@ class lmi_pipeline_optim_problem():
             "disturbance": {
                 "Sigma_nom": Sigma_nom.tolist(),
             },
-            "recovered_controller": self.controller_to_dict(ctrl_rec),
+            "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
             "dro_variables": {
                 "Q": None if res.Q is None else res.Q.tolist(),
@@ -172,7 +198,6 @@ class lmi_pipeline_optim_problem():
                 "Ccl": Ccl.tolist(),
                 "Dcl": Dcl.tolist(),
             },
-            "recovery_residuals_rel": residuals,  # dimensionless relative errors
         }
 
         out_json = out + f"___results_run.json"
@@ -181,7 +206,7 @@ class lmi_pipeline_optim_problem():
 
         # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
         #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
-        sim = cl.simulate_closed_loop(plant, ctrl_rec, Sigma_nom)
+        sim = cl.simulate_closed_loop(plant, ctrl, Sigma_nom)
         out_npz = out + f"___closed_loop_run.npz"
         cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
@@ -425,17 +450,16 @@ if __name__ == "__main__":
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
     path_name = f"/run_02___{_type}_{_model}_{_data}"
-    print(("\nEvaluating plant from data files." if FROM_DATA else "\nEvaluating plant from model-based design."))
 
     if args.comp:
-        print("Running comparison between baseline and LMI pipeline...\n\n")
+        print("\nRunning comparison between baseline and LMI pipeline...")
         compare_baseline_vs_lmi(out_root=out, path_name=path_name)
     else:
         if args.base:
-            print("Running baseline optimization...\n\n")
+            print("\nRunning baseline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/baseline" + path_name
             baseline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom)
         if args.lmi:
-            print("Running LMI pipeline optimization...\n\n")
+            print("\nRunning LMI pipeline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name
             lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom)

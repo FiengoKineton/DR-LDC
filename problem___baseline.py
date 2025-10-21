@@ -1,5 +1,5 @@
 import numpy as np
-from utils___matrices import MatricesAPI, compose_closed_loop
+from utils___matrices import compose_closed_loop
 
 from numpy.linalg import eigvals
 from scipy.optimize import minimize
@@ -135,7 +135,9 @@ class Optim_Problem():
 
 # ------------------------- SINGLE RUN FUNCTION --------------------------
 
-def run_once(Sigma_nom: np.ndarray = np.array([[1.0, 0.0], [0.0, 1.0]]),
+def run_once(plant: Plant = None,
+             ctrl0: Controller = None,
+             Sigma_nom: np.ndarray = np.array([[1.0, 0.0], [0.0, 1.0]]),
              T_cost_init: int = 2000,
              T_cost_opt: int = 2500,
              burnin_init: int = 200,
@@ -144,10 +146,8 @@ def run_once(Sigma_nom: np.ndarray = np.array([[1.0, 0.0], [0.0, 1.0]]),
              maxiter: int = 120):
     
     opt = Optim_Problem()
-    api = MatricesAPI()
 
     # 1) Define system
-    plant, ctrl0 = api.get_system()
     nx, nw, nu, nz, ny = plant.dims()
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 
@@ -184,7 +184,7 @@ def run_once(Sigma_nom: np.ndarray = np.array([[1.0, 0.0], [0.0, 1.0]]),
     print("Cc=\n", ctrl_opt.Cc)
     print("Dc=\n", ctrl_opt.Dc)
 
-    return Sigma_nom, float(base_cost), str(res.message), float(cost_opt), rho, ctrl_opt, plant
+    return Sigma_nom, float(base_cost), str(res.message), float(cost_opt), rho, ctrl_opt
 
 
 # ------------------------- MAIN SCRIPT ENTRY POINT ----------------------

@@ -1,8 +1,8 @@
 params:
-  dimensions: {nx: 4, nu: 2, nw: 2, ny: 2}
-  model: "correlated"   # "independent" | "correlated"
-  solver: "SCS"         # "SCS" | "MOSEK"
-  FROM_DATA: true      # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
+  dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
+  model: "correlated"                       # "independent" | "correlated"
+  FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
+  PAPER_LIKE: true
 
   simulation:
     ts: 0.05
@@ -24,20 +24,20 @@ params:
 
 
   ambiguity:
-    model: "W2"               # "W2" => Wasserstein-2 | "KL" => Kullback-Leibler
-    gamma: 0.028251205750965087                # radius of the ambiguity set
-    Sigma_nom: [[0.5, 0.0], [0.0, 0.5]] #[[0.64033495, -0.44049879], [-0.44049879, 0.46091297]]
+    model: "W2"                           # "W2" => Wasserstein-2 | "KL" => Kullback-Leibler
+    gamma: 0.5                            # 0.028251205750965087
+    Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]   # [[0.64033495, -0.44049879], [-0.44049879, 0.46091297]]
   
 
   outputs:
-    mode: "A"                # (penalize states & inputs directly) | "A" => z = [ Qx^{1/2} x ; Ru^{1/2} u ]
-    #mode: "B"                # (penalize measured output & inputs) | "B" => z = [ W_y y ; Ru^{1/2} u ], with y = C_y x + D_yw w
+    mode: "A"                             # (penalize states & inputs directly) | "A" => z = [ Qx^{1/2} x ; Ru^{1/2} u ]
+    #mode: "B"                             # (penalize measured output & inputs) | "B" => z = [ W_y y ; Ru^{1/2} u ], with y = C_y x + D_yw w
 
-    Qx_diag: [1.0, 1.0, 0.3, 0.1]   # diag entries of Q_x  (size nx)
-    Ru_diag: [0.1, 0.1]            # diag entries of R_u  (size nu)
-    Wy_diag: [1.0, 1.0]      # diag entries of W_y  (size ny)
+    Qx_diag: [1.0, 1.0]                   # diag entries of Q_x  (size nx)
+    Ru_diag: [1.0]                        # diag entries of R_u  (size nu)
+    Wy_diag: [1.0, 1.0]                   # diag entries of W_y  (size ny)
 
 
     measured:
-      select: "first"        # or "random"
-      dyw_zero: true         # Dyw = 0 unless you really measure w
+      select: "first"                     # or "random"
+      dyw_zero: true                      # Dyw = 0 unless you really measure w

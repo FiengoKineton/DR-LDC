@@ -1,9 +1,16 @@
+import __main__
 import re, json, yaml, sys
 import numpy as np
-from scipy.linalg import sqrtm
+from scipy.linalg import sqrtm, expm
 from utils___systems import Plant, Controller
 from typing import Tuple, Optional, List
 from numpy.linalg import eigvals, norm
+
+
+yaml_path="problem___parameters.yaml"
+if yaml is None: raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+with open(yaml_path, "r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
 
 
 # ------------------------- COMPOSE MATRICES FROM LMI --------------------------
@@ -61,72 +68,50 @@ class Recover():
         Dbar = np.array(d["Dbar"], dtype=float)
         return Pbar, Abar, Bbar, Cbar, Dbar, d
 
-    def __closed_loop_from_bar(self, Pbar, Abar, Bbar, Cbar, Dbar, jitter=1e-9):
-        """
-        Direct gauge: set T = I, P = Pbar. Then:
-        A_cl = Pbar^{-1} Abar
-        B_cl = Pbar^{-1} Bbar
-        C_cl = Cbar
-        D_cl = Dbar
-        This damps explosive scalings when Pbar has huge entries.
-        """
-        Pbar = np.array(Pbar, dtype=float)
-        Abar = np.array(Abar, dtype=float)
-        Bbar = np.array(Bbar, dtype=float)
-        Cbar = np.array(Cbar, dtype=float)
-        Dbar = np.array(Dbar, dtype=float)
+    def Mc_from_bar(self, res, plant: Plant):
+        X_val = res.X
+        Y_val = res.Y
+        K_val = res.K
+        L_val = res.L
+        M_val = res.M
+        N_val = res.N
 
-        # Symmetrize and ensure invertibility (nearest PD if needed)
-        Pbar = 0.5 * (Pbar + Pbar.T)
+        A, Bu, Cy = plant.A, plant.Bu, plant.Cy
+        nx, *_ = plant.dims()
+
         try:
-            Pinv = np.linalg.inv(Pbar)
+            U, S, Vt = np.linalg.svd(np.eye(nx) - X_val @ Y_val)
+            V = Vt.T
+            epsilon = 1e-10
+            S_sqrt = np.diag(np.sqrt(np.maximum(S, epsilon)))
+            S_sqrt_inv = np.diag(1.0 / np.sqrt(np.maximum(S, epsilon)))
+            U_new = U @ S_sqrt
+            V_new = V @ S_sqrt
+            U_new_inv = S_sqrt_inv @ U.T
+            V_new_inv_T = V @ S_sqrt_inv
+            A_c = U_new_inv @ (K_val - X_val @ A @ Y_val - L_val @ Cy @ Y_val - X_val @ Bu @ (M_val - N_val @ Cy @ Y_val)) @ V_new_inv_T
+            B_c = U_new_inv @ (L_val - X_val @ Bu @ N_val)
+            C_c = (M_val - N_val @ Cy @ Y_val) @ V_new_inv_T
+            D_c = N_val
         except np.linalg.LinAlgError:
-            # project to nearest PD then invert
-            w, V = np.linalg.eigh(Pbar)
-            w_clip = np.maximum(w, jitter)
-            Pbar_pd = (V * w_clip) @ V.T
-            Pinv = np.linalg.inv(Pbar_pd)
+            print("Error: Singular matrix in controller reconstruction. Using fallback.")
+            A_c = K_val - X_val @ A @ Y_val - L_val @ Y_val - X_val @ Bu @ M_val
+            B_c = L_val
+            C_c = M_val
+            D_c = N_val
+        
+        return A_c, B_c, C_c, D_c
 
-        A_cl = Pinv @ Abar
-        B_cl = Pinv @ Bbar
-        C_cl = Cbar
-        D_cl = Dbar
-        return A_cl, B_cl, C_cl, D_cl
-
-    def closed_loop_from_bar(self, Pbar, Abar, Bbar, Cbar, Dbar, jitter=1e-9):
-        Pbar = np.asarray(Pbar, float); Abar = np.asarray(Abar, float)
-        Bbar = np.asarray(Bbar, float); Cbar = np.asarray(Cbar, float)
-        Dbar = np.asarray(Dbar, float)
-
-        # Symmetrize and make PD
-        Pbar = 0.5 * (Pbar + Pbar.T)
-        w, V = np.linalg.eigh(Pbar)
-        w_clip = np.maximum(w, jitter)
-        Pbar_pd = (V * w_clip) @ V.T
-
-        # Choose a congruence factor T with T^T T = Pbar (lower chol)
-        T = np.linalg.cholesky(Pbar_pd)     # lower-triangular
-        Tinv = np.linalg.inv(T)
-
-        # Undo the congruence:
-        # Using lower chol: Acl = Tinv @ Abar @ T, Bcl = Tinv @ Bbar, Ccl = Cbar @ T
-        A_cl = Tinv @ Abar @ T
-        B_cl = Tinv @ Bbar
-        C_cl = Cbar @ T
-        D_cl = Dbar
-        return A_cl, B_cl, C_cl, D_cl
-
-
-    def recover_controller_from_closed_loop(self, plant: Plant, A_cl, B_cl, C_cl, D_cl):
+    def recover_controller_from_closed_loop(self, plant: Plant, M_cl):
         """
         Solve for Dc, Cc, Bc, Ac using least-squares when needed.
         Returns Controller and a residual report.
         """
+        A_cl, B_cl, C_cl, D_cl = M_cl
         A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
         nx = A.shape[0]
-        nxc = A_cl.shape[0] - nx
-        if nxc <= 0:
-            raise ValueError("Composite A_cl has invalid size relative to plant nx.")
+
+        if A_cl.shape[0] - nx <= 0: raise ValueError("Composite A_cl has invalid size relative to plant nx.")
 
         # Partition composite matrices
         A11 = A_cl[:nx, :nx]
@@ -169,24 +154,11 @@ class Recover():
 
         return Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc), res
 
-    def recover_controller_from_dro_json(self, json_path: str, plant: Plant):
-        Pbar, Abar, Bbar, Cbar, Dbar, _ = self.load_dro_json(json_path)
-        A_cl, B_cl, C_cl, D_cl = self.closed_loop_from_bar(Pbar, Abar, Bbar, Cbar, Dbar)
-        ctrl, residuals = self.recover_controller_from_closed_loop(plant, A_cl, B_cl, C_cl, D_cl)
-        # Quick stability peek on composite A
-        rho = max(abs(eigvals(A_cl)))
-        return ctrl, residuals, float(rho)
-
 
 # ------------------------- PUBLIC API -----------------------------------------
 
 class MatricesAPI():
-    def __init__(self, yaml_path="problem___parameters.yaml"):
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-
+    def __init__(self):
         self.p = cfg.get("params", {})
         out = self.p.get("directories", {}).get("data", "./out/data/session_01")
         _type = self.p.get("plant", {}).get("type", "explicit")
@@ -206,10 +178,16 @@ class MatricesAPI():
                     nw=None, ny=None, nz=None,
                     ridge=1e-6)
         """
-        if self.p.get("FROM_DATA", False):
-            return self.make_matrices_from_data(**kwargs)
+        if self.p.get("PAPER_LIKE", False):
+            print("\nBuilding paper-like system...\n\n")
+            return self.make_paper_like_system()
         else:
-            return self.make_example_system()
+            if self.p.get("FROM_DATA", False):
+                print("\nBuilding system from data...\n\n")
+                return self.make_matrices_from_data(**kwargs)
+            else:
+                print("\nBuilding example system from YAML...\n\n")
+                return self.make_example_system()
 
 
     # ------------------------- EXAMPLE SYSTEM CONSTRUCTION -------------------------
@@ -217,7 +195,7 @@ class MatricesAPI():
     def build_out_matrices(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
         # ======================================================================
-        # Output-construction helpers (drop-in, no mystery defaults elsewhere)
+        # Output-construction helpers
         # ======================================================================
 
         def make_Cy_Dyw(nx: int, ny: int, nw: int, select: str = "first", dyw_zero: bool = True) -> tuple[np.ndarray, np.ndarray]:
@@ -233,7 +211,11 @@ class MatricesAPI():
                 Cy = Q[:ny, :]
             else:
                 Cy = np.zeros((ny, nx))
-                Cy[np.arange(ny), np.arange(ny)] = 1.0
+                if self.p.get("PAPER_LIKE", False):
+                    idx = np.array([0, 2, 4])
+                    Cy[np.arange(ny), idx] = 1.0
+                else:
+                    Cy[np.arange(ny), np.arange(ny)] = 1.0
 
             Dyw = np.zeros((ny, nw)) if dyw_zero else 0.05 * np.random.randn(ny, nw)
             return Cy, Dyw
@@ -246,10 +228,10 @@ class MatricesAPI():
                 z = [ Qx^{1/2} x ; Ru^{1/2} u ]
             Returns (Cz, Dzw, Dzu) with Dzw = 0, nz = nx + nu.
             """
-            if Qx_diag is None:
+            if Qx_diag is None or len(Qx_diag) != nx:
                 Qx_diag = np.ones(nx)
-            if Ru_diag is None:
-                Ru_diag = 0.1 * np.ones(nu)
+            if Ru_diag is None or len(Ru_diag) != nu:
+                Ru_diag = 1 * np.ones(nu)
 
             Qx_sqrt = np.sqrt(np.maximum(Qx_diag, 0.0))
             Ru_sqrt = np.sqrt(np.maximum(Ru_diag, 1e-12))
@@ -462,7 +444,7 @@ class MatricesAPI():
 
         return Ac0, Bc0, Cc0, Dc0
 
-    # ------------------------- DATA-DRIVEN DDD CONSTRUCTION -------------------------
+    # ------------------------- DATA-DRIVEN DDD CONSTRUCTION ------------------------
 
     def make_matrices_from_data(
         self, 
@@ -729,7 +711,7 @@ class MatricesAPI():
         return plant, ctrl0
 
 
-    # ------------------------- LEGACY EXAMPLE (unchanged) -------------------------
+    # ------------------------- LEGACY EXAMPLE (unchanged) --------------------------
 
     def make_example_system(self):
         """
@@ -766,4 +748,114 @@ class MatricesAPI():
     """
 
 
-# ------------------------------------------------------------------------------
+    # -------------------------- PAPER_LIKE MBD EXAMPLE ---------------------------------
+
+    def make_paper_like_system(self):
+        # Turbine parameters
+        J = 4e7  # Rotor inertia (kg·m^2)
+        k_omega = -1e5  # Torque sensitivity to rotor speed (N·m·s/rad)
+        k_h = 1e4  # Torque sensitivity to flapwise displacement (N·m/m)
+        k_phi = -1e4  # Torque sensitivity to torsional angle (N·m/rad)
+        k_beta = -1e6  # Torque sensitivity to pitch angle (N·m/rad)
+        k_v = 5e5  # Torque sensitivity to wind speed (N·m·s/m)
+        m = 1e4  # Effective blade mass (kg)
+        omega_f = 6.28  # Flapwise natural frequency (rad/s)
+        zeta_f = 0.05  # Flapwise damping ratio
+        f_omega = 1e3  # Force sensitivity to rotor speed (N·s/rad)
+        f_beta = -1e4  # Force sensitivity to pitch angle (N/rad)
+        f_v = 2e4  # Force sensitivity to wind speed (N·s/m)
+        I_t = 1e5  # Torsional inertia (kg·m^2)
+        omega_t = 31.4  # Torsional natural frequency (rad/s)
+        zeta_t = 0.02  # Torsional damping ratio
+        m_omega = 1e2  # Moment sensitivity to rotor speed (N·m·s/rad)
+        m_beta = -1e3  # Moment sensitivity to pitch angle (N·m/rad)
+        m_v = 1e4  # Moment sensitivity to wind speed (N·m·s/m)
+        omega_p = 10  # Pitch actuator natural frequency (rad/s)
+        zeta_p = 0.7  # Pitch actuator damping ratio
+
+        # Turbine state-space matrices
+        A_continuous = np.array([
+            [k_omega/J, k_h/J, 0, k_phi/J, 0, k_beta/J, 0],  # omega_dot
+            [0, 0, 1, 0, 0, 0, 0],  # h_dot
+            [f_omega/m, -omega_f**2, -2*zeta_f*omega_f, 0, 0, f_beta/m, 0],  # h_ddot
+            [0, 0, 0, 0, 1, 0, 0],  # phi_dot
+            [m_omega/I_t, 0, 0, -omega_t**2, -2*zeta_t*omega_t, m_beta/I_t, 0],  # phi_ddot
+            [0, 0, 0, 0, 0, 0, 1],  # beta_dot
+            [0, 0, 0, 0, 0, -omega_p**2, -2*zeta_p*omega_p]  # beta_ddot
+        ])
+        B_continuous = np.array([[0], [0], [0], [0], [0], [0], [omega_p**2]])  # Input: beta_dot_c
+        E_continuous = np.array([
+            [k_v/J, 0],  # omega (v_z only)
+            [0, 0],      # h
+            [f_v/m, f_v/m],  # h_dot (v_x, v_z)
+            [0, 0],      # phi
+            [m_v/I_t, m_v/I_t],  # phi_dot (v_x, v_z)
+            [0, 0],      # beta
+            [0, 0]       # beta_dot
+        ])  # 7x2: [v_x, v_z]
+
+        dt = self.p.get("simulation", {}).get("ts", 0.5)
+        nx, _, nu, ny, _ = self.get_dimensions_from_yaml()
+
+
+        A = expm(A_continuous * dt)
+        def discretize_input(A_c, B_c, dt):
+            n = A_c.shape[0]
+            m = B_c.shape[1]
+            Phi = expm(np.block([[A_c, B_c], [np.zeros((m, n)), np.zeros((m, m))]]) * dt)
+            A_d = Phi[:n, :n]
+            B_d = Phi[:n, n:]
+            return A_d, B_d
+
+        _, Bu = discretize_input(A_continuous, B_continuous, dt)
+        _, Bw = discretize_input(A_continuous, E_continuous, dt)
+
+        # Consider scaling of random noise
+        Bw = Bw/np.sqrt(dt)
+
+        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
+        Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nx, ny=ny, nu=nu)
+
+        plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+        ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
+        return plant, ctrl0
+
+
+    def print_plant(self, plant: Plant):
+        print("\nPlant Matrices:")
+        print(f"A [{plant.A.shape}]:\n", plant.A)
+        print(f"Bw [{plant.Bw.shape}]:\n", plant.Bw)
+        print(f"Bu [{plant.Bu.shape}]:\n", plant.Bu)
+        print(f"Cz [{plant.Cz.shape}]:\n", plant.Cz)
+        print(f"Dzw [{plant.Dzw.shape}]:\n", plant.Dzw)
+        print(f"Dzu [{plant.Dzu.shape}]:\n", plant.Dzu)
+        print(f"Cy [{plant.Cy.shape}]:\n", plant.Cy)
+        print(f"Dyw [{plant.Dyw.shape}]:\n", plant.Dyw)
+
+    def print_controller(self, ctrl: Controller):
+        print("\n\nController Matrices:")
+        print(f"Ac [{ctrl.Ac.shape}]:\n", ctrl.Ac)
+        print(f"Bc [{ctrl.Bc.shape}]:\n", ctrl.Bc)
+        print(f"Cc [{ctrl.Cc.shape}]:\n", ctrl.Cc)
+        print(f"Dc [{ctrl.Dc.shape}]:\n", ctrl.Dc)
+
+
+    def _augment_matrices(self, B_w, D_vw, D_yw):
+        nx, _, _, ny, nz = self.get_dimensions_from_yaml()
+
+        B_w = np.block([[B_w, (1e-4)*np.eye(nx), np.zeros((nx, ny))]])
+        D_vw = np.block([[D_vw, np.zeros((nz, nx + ny))]])
+        D_yw = np.block([[D_yw,np.zeros((ny, nx)),(1e-4)*np.eye(ny)]])
+        n_w = B_w.shape[1]
+        Sigma_nom = np.eye(n_w)
+        return B_w, D_vw, D_yw, n_w, Sigma_nom
+
+
+# ------------------------- Main execution -------------------------------------
+
+if __name__== "__main__":
+
+    mat = MatricesAPI()
+    plant, ctrl0 = mat.get_system()
+    mat.print_plant(plant)
+
