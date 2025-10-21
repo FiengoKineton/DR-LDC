@@ -463,3 +463,4 @@ if __name__ == "__main__":
             print("\nRunning LMI pipeline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name
             lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom)
+

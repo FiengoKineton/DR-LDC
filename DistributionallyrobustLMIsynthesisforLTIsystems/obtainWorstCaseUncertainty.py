@@ -2,6 +2,9 @@ import numpy as np
 from scipy.linalg import solve_discrete_lyapunov
 import cvxpy as cp
 
+USE_H2 = False
+
+
 # Load closed-loop matrices
 robust_data = np.load('controller_data_robust.npy', allow_pickle=True).item()
 h2_data = np.load('controller_data_h2.npy', allow_pickle=True).item()
@@ -20,17 +23,18 @@ controllers = {
         'C_c': robust_data['C_c'],    # 1x11
         'D_c': robust_data['D_c'],    # 1x11
         'C_y': robust_data['C_y']     # 11x11
-    },
-    'H2': {
-        'A_cl': h2_data['A_cl'],
-        'B_cl': h2_data['B_cl'],
-        'C_cl': h2_data['C_cl'],
-        'D_cl': h2_data['D_cl'],
-        'C_c': h2_data['C_c'],
-        'D_c': h2_data['D_c'],
-        'C_y': h2_data['C_y']
+    },}
+if USE_H2:
+    controllers['H2'] = {
+        'A_cl': h2_data['A_cl'],  # 22x22
+        'B_cl': h2_data['B_cl'],  # 22x2
+        'C_cl': h2_data['C_cl'],  # 12x22
+        'D_cl': h2_data['D_cl'],  # 12x2
+        'C_c': h2_data['C_c'],    # 1x11
+        'D_c': h2_data['D_c'],    # 1x11
+        'C_y': h2_data['C_y']     # 11x11
     }
-}
+
 
 # Display eigenvalues for robust controller
 eigvals = np.linalg.eigvals(robust_data['A_cl'])

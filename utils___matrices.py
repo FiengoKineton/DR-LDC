@@ -820,6 +820,18 @@ class MatricesAPI():
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
         return plant, ctrl0
 
+    def _augment_matrices(self, B_w, D_vw, D_yw):
+        nx, _, _, ny, nz = self.get_dimensions_from_yaml()
+
+        B_w = np.block([[B_w, (1e-4)*np.eye(nx), np.zeros((nx, ny))]])
+        D_vw = np.block([[D_vw, np.zeros((nz, nx + ny))]])
+        D_yw = np.block([[D_yw,np.zeros((ny, nx)),(1e-4)*np.eye(ny)]])
+        n_w = B_w.shape[1]
+        Sigma_nom = np.eye(n_w)
+        return B_w, D_vw, D_yw, n_w, Sigma_nom
+
+
+    # ------------------------- PRINTING HELPERS -------------------------------------
 
     def print_plant(self, plant: Plant):
         print("\nPlant Matrices:")
@@ -831,6 +843,7 @@ class MatricesAPI():
         print(f"Dzu [{plant.Dzu.shape}]:\n", plant.Dzu)
         print(f"Cy [{plant.Cy.shape}]:\n", plant.Cy)
         print(f"Dyw [{plant.Dyw.shape}]:\n", plant.Dyw)
+        print("\n\n")
 
     def print_controller(self, ctrl: Controller):
         print("\n\nController Matrices:")
@@ -838,17 +851,7 @@ class MatricesAPI():
         print(f"Bc [{ctrl.Bc.shape}]:\n", ctrl.Bc)
         print(f"Cc [{ctrl.Cc.shape}]:\n", ctrl.Cc)
         print(f"Dc [{ctrl.Dc.shape}]:\n", ctrl.Dc)
-
-
-    def _augment_matrices(self, B_w, D_vw, D_yw):
-        nx, _, _, ny, nz = self.get_dimensions_from_yaml()
-
-        B_w = np.block([[B_w, (1e-4)*np.eye(nx), np.zeros((nx, ny))]])
-        D_vw = np.block([[D_vw, np.zeros((nz, nx + ny))]])
-        D_yw = np.block([[D_yw,np.zeros((ny, nx)),(1e-4)*np.eye(ny)]])
-        n_w = B_w.shape[1]
-        Sigma_nom = np.eye(n_w)
-        return B_w, D_vw, D_yw, n_w, Sigma_nom
+        print("\n\n")
 
 
 # ------------------------- Main execution -------------------------------------
