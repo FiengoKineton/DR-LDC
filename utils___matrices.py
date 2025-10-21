@@ -447,7 +447,7 @@ class MatricesAPI():
 
     # ------------------------- DATA-DRIVEN DDD CONSTRUCTION ------------------------
 
-    def make_matrices_from_data(
+    def _make_matrices_from_data(
         self, 
         delimiter: str = ",",
         ridge: float = 1e-6,
@@ -534,6 +534,8 @@ class MatricesAPI():
 
         # ------------------------- DDD ESTIMATION HELPERS -------------------------
 
+        def demean(M): return M - M.mean(axis=1, keepdims=True)
+
         def _lsq_right_inverse(D: np.ndarray, ridge: float) -> np.ndarray:
             # D in R^{(nx+nu) x T}; return V = D^T (D D^T + ridge I)^{-1}
             r, _ = D.shape
@@ -560,6 +562,27 @@ class MatricesAPI():
             Bw = vecs[:, :nw] @ np.diag(np.sqrt(np.maximum(vals[:nw], eps)))
             return Bw, nw, S
 
+        def _bw_from_residual_svd(R: np.ndarray, energy: float = 0.95) -> Tuple[np.ndarray, int, np.ndarray]:
+            nx, T = R.shape
+            S = (R @ R.T) / max(T, 1)
+            S = 0.5 * (S + S.T) + 1e-12 * np.eye(nx)
+            U_s, s_s, _ = np.linalg.svd(S, full_matrices=False)
+            cum = np.cumsum(s_s) / max(np.sum(s_s), 1e-18)
+            k = int(np.clip(np.searchsorted(cum, energy) + 1, 1, nx))
+            Bw = U_s[:, :k] @ np.diag(np.sqrt(s_s[:k]))
+            return Bw, k, S
+
+        def _estimate_sigma_v2_diff(X):
+            D = np.diff(X, axis=1)
+            v2_i = 0.5 * np.var(D, axis=1, ddof=1)
+            return float(np.mean(v2_i)), v2_i
+
+        def _project_stable_dt(A, margin=0.995):
+            w, V = np.linalg.eig(A)
+            w2 = np.where(np.abs(w) >= margin, margin * w / np.abs(w), w)
+            return np.real_if_close(V @ np.diag(w2) @ np.linalg.inv(V), tol=1e-10)
+
+        # ------------------------- LOAD DATA -------------------------
 
         data_csv = str(self.csv_path)
 
@@ -567,12 +590,24 @@ class MatricesAPI():
             print("Provide data_csv='path/to/file.csv' to read data.")
             return self.make_example_system()
 
+
         blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
-        X = blocks["X"]          # (nx x T)
-        U = blocks["U"]          # (nu x T)
-        X_next = blocks["X_next"]
+        X = demean(blocks["X"])          # (nx x T)
+        U = demean(blocks["U"])          # (nu x T)
+        X_next = demean(blocks["X_next"])
 
         nx, nw, nu, ny, nz = self.get_dimensions_from_yaml()
+
+        # Identification options
+        ident = self.p.get("ident", {})
+        use_bc         = bool(ident.get("use_bc", False))
+        use_iv         = bool(ident.get("use_iv", False))
+        sigma_v2       = ident.get("sigma_v2", None)  # None => estimate for BC
+        stable_project = bool(ident.get("stable_project", False))
+        nw_energy      = float(ident.get("nw_energy", 0.95))
+        X_iv_path      = ident.get("X_iv_path", None)
+
+
 
         # Data-driven A, Bu by right-inverse projection
         D = np.vstack([X, U])       # (nx+nu) x T
@@ -712,6 +747,250 @@ class MatricesAPI():
         return plant, ctrl0
 
 
+
+    def make_matrices_from_data(
+        self,
+        delimiter: str = ",",
+        ridge: float = 1e-6,
+    ):
+        """
+        Data-driven DT identification with optional Bias-Correction (BC) or Instrumental Variables (IV).
+
+        CSV must have headers x1..x{nx}, u1..u{nu}; optional y1.., z1...
+        Builds aligned (X, U, X_next) and estimates:
+        - [A  Bu] by ridge regression on centered data (stable numerically)
+        - Bw from top energy directions of residual covariance (SVD)
+        - Optional outputs by ridge on [X;U;R] / [X;R]
+        Options for BC/IV are pulled from self.p["ident"]:
+        - use_bc: bool
+        - use_iv: bool
+        - sigma_v2: float | None          # BC only; if None, estimated by first-differences
+        - stable_project: bool            # optional radial shrink of eig(A) for simulation
+        - nw_energy: float in (0,1]       # fraction of residual energy for Bw columns
+        - X_iv_path: path to CSV containing a second x* sequence (IV instruments)
+        Returns (plant, ctrl0); prints diagnostics.
+        """
+
+        # ------------------------- CSV LOADING HELPERS -------------------------
+
+        def _read_csv_with_headers(path: str, delimiter: str = ",") -> Tuple[List[str], np.ndarray]:
+            with open(path, "r", encoding="utf-8") as f:
+                header = f.readline().strip()
+            headers = [h.strip() for h in header.split(delimiter)]
+            data = np.loadtxt(path, delimiter=delimiter, skiprows=1)
+            if data.ndim == 1:
+                data = data[None, :]
+            if data.shape[1] != len(headers):
+                raise ValueError(f"Column count mismatch: headers={len(headers)} vs data={data.shape[1]}")
+            return headers, data
+
+        def _pick_columns(headers: List[str], data: np.ndarray, prefix: str) -> np.ndarray:
+            pat = re.compile(rf"^{re.escape(prefix)}(\d+)$", re.IGNORECASE)
+            indices = [(i, int(m.group(1))) for i, h in enumerate(headers) if (m := pat.match(h)) is not None]
+            if not indices:
+                return np.empty((0, data.shape[0]))
+            indices.sort(key=lambda t: t[1])
+            cols = [i for i, _ in indices]
+            block = data[:, cols].T  # (count x T)
+            return block
+
+        def _build_blocks_from_csv(path: str, delimiter: str = ","):
+            headers, data = _read_csv_with_headers(path, delimiter=delimiter)
+            X = _pick_columns(headers, data, "x")
+            U = _pick_columns(headers, data, "u")
+            Y = _pick_columns(headers, data, "y")
+            Z = _pick_columns(headers, data, "z")
+            if X.size == 0 or U.size == 0:
+                raise ValueError("CSV must contain at least x* and u* columns.")
+
+            Tx = X.shape[1]; Tu = U.shape[1]
+            Ty = Y.shape[1] if Y.size else np.inf
+            Tz = Z.shape[1] if Z.size else np.inf
+            Tpair = int(min(Tx, Tu, Ty, Tz)) - 1
+            if Tpair < 1:
+                raise ValueError(f"Not enough samples to form (X, X_next): got Tx={Tx}, Tu={Tu}, Ty={Ty}, Tz={Tz}")
+
+            X_reg  = X[:, :Tpair]
+            U_reg  = U[:, :Tpair]
+            X_next = X[:, 1:Tpair+1]
+            Y_reg  = Y[:, :Tpair] if Y.size else None
+            Z_reg  = Z[:, :Tpair] if Z.size else None
+            return dict(X=X_reg, U=U_reg, X_next=X_next, Y=Y_reg, Z=Z_reg)
+
+        # ------------------------- UTILS -------------------------
+
+        def demean(M): return M - M.mean(axis=1, keepdims=True)
+
+        def _lsq_right_inverse(D: np.ndarray, ridge: float) -> np.ndarray:
+            r, _ = D.shape
+            G = D @ D.T + ridge * np.eye(r)
+            return D.T @ np.linalg.inv(G)
+
+        def _bw_from_residual_svd(R: np.ndarray, energy: float = 0.95) -> Tuple[np.ndarray, int, np.ndarray]:
+            nx, T = R.shape
+            S = (R @ R.T) / max(T, 1)
+            S = 0.5 * (S + S.T) + 1e-12 * np.eye(nx)
+            U_s, s_s, _ = np.linalg.svd(S, full_matrices=False)
+            cum = np.cumsum(s_s) / max(np.sum(s_s), 1e-18)
+            k = int(np.clip(np.searchsorted(cum, energy) + 1, 1, nx))
+            Bw = U_s[:, :k] @ np.diag(np.sqrt(s_s[:k]))
+            return Bw, k, S
+
+        def _estimate_sigma_v2_diff(X):
+            D = np.diff(X, axis=1)
+            v2_i = 0.5 * np.var(D, axis=1, ddof=1)
+            return float(np.mean(v2_i)), v2_i
+
+        def _project_stable_dt(A, margin=0.995):
+            w, V = np.linalg.eig(A)
+            w2 = np.where(np.abs(w) >= margin, margin * w / np.abs(w), w)
+            return np.real_if_close(V @ np.diag(w2) @ np.linalg.inv(V), tol=1e-10)
+
+        # ------------------------- LOAD DATA -------------------------
+
+        data_csv = str(self.csv_path)
+        if not data_csv:
+            print("Provide data_csv='path/to/file.csv' to read data.")
+            return self.make_example_system()
+
+        blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
+        X_raw, U_raw, Xn_raw = blocks["X"], blocks["U"], blocks["X_next"]
+        X = demean(blocks["X"])
+        U = demean(blocks["U"])
+        X_next = demean(blocks["X_next"])
+
+        nx, nw, nu, ny, nz = self.get_dimensions_from_yaml()
+
+        # Identification options
+        ident = self.p.get("ident", {})
+        use_bc         = bool(ident.get("use_bc", False))
+        use_iv         = bool(ident.get("use_iv", False))
+        sigma_v2       = ident.get("sigma_v2", None)  # None => estimate for BC
+        stable_project = bool(ident.get("stable_project", False))
+        nw_energy      = float(ident.get("nw_energy", 0.95))
+        X_iv_path      = ident.get("X_iv_path", None)
+
+        # ------------------------- IV instruments (optional) -------------------------
+        X_iv = None
+        if use_iv:
+            if X_iv_path is None:
+                raise ValueError("use_iv=True but no 'X_iv_path' provided in self.p['ident'].")
+            headers_iv, data_iv = _read_csv_with_headers(X_iv_path, delimiter=delimiter)
+            X_iv_block = _pick_columns(headers_iv, data_iv, "x")
+            if X_iv_block.shape != X_raw.shape:
+                raise ValueError(f"IV state shape mismatch: {X_iv_block.shape} vs {X_raw.shape}")
+            X_iv = demean(X_iv_block[:, :X.shape[1]])  # align to same T
+
+        # ------------------------- A, Bu estimation (ridge on centered time-domain) -------------------------
+
+        D = np.vstack([X, U])                          # (nx+nu) x T
+        rank_D = np.linalg.matrix_rank(D)
+        if rank_D < (nx + nu):
+            raise RuntimeError(f"[PE fail] rank([X;U])={rank_D} < {nx+nu}. Collect richer data.")
+
+        G = D @ D.T + ridge * np.eye(nx + nu)
+        W = X_next @ D.T @ np.linalg.inv(G)            # nx x (nx+nu)
+        A = W[:, :nx]
+        Bu = W[:, nx:]
+
+        if stable_project:
+            A = _project_stable_dt(A, margin=0.995)
+
+        # ------------------------- Residuals and Bw (SVD energy cut) -------------------------
+        R = X_next - (A @ X + Bu @ U)                  # nx x T
+        Bw, nw_eff, Sigma_res = _bw_from_residual_svd(R, energy=nw_energy)
+
+        # ------------------------- Outputs (same as before) -------------------------
+
+        Y = blocks["Y"]          # may be None
+        Z = blocks["Z"]          # may be None
+
+        if (Y is None or Y.size == 0) or (Z is None or Z.size == 0):
+            Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
+        else:
+            # Y regression on [X; R]
+            if ny is None:
+                ny = Y.shape[0]
+            ThetaY = np.vstack([X, R])
+            GY = ThetaY @ ThetaY.T + ridge * np.eye(ThetaY.shape[0])
+            WY = Y @ ThetaY.T @ np.linalg.inv(GY)
+            Cy = WY[:, :nx]
+            Dyw = WY[:, nx:nx+nw_eff]
+            if Cy.shape[0] != ny:
+                if Cy.shape[0] > ny:
+                    Cy = Cy[:ny, :]
+                    Dyw = Dyw[:ny, :]
+                else:
+                    pad = ny - Cy.shape[0]
+                    Cy = np.vstack([Cy, np.zeros((pad, nx))])
+                    Dyw = np.vstack([Dyw, np.zeros((pad, Dyw.shape[1]))])
+
+            # Z regression on [X; U; R]
+            if nz is None:
+                nz = Z.shape[0]
+            ThetaZ = np.vstack([X, U, R])
+            GZ = ThetaZ @ ThetaZ.T + ridge * np.eye(ThetaZ.shape[0])
+            WZ = Z @ ThetaZ.T @ np.linalg.inv(GZ)
+            Cz  = WZ[:, :nx]
+            Dzu = WZ[:, nx:nx+nu]
+            Dzw = WZ[:, nx+nu:nx+nu+nw_eff]
+            if Cz.shape[0] != nz:
+                if Cz.shape[0] > nz:
+                    Cz  = Cz[:nz, :]
+                    Dzu = Dzu[:nz, :]
+                    Dzw = Dzw[:nz, :]
+                else:
+                    pad = nz - Cz.shape[0]
+                    Cz  = np.vstack([Cz,  np.zeros((pad, nx))])
+                    Dzu = np.vstack([Dzu, np.zeros((pad, nu))])
+                    Dzw = np.vstack([Dzw, np.zeros((pad, Dzw.shape[1]))])
+
+        # ------------------------- Bias-Correction (optional) and IV (optional) diagnostics -------------------------
+
+        # Build projected “moments” for diagnostics and optional BC/IV replacement of A,Bu
+        T = X.shape[1]
+        Phi     = np.vstack([U, X])                    # (nu+nx) x T
+        Xbar0   = (X @ Phi.T) / T                      # nx x (nu+nx)
+        Xbar1   = (X_next @ Phi.T) / T
+
+        method_note = "Naive (biased)"
+
+        if use_iv:
+            Phi_iv  = np.vstack([U, X_iv])             # instruments
+            if np.linalg.matrix_rank(Phi_iv) < (nx + nu):
+                raise RuntimeError("[IV] rank(Phi_iv) deficient; collect a better second run.")
+            Xbar0_iv = (X @ Phi_iv.T) / T
+            Xbar1_iv = (X_next @ Phi_iv.T) / T
+            # Replace A,Bu by ridge on time-domain is usually numerically safer; keep IV for reporting
+            method_note = "IV (used for moment diagnostics; A,Bu from ridge time-domain)"
+
+        elif use_bc:
+            if sigma_v2 is None:
+                sigma_v2, _ = _estimate_sigma_v2_diff(X_raw)  # estimate from raw (un-centered) states
+            Psi = np.hstack([np.zeros((nx, nu)), (T * sigma_v2) * np.eye(nx)])
+            Xbar0_bc = Xbar0 - Psi / T
+            Xbar1_bc = Xbar1
+            method_note = f"BC(sigma_v2={sigma_v2:.3e}) (A,Bu from ridge time-domain)"
+
+        # ------------------------- Diagnostics -------------------------
+        rho_A = float(np.max(np.abs(np.linalg.eigvals(A))))
+        rel_resid = float(np.linalg.norm(R) / (np.linalg.norm(X_next) + 1e-12))
+        cond_DDt = float(np.linalg.cond(D @ D.T + ridge * np.eye(D.shape[0])))
+
+        print("[DDD] method:", method_note)
+        print(f"[DDD] rho(A)={rho_A:.6f},  rel_residual={rel_resid:.3e},  cond([X;U][X;U]^T+λI)={cond_DDt:.2e}")
+        print(f"[DDD] Bw columns selected (energy {nw_energy:.2f}): {Bw.shape[1]}")
+
+        # Build plant
+        plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+
+        # Neutral controller seed (full-order, tiny static gains)
+        Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nx, ny=Cy.shape[0], nu=Bu.shape[1])
+        ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
+
+        return plant, ctrl0
+
+
     # ------------------------- LEGACY EXAMPLE (unchanged) --------------------------
 
     def make_example_system(self):
@@ -735,18 +1014,6 @@ class MatricesAPI():
 
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
         return plant, ctrl0
-
-
-    """
-    USAGE
-
-    plant, ctrl0 = get_system(FROM_DATA=True,
-                            data_csv="out/data/session01.csv",
-                            delimiter=",",
-                            nw=None, ny=None, nz=None,
-                            ridge=1e-6)
-
-    """
 
 
     # -------------------------- PAPER_LIKE MBD EXAMPLE ---------------------------------
