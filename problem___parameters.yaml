@@ -14,7 +14,7 @@ params:
 
   
   directories:
-    data: "./out/data/session_temp"
+    data: "./out/data/session_03"
     artifacts: "./out/artifacts/"
 
   plant:

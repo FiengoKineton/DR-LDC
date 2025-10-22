@@ -186,36 +186,66 @@ class ResultsComparator:
                 return self._controller_from_dict(J["recovered_controller"])
             raise KeyError("No controller found in JSON payload.")
 
+        def _plnt_from_any(J):
+            if "plant" in J:
+                return self._plant_from_dict(J["plant"])
+            raise KeyError("No plant found in JSON payload.")
+
         ctrlM = _ctrl_from_any(JM)
+        plntM = _plnt_from_any(JM)
         ctrlD = _ctrl_from_any(JD)
+        plntD = _plnt_from_any(JD)
 
         # Objective values if present
         objM = JM.get("meta", {}).get("objective", JM.get("optimized_cost"))
         objD = JD.get("meta", {}).get("objective", JD.get("optimized_cost"))
 
-        # Deltas
-        deltas = {
+        # deltas_ctrl
+        deltas_ctrl = {
             "Ac": self._fro_stats(ctrlD.Ac, ctrlM.Ac),
             "Bc": self._fro_stats(ctrlD.Bc, ctrlM.Bc),
             "Cc": self._fro_stats(ctrlD.Cc, ctrlM.Cc),
             "Dc": self._fro_stats(ctrlD.Dc, ctrlM.Dc),
         }
 
-        print("\n=== Controller matrix deltas (DDD minus MBD) ===")
-        for k, st in deltas.items():
+        print("\n=== Controller matrix deltas_ctrl (DDD minus MBD) ===")
+        for k, st in deltas_ctrl.items():
             print(f"{k}: shape={st['shape']}, ‖Δ‖_F={st['fro_norm']:.3e}, "
                   f"max|Δ|={st['max_abs']:.3e}, mean|Δ|={st['mean_abs']:.3e}")
+
+        # deltas_plnt
+        deltas_plnt = {
+            "A": self._fro_stats(plntD.A, plntM.A),
+            "Bu": self._fro_stats(plntD.Bu, plntM.Bu),
+            #"Bw": self._fro_stats(plntD.Bw, plntM.Bw),
+            "Cy": self._fro_stats(plntD.Cy, plntM.Cy),
+            #"Dyw": self._fro_stats(plntD.Dyw, plntM.Dyw),
+            "Cz": self._fro_stats(plntD.Cz, plntM.Cz),
+            "Dzu": self._fro_stats(plntD.Dzu, plntM.Dzu),
+            #"Dzw": self._fro_stats(plntD.Dzw, plntM.Dzw),
+        }
+
+        print("\n=== Plant matrix deltas_plnt (DDD minus MBD) ===")
+        for k, st in deltas_plnt.items():
+            print(f"{k}: shape={st['shape']}, ‖Δ‖_F={st['fro_norm']:.3e}, "
+                  f"max|Δ|={st['max_abs']:.3e}, mean|Δ|={st['mean_abs']:.3e}")
+
 
         print("\n=== Objective values (as saved by the pipeline) ===")
         print(f"{method.upper()} MBD objective: {objM}")
         print(f"{method.upper()} DDD objective: {objD}")
 
+
         api = MatricesAPI()
+        p_MDB = Plant(A=plntM.A, Bu=plntM.Bu, Bw=plntM.Bw, Cy=plntM.Cy, Dyw=plntM.Dyw, Cz=plntM.Cz, Dzu=plntM.Dzu, Dzw=plntM.Dzw)
         c_MDB = Controller(Ac=ctrlM.Ac, Bc=ctrlM.Bc, Cc=ctrlM.Cc, Dc=ctrlM.Dc)
+        p_DDD = Plant(A=plntD.A, Bu=plntD.Bu, Bw=plntD.Bw, Cy=plntD.Cy, Dyw=plntD.Dyw, Cz=plntD.Cz, Dzu=plntD.Dzu, Dzw=plntD.Dzw)
         c_DDD = Controller(Ac=ctrlD.Ac, Bc=ctrlD.Bc, Cc=ctrlD.Cc, Dc=ctrlD.Dc)
         print("\n=== Matrices MBD ===")
+        api.print_plant(plant=p_MDB)
         api.print_controller(ctrl=c_MDB)
         print("\n=== Matrices DDD ===")
+        api.print_plant(plant=p_DDD)
         api.print_controller(ctrl=c_DDD)
         
 
@@ -228,6 +258,19 @@ class ResultsComparator:
             T = min(XM.shape[0], XD.shape[0])
             title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
             self._plot_overlay_states(tM if len(tM) == T else np.arange(T), XM, XD, title)
+        
+        
+            # Re-simulate both
+            cl = Closed_Loop()
+            print("simulating closed loop of MDB...")
+            sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB)
+            print("simulating closed loop of DDD...")
+            sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD)
+
+            print("plotting MDB...")
+            cl.plot_timeseries(sim_m)
+            print("plotting DDD...")
+            cl.plot_timeseries(sim_d)
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
 
@@ -239,7 +282,7 @@ class ResultsComparator:
                 "ddd_npz": str(z_ddd),
             },
             "objectives": {"MBD": objM, "DDD": objD},
-            "matrix_deltas": deltas,
+            "matrix_deltas_ctrl": deltas_ctrl,
         }
         # Save side-by-side comparison JSON next to the MBD run
         out_comp = (self.out_root / method / f"{base}___comparison_MBD_vs_DDD.json")
@@ -318,7 +361,7 @@ class ResultsComparator:
             "baseline_meta": meta_b,
             "lmi_meta": meta_l,
             "metrics": {"baseline": mb, "lmi": ml},
-            "deltas": {k: (ml.get(k, np.nan) - mb.get(k, np.nan)) for k in set(mb) | set(ml)},
+            "deltas_ctrl": {k: (ml.get(k, np.nan) - mb.get(k, np.nan)) for k in set(mb) | set(ml)},
         }
 
         comp_out = self.out_root.as_posix() + path_name + "___comparison_baseline_vs_lmi.json"

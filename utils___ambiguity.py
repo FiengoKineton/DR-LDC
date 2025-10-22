@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.linalg import cholesky
 from scipy.linalg import sqrtm
-import yaml
+import yaml, sys
 import matplotlib.pyplot as plt
 
 
@@ -44,6 +44,7 @@ class WassersteinAmbiguitySet:
         S1 = 0.5 * (S1 + S1.T)
         S2 = 0.5 * (S2 + S2.T)
         S2h = sqrtm(S2)
+        # print(S2h.size, S1.size, S2.size); sys.exit(0)
         mid = sqrtm(S2h @ S1 @ S2h)
         # numerical cleanup: sqrtm returns complex with tiny imag parts sometimes
         mid = np.real_if_close(mid, tol=1e-8)

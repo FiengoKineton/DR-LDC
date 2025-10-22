@@ -9,7 +9,7 @@
     "MBD": 878.5714094275286,
     "DDD": 318.34498631060114
   },
-  "matrix_deltas": {
+  "matrix_deltas_ctrl": {
     "Ac": {
       "shape": "(7, 7)",
       "fro_norm": 11.950763735231254,

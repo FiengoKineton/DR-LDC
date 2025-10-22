@@ -69,7 +69,7 @@ class Closed_Loop():
 
     def simulate_closed_loop(self, plant: Plant,
                             ctrl: Controller,
-                            Sigma_w: np.ndarray,
+                            Sigma_w: np.ndarray = None,
                             seed: int = 11,
                             x0: np.ndarray | None = None,
                             xc0: np.ndarray | None = None):
@@ -99,11 +99,12 @@ class Closed_Loop():
         xc = np.zeros((nxc, 1)) if xc0 is None else np.asarray(xc0, float).reshape(nxc, 1)
 
         # Precompute a sampling factor for w
-        rng = np.random.default_rng(seed)
-        try:
-            L = np.linalg.cholesky(Sigma_w)
-        except np.linalg.LinAlgError:
-            L = np.linalg.cholesky(Sigma_w + 1e-12 * np.eye(nw))
+        if Sigma_w is not None:
+            rng = np.random.default_rng(seed)
+            try:
+                L = np.linalg.cholesky(Sigma_w)
+            except np.linalg.LinAlgError:
+                L = np.linalg.cholesky(Sigma_w + 1e-12 * np.eye(nw))
 
         # Storage
         X  = np.zeros((T, nx))
@@ -162,7 +163,7 @@ class Closed_Loop():
 
     def plot_timeseries(self, sim):
         T = sim["T"]
-        t = np.arange(T)
+        t = np.arange(T) / self.ts
 
         # States x
         plt.figure(figsize=(10, 6))

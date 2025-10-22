@@ -262,7 +262,7 @@ if __name__ == "__main__":
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
-    path_name = f"/run_temp___{_type}_{_model}_{_data}"
+    path_name = f"/run_03___{_type}_{_model}_{_data}"
 
     if args.comp:
         cmp = ResultsComparator(out_root=out)
