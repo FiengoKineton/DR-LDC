@@ -6,6 +6,7 @@ from utils___matrices import MatricesAPI
 import sys
 
 
+
 def build_and_solve_dro_lmi(
     plant: Plant,
     api: MatricesAPI,
@@ -106,15 +107,13 @@ def build_and_solve_dro_lmi(
         reg = 0.0
 
     # Negative definiteness helpers (strict -> with epsilon)
-    def negdef(M):
-        return (M << -eps_def * np.eye(M.shape[0])) if additional_constraints else (M << 0)
+    def negdef(M): return (M << -eps_def * np.eye(M.shape[0])) if additional_constraints else (M << 0)
 
     Iw = np.eye(nw)
     Iz = np.eye(nz)
 
     # handy zero of the right size
-    def Z(r, c):
-        return np.zeros((r, c)) # cp.Constant(np.zeros((r, c)))
+    def Z(r, c): return np.zeros((r, c)) # cp.Constant(np.zeros((r, c)))
 
     if model.lower() in ["correlated", "corr", "1"]:
         # Block sizes by columns: [2nx, nw, nw, 2nx, nz]
@@ -239,3 +238,4 @@ def build_and_solve_dro_lmi(
         Pbar=Pbar_val, Abar=Abar_val, Bbar=Bbar_val, Cbar=Cbar_val, Dbar=Dbar_val, 
         Tp = Tp, P=Tp_t_inv @ Pbar_val @ Tp_inv
     )
+

@@ -96,7 +96,7 @@ class WassersteinAmbiguitySet:
 
     # ---------- sampling utilities ----------
 
-    def sample(self, T:int) -> np.ndarray:
+    def sample(self, T:int, Sigma: np.ndarray = None) -> np.ndarray:
         """
         Sample a disturbance sequence of length T from the ambiguity set.
         Uses the specified mode ("independent" or "correlated").
@@ -104,9 +104,9 @@ class WassersteinAmbiguitySet:
         """
         T = T if T is not None else self.T
         if self.mode == "independent":
-            return self.sample_iid(T=T)
+            return self.sample_iid(T=T, Sigma=Sigma)
         elif self.mode == "correlated":
-            return self.sample_correlated(T=T)
+            return self.sample_correlated(T=T, Sigma=Sigma)
         else:
             raise ValueError(f"Unknown ambiguity mode: {self.mode}")
 

@@ -111,10 +111,33 @@ class Closed_Loop():
         Y  = np.zeros((T, ny))
         U  = np.zeros((T, nu))
         Z  = np.zeros((T, nz))
-        W  = np.zeros((T, nw))
+        Wlog = np.zeros((T, nw))
 
+        wass = WassersteinAmbiguitySet()
+        W = wass.sample(T=T)
+        if W.ndim == 1:
+            W = W.reshape(T, 1)
+
+        if W.shape[1] == nw:
+            # Great. Use directly.
+            pass
+        else:
+            # Case 2: mismatch. DO NOT "average columns".
+            # Sample *state-space* disturbance then project onto span(Bw_hat).
+            # Build a target state covariance. Easiest defensible choice:
+            #   Sigma_state = Bw_hat Bw_hat^T (+ tiny isotropic pad).
+            eps = 1e-6
+            Sigma_state = Bw @ Bw.T + eps * np.eye(Bw.shape[0])
+
+            # Sample state disturbances with that covariance (shape: T x nx)
+            D = wass.sample(T=T, Sigma=Sigma_state)
+
+            # Project each d_t onto col(Bw_hat) via pseudoinverse
+            Bw_pinv = np.linalg.pinv(Bw)     # (nw_hat x nx)
+            W = (D @ Bw_pinv.T)                  # (T x nw_hat)
+        
         for t in range(T):
-            w = (L @ rng.standard_normal((nw, 1))).astype(float)
+            w = W[t, :].reshape(nw, 1) # (L @ rng.standard_normal((nw, 1))).astype(float)
             y = Cy @ x + Dyw @ w
             u = Cc @ xc + Dc @ y
             z = Cz @ x + Dzu @ u + Dzw @ w
@@ -201,7 +224,7 @@ class Open_Loop():
         out = self.p.get("directories", {}).get("data", "./out/data/session_01")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent")
-        _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
+        #_data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
         self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
 
@@ -247,7 +270,8 @@ class Open_Loop():
         A, Bu, Bw, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bu, plant.Bw, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
         #A, Bu, Bw = api.build_AB_from_yaml()
         #Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices()
-        nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
+        #nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
+        nx, nw, nu, nz, ny = plant.dims
 
 
         def prbs(nu, T, shift=7, seed=0, amp=1.0):
@@ -724,6 +748,6 @@ if __name__ == "__main__":
     OL = True
 
     if CL: Closed_Loop()
-    if OL: Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=True, PLOT=True)
+    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=True)
 
 

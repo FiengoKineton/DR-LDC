@@ -7,6 +7,12 @@ params:
     ts: 0.05
     TotTime: 25
   
+  ident:
+    use_bc: false
+    use_iv: false
+    X_iv_path: "data/experiment_iv_states.csv"
+
+  
   directories:
     data: "./out/data/session_temp"
     artifacts: "./out/artifacts/"

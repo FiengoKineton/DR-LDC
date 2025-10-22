@@ -163,7 +163,7 @@ class MatricesAPI():
         out = self.p.get("directories", {}).get("data", "./out/data/session_01")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent")
-        _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
+        #_data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
         self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
 
@@ -445,308 +445,8 @@ class MatricesAPI():
 
         return Ac0, Bc0, Cc0, Dc0
 
+
     # ------------------------- DATA-DRIVEN DDD CONSTRUCTION ------------------------
-
-    def _make_matrices_from_data(
-        self, 
-        delimiter: str = ",",
-        ridge: float = 1e-6,
-    ):
-        """
-        Direct data-driven construction of (A, Bu, Bw, Cz, Dzw, Dzu, Cy, Dyw)
-        from a single CSV file. The CSV must have headers x1..x{nx}, u1..u{nu}
-        and may optionally include y1..y{ny}, z1..z{nz}.
-
-        The function automatically aligns sequences to form (X, U, X_next) over a
-        common T-1 horizon, then applies projection-based estimates:
-        [A  Bu] = X_next @ V^T,   V = D^T (D D^T + ridge I)^{-1},  D=[X;U]
-        Bw     from principal directions of residual covariance.
-        If Y/Z supplied, it regresses:
-        Y ≈ Cy X + Dyw R,   Z ≈ Cz X + Dzu U + Dzw R,
-        with R = X_next - (A X + Bu U).
-        """
-
-
-        ## UTILS functions
-        # ------------------------- CSV LOADING HELPERS -------------------------
-
-        def _read_csv_with_headers(path: str, delimiter: str = ",") -> Tuple[List[str], np.ndarray]:
-            """
-            Minimal CSV reader that grabs the first row as headers, remaining as float data.
-            No pandas dependency, no excuses.
-            """
-            with open(path, "r", encoding="utf-8") as f:
-                header = f.readline().strip()
-            headers = [h.strip() for h in header.split(delimiter)]
-            data = np.loadtxt(path, delimiter=delimiter, skiprows=1)
-            if data.ndim == 1:
-                data = data[None, :]
-            if data.shape[1] != len(headers):
-                raise ValueError(f"Column count mismatch: headers={len(headers)} vs data={data.shape[1]}")
-            return headers, data
-
-        def _pick_columns(headers: List[str], data: np.ndarray, prefix: str) -> np.ndarray:
-            """
-            Pick columns whose names match prefix + integer, e.g., x1,x2,... or y3,...
-            Returns matrix with shape (count, T) in ROW-MAJOR (variables x time).
-            """
-            pat = re.compile(rf"^{re.escape(prefix)}(\d+)$", re.IGNORECASE)
-            indices = [(i, int(m.group(1))) for i, h in enumerate(headers) if (m := pat.match(h)) is not None]
-            if not indices:
-                return np.empty((0, data.shape[0]))  # no such block
-            # sort by numeric suffix to keep x1,x2,... order
-            indices.sort(key=lambda t: t[1])
-            cols = [i for i, _ in indices]
-            block = data[:, cols].T  # (count x T)
-            return block
-
-        def _build_blocks_from_csv(path: str, delimiter: str = ","):
-            headers, data = _read_csv_with_headers(path, delimiter=delimiter)
-
-            X = _pick_columns(headers, data, "x")
-            U = _pick_columns(headers, data, "u")
-            Y = _pick_columns(headers, data, "y")
-            Z = _pick_columns(headers, data, "z")
-
-            if X.size == 0 or U.size == 0:
-                raise ValueError("CSV must contain at least x* and u* columns.")
-
-            # Raw lengths
-            Tx = X.shape[1]
-            Tu = U.shape[1]
-            Ty = Y.shape[1] if Y.size else np.inf
-            Tz = Z.shape[1] if Z.size else np.inf
-
-            # We need pairs (x_t, u_t) and their successor x_{t+1}.
-            # So the maximum valid regressor length is (min(Tx, Tu, Ty, Tz) - 1).
-            Tpair = int(min(Tx, Tu, Ty, Tz)) - 1
-            if Tpair < 1:
-                raise ValueError(f"Not enough samples to form (X, X_next): got Tx={Tx}, Tu={Tu}, Ty={Ty}, Tz={Tz}")
-
-            # Build aligned blocks with identical column counts
-            X_reg  = X[:, :Tpair]          # x_0..x_{Tpair-1}
-            U_reg  = U[:, :Tpair]          # u_0..u_{Tpair-1}
-            X_next = X[:, 1:Tpair+1]       # x_1..x_{Tpair}
-            Y_reg  = Y[:, :Tpair] if Y.size else None
-            Z_reg  = Z[:, :Tpair] if Z.size else None
-
-            return dict(X=X_reg, U=U_reg, X_next=X_next, Y=Y_reg, Z=Z_reg)
-
-        # ------------------------- DDD ESTIMATION HELPERS -------------------------
-
-        def demean(M): return M - M.mean(axis=1, keepdims=True)
-
-        def _lsq_right_inverse(D: np.ndarray, ridge: float) -> np.ndarray:
-            # D in R^{(nx+nu) x T}; return V = D^T (D D^T + ridge I)^{-1}
-            r, _ = D.shape
-            G = D @ D.T + ridge * np.eye(r)
-            return D.T @ np.linalg.inv(G)
-
-        def _bw_from_residual(R: np.ndarray, nw: Optional[int], eps: float = 1e-9) -> Tuple[np.ndarray, int, np.ndarray]:
-            """
-            Build Bw from residual covariance: R in R^{nx x T}.
-            Bw uses top-nw eigen-directions of cov(R). Returns (Bw, nw_eff, Sigma_res).
-            """
-            nx, T = R.shape
-            S = (R @ R.T) / max(T, 1)
-            S = 0.5 * (S + S.T) + eps * np.eye(nx)
-            vals, vecs = np.linalg.eigh(S)
-            idx = np.argsort(vals)[::-1]
-            vals = vals[idx]
-            vecs = vecs[:, idx]
-            if nw is None:
-                # pick as many modes as needed to cover 95% energy, at least 1
-                cum = np.cumsum(vals) / max(np.sum(vals), eps)
-                nw = int(np.clip(np.searchsorted(cum, 0.95) + 1, 1, nx))
-            nw = int(min(max(1, nw), nx))
-            Bw = vecs[:, :nw] @ np.diag(np.sqrt(np.maximum(vals[:nw], eps)))
-            return Bw, nw, S
-
-        def _bw_from_residual_svd(R: np.ndarray, energy: float = 0.95) -> Tuple[np.ndarray, int, np.ndarray]:
-            nx, T = R.shape
-            S = (R @ R.T) / max(T, 1)
-            S = 0.5 * (S + S.T) + 1e-12 * np.eye(nx)
-            U_s, s_s, _ = np.linalg.svd(S, full_matrices=False)
-            cum = np.cumsum(s_s) / max(np.sum(s_s), 1e-18)
-            k = int(np.clip(np.searchsorted(cum, energy) + 1, 1, nx))
-            Bw = U_s[:, :k] @ np.diag(np.sqrt(s_s[:k]))
-            return Bw, k, S
-
-        def _estimate_sigma_v2_diff(X):
-            D = np.diff(X, axis=1)
-            v2_i = 0.5 * np.var(D, axis=1, ddof=1)
-            return float(np.mean(v2_i)), v2_i
-
-        def _project_stable_dt(A, margin=0.995):
-            w, V = np.linalg.eig(A)
-            w2 = np.where(np.abs(w) >= margin, margin * w / np.abs(w), w)
-            return np.real_if_close(V @ np.diag(w2) @ np.linalg.inv(V), tol=1e-10)
-
-        # ------------------------- LOAD DATA -------------------------
-
-        data_csv = str(self.csv_path)
-
-        if not data_csv:
-            print("Provide data_csv='path/to/file.csv' to read data.")
-            return self.make_example_system()
-
-
-        blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
-        X = demean(blocks["X"])          # (nx x T)
-        U = demean(blocks["U"])          # (nu x T)
-        X_next = demean(blocks["X_next"])
-
-        nx, nw, nu, ny, nz = self.get_dimensions_from_yaml()
-
-        # Identification options
-        ident = self.p.get("ident", {})
-        use_bc         = bool(ident.get("use_bc", False))
-        use_iv         = bool(ident.get("use_iv", False))
-        sigma_v2       = ident.get("sigma_v2", None)  # None => estimate for BC
-        stable_project = bool(ident.get("stable_project", False))
-        nw_energy      = float(ident.get("nw_energy", 0.95))
-        X_iv_path      = ident.get("X_iv_path", None)
-
-
-
-        # Data-driven A, Bu by right-inverse projection
-        D = np.vstack([X, U])       # (nx+nu) x T
-        V = _lsq_right_inverse(D, ridge=ridge)  # (T x nx+nu)
-        Vx = V[:, :nx]  # (T x nx)
-        Vu = V[:, nx:]  # (T x nu)
-
-        A = X_next @ Vx
-        Bu = X_next @ Vu
-
-        # Residual and Bw
-        R = X_next - (A @ X + Bu @ U)  # (nx x T)
-        Bw, *_ = _bw_from_residual(R, nw=nw)
-
-        def gaussian_w2(S1, S2):
-            S1 = 0.5*(S1+S1.T); S2 = 0.5*(S2+S2.T); S2h = sqrtm(S2)            
-            M = sqrtm(S2h @ S1 @ S2h)
-            return float(np.sqrt(max(np.trace(S1)+np.trace(S2)-2*np.trace(np.real(M)), 0.0)))
-
-        def estimate_sigma_nom_from_innovations(e, K=None, Bw=None):
-            """
-            e: innovations array (T, ny)
-            K: Kalman gain mapping innovations to state noise; if None, treat Bw=I and use e directly
-            Bw: disturbance input matrix; if given and full column rank, back-project
-            Returns Sigma_nom in R^{n_w x n_w}.
-            """
-            E = e - e.mean(axis=0, keepdims=True)
-            if K is not None:
-                W_eff = E @ K.T        # in state coordinates
-            else:
-                W_eff = E              # treat as direct process noise sample
-            # If Bw provided and tall/full col rank, least-squares inversion to get w
-            if Bw is not None and Bw.shape[1] <= Bw.shape[0]:
-                # Solve min_w ||Bw w - W_eff||_F
-                Bw_pinv = np.linalg.pinv(Bw)
-                W_hat = (Bw_pinv @ W_eff).T
-            else:
-                W_hat = W_eff
-            return W_hat, np.cov(W_hat, rowvar=False)
-
-        def bootstrap_gamma(Sigma_nom, samples, beta=0.05, B=200, rng=None):
-            """
-            samples: array (T, n_w) of surrogate w_t
-            Returns a (1-beta) quantile of W2 distance to Sigma_nom.
-            """
-            rng = np.random.default_rng() if rng is None else rng
-            T = samples.shape[0]
-            dists = []
-            for _ in range(B):
-                idx = rng.integers(0, T, size=T)
-                S = np.cov(samples[idx], rowvar=False)
-                dists.append(gaussian_w2(S, Sigma_nom))
-            return float(np.quantile(dists, 1.0 - beta))
-        
-        What, sigma_nom = estimate_sigma_nom_from_innovations(R, Bw=Bw)
-        gamma = bootstrap_gamma(sigma_nom, What, beta=0.05, B=200)
-
-        print(f"sigma_nom:\n{sigma_nom}")
-        print(f"gamma:\n{gamma}")
-
-        Y = blocks["Y"]          # may be None
-        Z = blocks["Z"]          # may be None
-
-        if (Y is None or Y.size == 0) or (Z is None or Z.size == 0):
-            Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
-        else: 
-            # Outputs: measured Y
-            if Y is None or Y.size == 0:
-                # Educated defaults: measure first ny states; no direct disturbance to sensors
-                if ny is None:
-                    ny = min(2, nx)
-                Cy = np.zeros((ny, nx))
-                Cy[np.arange(ny), np.arange(ny)] = 1.0
-                Dyw = np.zeros((ny, Bw.shape[1]))
-            else:
-                ny = Y.shape[0] if ny is None else ny
-                # Regress Y on [X; R] using ridge
-                ThetaY = np.vstack([X, R])        # (nx+nx) x T
-                GY = ThetaY @ ThetaY.T + ridge * np.eye(2 * nx)
-                WY = Y @ ThetaY.T @ np.linalg.inv(GY)   # (ny x 2nx)
-                Cy = WY[:, :nx]
-                Dyw = WY[:, nx:nx+nw]
-                # If desired ny < observed, truncate; if ny > observed, pad zeros
-                if Cy.shape[0] != ny:
-                    if Cy.shape[0] > ny:
-                        Cy = Cy[:ny, :]
-                        Dyw = Dyw[:ny, :]
-                    else:
-                        pad = ny - Cy.shape[0]
-                        Cy = np.vstack([Cy, np.zeros((pad, nx))])
-                        Dyw = np.vstack([Dyw, np.zeros((pad, Dyw.shape[1]))])
-
-            # Outputs: performance Z
-            if Z is None or Z.size == 0:
-                if nz is None:
-                    nz = min(3, nx + nu)
-                # Cz: identity rows if nz <= nx, else principal directions of state cov
-                if nz <= nx:
-                    Cz = np.zeros((nz, nx))
-                    Cz[np.arange(nz), np.arange(nz)] = 1.0
-                else:
-                    Sx = X @ X.T / max(T, 1)
-                    Sx = 0.5 * (Sx + Sx.T) + 1e-9 * np.eye(nx)
-                    vals, vecs = np.linalg.eigh(Sx)
-                    idx = np.argsort(vals)[::-1]
-                    Cz = vecs[:, idx[:nz]].T  # (nz x nx)
-                Dzu = 0.05 * np.eye(nz, nu)                 # mild control penalty
-                Dzw = np.zeros((nz, Bw.shape[1]))           # no direct w to z by default
-            else:
-                nz = Z.shape[0] if nz is None else nz
-                ThetaZ = np.vstack([X, U, R])               # (nx+nu+nx) x T
-                GZ = ThetaZ @ ThetaZ.T + ridge * np.eye(2 * nx + nu)
-                WZ = Z @ ThetaZ.T @ np.linalg.inv(GZ)       # (nz x (nx+nu+nx))
-                Cz  = WZ[:, :nx]
-                Dzu = WZ[:, nx:nx+nu]
-                Dzw = WZ[:, nx+nu:nx+nu+nw]
-                if Cz.shape[0] != nz:
-                    if Cz.shape[0] > nz:
-                        Cz  = Cz[:nz, :]
-                        Dzu = Dzu[:nz, :]
-                        Dzw = Dzw[:nz, :]
-                    else:
-                        pad = nz - Cz.shape[0]
-                        Cz  = np.vstack([Cz,  np.zeros((pad, nx))])
-                        Dzu = np.vstack([Dzu, np.zeros((pad, nu))])
-                        Dzw = np.vstack([Dzw, np.zeros((pad, Dzw.shape[1]))])
-
-        
-
-        # Build plant
-        plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-
-        # Neutral controller seed (full-order, tiny static gains)
-        Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nx, ny=Cy.shape[0], nu=Bu.shape[1])
-        ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
-
-        return plant, ctrl0
-
-
 
     def make_matrices_from_data(
         self,
@@ -821,11 +521,6 @@ class MatricesAPI():
 
         def demean(M): return M - M.mean(axis=1, keepdims=True)
 
-        def _lsq_right_inverse(D: np.ndarray, ridge: float) -> np.ndarray:
-            r, _ = D.shape
-            G = D @ D.T + ridge * np.eye(r)
-            return D.T @ np.linalg.inv(G)
-
         def _bw_from_residual_svd(R: np.ndarray, energy: float = 0.95) -> Tuple[np.ndarray, int, np.ndarray]:
             nx, T = R.shape
             S = (R @ R.T) / max(T, 1)
@@ -854,20 +549,20 @@ class MatricesAPI():
             return self.make_example_system()
 
         blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
-        X_raw, U_raw, Xn_raw = blocks["X"], blocks["U"], blocks["X_next"]
-        X = demean(blocks["X"])
+        X_raw = blocks["X"]
+        X = demean(X_raw)
         U = demean(blocks["U"])
         X_next = demean(blocks["X_next"])
 
-        nx, nw, nu, ny, nz = self.get_dimensions_from_yaml()
+        nx, _, nu, ny, nz = self.get_dimensions_from_yaml()
 
         # Identification options
         ident = self.p.get("ident", {})
         use_bc         = bool(ident.get("use_bc", False))
         use_iv         = bool(ident.get("use_iv", False))
-        sigma_v2       = ident.get("sigma_v2", None)  # None => estimate for BC
-        stable_project = bool(ident.get("stable_project", False))
-        nw_energy      = float(ident.get("nw_energy", 0.95))
+        sigma_v2       = 2.5e-4                                 # ignored by IV | (2.5e-4, "estimate_from_repeats")
+        stable_project = True
+        nw_energy      = 0.95
         X_iv_path      = ident.get("X_iv_path", None)
 
         # ------------------------- IV instruments (optional) -------------------------
@@ -898,7 +593,7 @@ class MatricesAPI():
 
         # ------------------------- Residuals and Bw (SVD energy cut) -------------------------
         R = X_next - (A @ X + Bu @ U)                  # nx x T
-        Bw, nw_eff, Sigma_res = _bw_from_residual_svd(R, energy=nw_energy)
+        Bw, nw_eff, _ = _bw_from_residual_svd(R, energy=nw_energy)
 
         # ------------------------- Outputs (same as before) -------------------------
 

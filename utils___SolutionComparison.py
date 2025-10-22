@@ -9,7 +9,6 @@ from utils___matrices import MatricesAPI
 
 
 
-
 class ResultsComparator:
     def __init__(self, out_root: str):
         """
@@ -354,3 +353,4 @@ class ResultsComparator:
         print(f"lmi     .rho(Acl) ≈ {meta_l.get('spectral_radius_Acl')}")
         print(f"lmi.status = {meta_l.get('status')}, objective ≈ {meta_l.get('objective')}, model = {meta_l.get('model')}, gamma = {meta_l.get('gamma')}")
         return report
+
