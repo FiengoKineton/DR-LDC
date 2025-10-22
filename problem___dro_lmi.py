@@ -3,6 +3,7 @@ import numpy as np
 import cvxpy as cp
 from utils___systems import Plant, DROLMIResult
 from utils___matrices import MatricesAPI
+import sys
 
 
 def build_and_solve_dro_lmi(
@@ -189,7 +190,7 @@ def build_and_solve_dro_lmi(
         except Exception as e:
             print(f"CVXOPT error: {e}")
 
-    if not success_CVXOPT:
+    if not (success_MOSEK or success_CVXOPT):
         solver = "SCS"
         print("\n===================================================\nCVXOPT failed, trying SCS...")
         try:
@@ -204,9 +205,11 @@ def build_and_solve_dro_lmi(
         except Exception as scs_e:
             print(f"SCS error: {scs_e}")
 
-    if not success_SCS:
+    if success_MOSEK or success_CVXOPT or success_SCS:
+        print(f"Solve succeeded ({solver}) with value:", prob.value)
+    else:
         print("Optimization error: All solvers failed.")
-        exit(1)
+        sys.exit(1)
 
 
     # Safe extraction

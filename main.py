@@ -9,6 +9,7 @@ from problem___dro_lmi import build_and_solve_dro_lmi
 from utils___systems import Plant, Controller
 from utils___simulate import Closed_Loop 
 from utils___matrices import Recover, MatricesAPI, compose_closed_loop
+from utils___SolutionComparison import ResultsComparator
 
 
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
@@ -238,197 +239,6 @@ class lmi_pipeline_optim_problem():
             json.dump(payload, f, indent=2)
 
 
-# ------------------------- COMPARISON: BASELINE vs LMI ---------------------------
-
-def compare_baseline_vs_lmi(out_root: str, path_name: str) -> None:
-    """
-    Looks for:
-      baseline{path_name}/___results_run.json
-      lmi{path_name}/___results_run.json
-
-    Rebuilds plant/controller/Sigma for each, re-simulates with Closed_Loop,
-    re-plots, and prints a tidy metric table. Also dumps a comparison JSON.
-    """
-
-    def _plant_from_dict(d: dict) -> Plant:
-        return Plant(
-            A=np.array(d["A"], dtype=float),
-            Bw=np.array(d["Bw"], dtype=float),
-            Bu=np.array(d["Bu"], dtype=float),
-            Cz=np.array(d["Cz"], dtype=float),
-            Dzw=np.array(d["Dzw"], dtype=float),
-            Dzu=np.array(d["Dzu"], dtype=float),
-            Cy=np.array(d["Cy"], dtype=float),
-            Dyw=np.array(d["Dyw"], dtype=float),
-        )
-
-    def _controller_from_dict(d: dict) -> Controller:
-        return Controller(
-            Ac=np.array(d["Ac"], dtype=float),
-            Bc=np.array(d["Bc"], dtype=float),
-            Cc=np.array(d["Cc"], dtype=float),
-            Dc=np.array(d["Dc"], dtype=float),
-        )
-
-    def _safe_l2(x):
-        if x is None:
-            return np.nan
-        x = np.asarray(x, dtype=float)
-        return float(np.sum(x * x))
-
-    def _safe_peak(x):
-        if x is None:
-            return np.nan
-        x = np.asarray(x, dtype=float)
-        return float(np.max(np.abs(x)))
-
-    def _compute_metrics(sim: dict) -> dict:
-        """
-        Tries to be minimally nosy. Looks for common keys and computes boring but useful scalars.
-        Falls back to NaN if your simulation dict is an enigma.
-        """
-        keys = sim.keys() if isinstance(sim, dict) else []
-        x = sim.get("x") if "x" in keys else None
-        y = sim.get("y") if "y" in keys else None
-        z = sim.get("z") if "z" in keys else None
-        u = sim.get("u") if "u" in keys else None
-        e = sim.get("e") if "e" in keys else None  # in case you store error
-
-        # Energy-like integrals
-        Jz = _safe_l2(z)          # "H2-ish" proxy on performance output
-        Ju = _safe_l2(u)          # control effort
-        Jx = _safe_l2(x)          # state energy
-        Je = _safe_l2(e)          # tracking error, if any
-
-        # Peaks
-        z_peak = _safe_peak(z)
-        u_peak = _safe_peak(u)
-
-        # Optional crude settling metric: last-10% window std
-        def _tail_std(a):
-            if a is None:
-                return np.nan
-            a = np.asarray(a)
-            n = a.shape[0]
-            if n < 10:
-                return np.nan
-            tail = a[int(0.9 * n):]
-            return float(np.std(tail))
-
-        z_tail_std = _tail_std(z)
-        y_tail_std = _tail_std(y)
-
-        return {
-            "Jz_sum_sq": Jz,
-            "Ju_sum_sq": Ju,
-            "Jx_sum_sq": Jx,
-            "Je_sum_sq": Je,
-            "z_peak_abs": z_peak,
-            "u_peak_abs": u_peak,
-            "z_tail_std": z_tail_std,
-            "y_tail_std": y_tail_std,
-        }
-
-    def _load_json(path: Path) -> dict:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    base_json = Path(out_root).with_suffix("").as_posix() + "/baseline" + path_name + "___results_run.json"
-    lmi_json  = Path(out_root).with_suffix("").as_posix() + "/lmi" + path_name + "___results_run.json"
-
-    if not Path(base_json).exists():
-        raise FileNotFoundError(f"Baseline JSON not found at: {base_json}. Run the baseline pipeline first.")
-    if not Path(lmi_json).exists():
-        raise FileNotFoundError(f"LMI JSON not found at: {lmi_json}. Run the LMI pipeline first.")
-
-    print(f"[compare] loading baseline: {base_json}")
-    db = _load_json(base_json)
-    Sigma_b = np.array(db.get("Sigma_nom"), dtype=float)
-    plant_b = _plant_from_dict(db["plant"])
-    ctrl_b  = _controller_from_dict(db["controller"])
-    meta_b  = {
-        "baseline_cost": db.get("baseline_cost"),
-        "optimized_cost": db.get("optimized_cost"),
-        "optimizer_status": db.get("optimizer_status"),
-        "spectral_radius_Acl": db.get("spectral_radius_Acl"),
-    }
-
-    print(f"[compare] loading lmi: {lmi_json}")
-    dl = _load_json(lmi_json)
-    # LMI JSON layout is different by design, naturally
-    Sigma_l = np.array(dl["disturbance"]["Sigma_nom"], dtype=float)
-    plant_l = _plant_from_dict(dl["plant"])
-    ctrl_l  = _controller_from_dict(dl["recovered_controller"])
-    meta_l  = {
-        "status": dl["meta"].get("status"),
-        "objective": dl["meta"].get("objective"),
-        "gamma": dl["meta"].get("gamma"),
-        "lambda_opt": dl["meta"].get("lambda_opt"),
-        "spectral_radius_Acl": dl["meta"].get("spectral_radius_Acl"),
-        "model": dl["meta"].get("model"),
-    }
-
-    # Re-simulate with the exact same Closed_Loop machinery
-    cl = Closed_Loop()
-    print("[compare] simulating baseline closed loop...")
-    sim_b = cl.simulate_closed_loop(plant_b, ctrl_b, Sigma_b)
-    print("[compare] simulating lmi closed loop...")
-    sim_l = cl.simulate_closed_loop(plant_l, ctrl_l, Sigma_l)
-
-    # Re-plot both (because seeing is believing, and spreadsheets lie)
-    print("[compare] plotting baseline...")
-    cl.plot_timeseries(sim_b)
-    print("[compare] plotting lmi...")
-    cl.plot_timeseries(sim_l)
-
-    # Compute metrics
-    mb = _compute_metrics(sim_b)
-    ml = _compute_metrics(sim_l)
-
-    # Collate a small but meaningful report
-    report = {
-        "paths": {"baseline_json": base_json, "lmi_json": lmi_json},
-        "baseline_meta": meta_b,
-        "lmi_meta": meta_l,
-        "metrics": {"baseline": mb, "lmi": ml},
-        "deltas": {k: (ml.get(k, np.nan) - mb.get(k, np.nan)) for k in set(mb) | set(ml)},
-    }
-
-    # Save comparison next to the LMI run, because the LMI is the one that gets judged anyway
-    comp_out = Path(out_root).with_suffix("").as_posix() + path_name + "___comparison_baseline_vs_lmi.json"
-    with open(comp_out, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-    print(f"[compare] saved summary: {comp_out}")
-
-    # Print a compact table to stdout for humans who distrust JSON
-    def _fmt(x):
-        return "nan" if x is None or (isinstance(x, float) and (np.isnan(x) or not np.isfinite(x))) else f"{x:.6g}"
-
-    print("\n=== Comparison (lower is better for energies/peaks) ===")
-    headers = [
-        ("Jz_sum_sq", "∑ z^2"),
-        ("Ju_sum_sq", "∑ u^2"),
-        ("Jx_sum_sq", "∑ x^2"),
-        ("Je_sum_sq", "∑ e^2"),
-        ("z_peak_abs", "max|z|"),
-        ("u_peak_abs", "max|u|"),
-        ("z_tail_std", "tail std(z)"),
-        ("y_tail_std", "tail std(y)"),
-    ]
-    print(f"{'metric':<16} {'baseline':>14} {'lmi':>14} {'lmi-baseline':>14}")
-    for key, label in headers:
-        b = mb.get(key, np.nan)
-        l = ml.get(key, np.nan)
-        d = l - b if np.isfinite(b) and np.isfinite(l) else np.nan
-        print(f"{label:<16} {_fmt(b):>14} {_fmt(l):>14} {_fmt(d):>14}")
-
-    # Meta sanity
-    print("\n=== Meta sanity ===")
-    print(f"baseline.rho(Acl) ≈ {meta_b.get('spectral_radius_Acl')}")
-    print(f"lmi     .rho(Acl) ≈ {meta_l.get('spectral_radius_Acl')}")
-    print(f"lmi.status = {meta_l.get('status')}, objective ≈ {meta_l.get('objective')}, model = {meta_l.get('model')}, gamma = {meta_l.get('gamma')}")
-
-
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
 if __name__ == "__main__":
@@ -455,8 +265,10 @@ if __name__ == "__main__":
     path_name = f"/run_03___{_type}_{_model}_{_data}"
 
     if args.comp:
-        print("\nRunning comparison between baseline and LMI pipeline...")
-        compare_baseline_vs_lmi(out_root=out, path_name=path_name)
+        cmp = ResultsComparator(out_root=out)
+        method = "base" if args.base else "lmi"
+        cmp.compare_mbd_vs_ddd(path_name=path_name, method=method, plot=True)
+        # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
         if args.base:
             print("\nRunning baseline optimization...")

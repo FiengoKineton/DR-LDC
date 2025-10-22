@@ -266,5 +266,11 @@ controller_data = {
     'Q': Q, 'R': R, 'gamma': gamma, 'Sigma_nom': Sigma_nom,
      'dt': dt
 }
+
+print("\nController matrices:")
+for key in ['A_c', 'B_c', 'C_c', 'D_c']:
+    print(f"\n{key} =")
+    print(controller_data[key])
+
 np.save('controller_data_robust.npy', controller_data)
 print("Controller and system matrices saved to 'controller_data_robust.npy'")

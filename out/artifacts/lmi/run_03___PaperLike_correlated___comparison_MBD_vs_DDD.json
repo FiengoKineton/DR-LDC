@@ -1,0 +1,38 @@
+{
+  "paths": {
+    "mbd_json": "out\\artifacts\\lmi\\run_03___PaperLike_correlated_MBD___results_run.json",
+    "ddd_json": "out\\artifacts\\lmi\\run_03___PaperLike_correlated_DDD___results_run.json",
+    "mbd_npz": "out\\artifacts\\lmi\\run_03___PaperLike_correlated_MBD___closed_loop_run.npz",
+    "ddd_npz": "out\\artifacts\\lmi\\run_03___PaperLike_correlated_DDD___closed_loop_run.npz"
+  },
+  "objectives": {
+    "MBD": 878.5714094275286,
+    "DDD": 318.34498631060114
+  },
+  "matrix_deltas": {
+    "Ac": {
+      "shape": "(7, 7)",
+      "fro_norm": 11.950763735231254,
+      "max_abs": 7.964389474446072,
+      "mean_abs": 0.8889053512521401
+    },
+    "Bc": {
+      "shape": "(7, 3)",
+      "fro_norm": 4698.9733813854045,
+      "max_abs": 3394.6537065769685,
+      "mean_abs": 636.3791933075989
+    },
+    "Cc": {
+      "shape": "(1, 7)",
+      "fro_norm": 0.006237254158232538,
+      "max_abs": 0.004640416704215835,
+      "mean_abs": 0.0019504039737781626
+    },
+    "Dc": {
+      "shape": "(1, 3)",
+      "fro_norm": 1.1735127943645483,
+      "max_abs": 0.9159629557615596,
+      "mean_abs": 0.6392914065572062
+    }
+  }
+}

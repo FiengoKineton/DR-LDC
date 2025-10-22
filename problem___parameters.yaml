@@ -8,7 +8,7 @@ params:
     TotTime: 25
   
   directories:
-    data: "./out/data/session_temp"
+    data: "./out/data/session_02"
     artifacts: "./out/artifacts/"
 
   plant:
