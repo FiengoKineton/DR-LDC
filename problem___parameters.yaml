@@ -1,14 +1,14 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
   model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
-  FROM_DATA: false                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
+  FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
 
   simulation:
     ts: 0.05
     TotTime: 25
   
   directories:
-    data: "./out/data/session_02"
+    data: "./out/data/session_temp"
     artifacts: "./out/artifacts/"
 
   plant:

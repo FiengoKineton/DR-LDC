@@ -17,9 +17,9 @@ with open(yaml_path, "r", encoding="utf-8") as f:
 
 def compose_closed_loop(plant: Plant, ctrl: Controller):
     """
-    Build the composite matrices (𝒜|𝓑; 𝒞|𝒟) for
-      [ X_{t+1} ]   [ 𝒜  𝓑 ] [ X_t ]
-      [   z_t   ] = [ 𝒞  𝒟 ] [ w_t ]
+    Build the composite matrices (Abar|Bbar; Cbar|Dbar) for
+      [ X_{t+1} ]   [ Abar  Bbar ] [ X_t ]
+      [   z_t   ] = [ Cbar  Dbar ] [ w_t ]
     with X = [x; x_c].
     Formula matches the screenshot: blue terms are controller blocks.
     """
@@ -165,7 +165,7 @@ class MatricesAPI():
         _model = self.p.get("model", "independent")
         _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
-        self.csv_path = out + f"___{_type}_{_model}_{_data}.csv"
+        self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
 
 
     def get_system(self, Generating_data=False, **kwargs):

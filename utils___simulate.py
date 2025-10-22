@@ -203,7 +203,7 @@ class Open_Loop():
         _model = self.p.get("model", "independent")
         _data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
-        self.csv_path = out + f"___{_type}_{_model}_{_data}.csv"
+        self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
 
         self.out = Path(self.csv_path)
         self.out.parent.mkdir(parents=True, exist_ok=True)
