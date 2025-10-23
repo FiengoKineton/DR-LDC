@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from typing import Optional, Dict, Any, Iterable
 
-from utils___matrices import MatricesAPI
+#from utils___matrices import MatricesAPI
 from utils___systems import Plant, Controller, Plant_cl
 from utils___ambiguity import WassersteinAmbiguitySet
 
@@ -30,6 +30,7 @@ class Closed_Loop():
     
     def test(self):
         # Use the same plant as the optimization example (seed=7)
+        from utils___matrices import MatricesAPI
         api = MatricesAPI()
         plant, ctrl = api.get_system()
 
@@ -390,13 +391,15 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=False, PLOT=False, gamma: float = None):
+    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, gamma: float = None):
         self.p = cfg.get("params", {})
-        out = self.p.get("directories", {}).get("data", "./out/data/session_01")
+        out = self.p.get("directories", {}).get("data", "./out/data/session_")
+        runID = self.p.get("directories", {}).get("runID", ".temp")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent")
+        PLOT = bool(self.p.get("plot", "false"))
 
-        self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
+        self.csv_path = out + f"{runID}___{_type}_{_model}.csv"    # _{_data}
 
         self.out = Path(self.csv_path)
         self.out.parent.mkdir(parents=True, exist_ok=True)
@@ -406,8 +409,11 @@ class Open_Loop():
         self.ts = self.p.get("simulation", {}).get("ts", 0.05)
         self.Tf = self.p.get("simulation", {}).get("TotTime", 0.05)
 
+        from utils___matrices import MatricesAPI
+        api = MatricesAPI()
+        plant, _ = api.get_system(FROM_DATA=False, gamma=gamma)
 
-        if MAKE_DATA: self.make_data(gamma=gamma)
+        if MAKE_DATA: self.make_data(plant=plant, gamma=gamma)
         if EVAL_FROM_PATH: self.evaluate_from_path()
         if PLOT: 
             metrics = self.plot_est_vs_truth(x0_mode="e1", show=True)
@@ -419,7 +425,7 @@ class Open_Loop():
     """
 
 
-    def make_data(self, gamma: float = None):
+    def make_data(self, plant: Plant, gamma: float = None):
         ap = argparse.ArgumentParser(description="Simulate open-loop with persistently exciting input and save CSV.")
         ap.add_argument("--T", type=int, default=3000, help="number of time steps")
         ap.add_argument("--seed", type=int, default=0)
@@ -435,14 +441,17 @@ class Open_Loop():
 
         wass = WassersteinAmbiguitySet(gamma=gamma)
         W = wass.sample(T=T).T
-        api = MatricesAPI()
-        plant, _ = api.get_system(Generating_data=True)
+        #api = MatricesAPI()
+        #plant, _ = api.get_system(Generating_data=True)
         A, Bu, Bw, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bu, plant.Bw, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
         #A, Bu, Bw = api.build_AB_from_yaml()
         #Cz, Dzw, Dzu, Cy, Dyw = api.build_out_matrices()
         #nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
-        nx, nw, nu, nz, ny = plant.dims
-
+        nx = A.shape[0]
+        nw = Bw.shape[1]
+        nu = Bu.shape[1]
+        nz = Cz.shape[0]
+        ny = Cy.shape[0]
 
         def prbs(nu, T, shift=7, seed=0, amp=1.0):
             """ PRBS generator per input channel. shift sets LFSR length. """
@@ -592,6 +601,7 @@ class Open_Loop():
         A, Bu, Bw, Cy, Dyw, Cz, Dzu, Dzw
         Anything missing will just be skipped in the comparison.
         """
+        
 
         def _rel_or_abs_err(est: np.ndarray, true: np.ndarray, eps: float = 1e-12) -> tuple[float, str]:
             """
@@ -641,7 +651,7 @@ class Open_Loop():
 
         csv_path = str(self.csv_path)
         print(f"\n[DDD] Loading CSV: {csv_path}")
-
+        from utils___matrices import MatricesAPI
         api = MatricesAPI()
         nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 

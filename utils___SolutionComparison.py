@@ -634,7 +634,7 @@ class ResultsComparator:
             title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
             self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title)            
             title = f"{method.upper()} closed-loop: cntrl states (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "x", title)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", title)
             title = f"{method.upper()} closed-loop: inputs (MBD vs DDD)"
             self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", title)
             title = f"{method.upper()} closed-loop: outputs (MBD vs DDD)"

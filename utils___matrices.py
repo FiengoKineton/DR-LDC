@@ -5,6 +5,8 @@ from scipy.linalg import sqrtm, expm
 from utils___systems import Plant, Controller, Plant_cl
 from typing import Tuple, Optional, List
 from numpy.linalg import eigvals, norm
+from utils___simulate import Open_Loop
+from pathlib import Path
 
 
 yaml_path="problem___parameters.yaml"
@@ -160,15 +162,16 @@ class Recover():
 class MatricesAPI():
     def __init__(self):
         self.p = cfg.get("params", {})
-        out = self.p.get("directories", {}).get("data", "./out/data/session_01")
+        out = self.p.get("directories", {}).get("data", "./out/data/session_")
+        runID = self.p.get("directories", {}).get("runID", "temp")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent")
         #_data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
-        self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
+        self.csv_path = out + f"{runID}___{_type}_{_model}.csv"    # _{_data}
 
 
-    def get_system(self, FROM_DATA: bool = None, Generating_data=False, **kwargs):
+    def get_system(self, FROM_DATA: bool = None, Generating_data: bool = False, gamma: float = None, **kwargs):
         """
         If FROM_DATA=True, pass data_csv="path/to/file.csv" (and optional settings).
         Example:
@@ -180,9 +183,9 @@ class MatricesAPI():
         """
         FROM_DATA = FROM_DATA if FROM_DATA is not None else self.p.get("FROM_DATA", False)
         
-        if FROM_DATA or Generating_data:                    
+        if FROM_DATA and not Generating_data:                    
             print("\nBuilding system from data...\n\n")
-            return self.make_matrices_from_data(**kwargs)
+            return self.make_matrices_from_data(gamma=gamma, **kwargs)
         else:
             if self.p.get("plant", {}).get("type", None) == "PaperLike":
                 print("\nBuilding paper-like system...\n\n")
@@ -451,6 +454,7 @@ class MatricesAPI():
 
     def make_matrices_from_data(
         self,
+        gamma: bool = None,
         delimiter: str = ",",
         ridge: float = 1e-6,
     ):
@@ -471,6 +475,12 @@ class MatricesAPI():
         - X_iv_path: path to CSV containing a second x* sequence (IV instruments)
         Returns (plant, ctrl0); prints diagnostics.
         """
+
+        if not Path(self.csv_path).exists(): 
+            Open_Loop(gamma=gamma)
+            #plant, _ = self.get_system(FROM_DATA=False, gamma=gamma)
+            #op.make_data(plant=plant, gamma=gamma)
+            
 
         # ------------------------- CSV LOADING HELPERS -------------------------
 

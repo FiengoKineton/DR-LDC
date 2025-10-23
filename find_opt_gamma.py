@@ -17,7 +17,7 @@ import time
 import numpy as np
 from typing import Callable, Dict, Any, Tuple, Optional, List
 
-import main
+from main import main
 from utils___simulate import Open_Loop
 
 # ----------------------------- wiring to your pipeline -----------------------------
@@ -29,17 +29,15 @@ def run_main(gamma: float, *, FROM_DATA: bool = False, comp: bool = False) -> Di
     load and return it here instead.
     """
     # Example placeholder:
-    try: 
-        return main.main(gamma, FROM_DATA=FROM_DATA, comp=comp)
-    except:
-        raise NotImplementedError("wire run_main() to your main.main(...)")
+    return main(gamma=gamma, FROM_DATA=FROM_DATA, comp=comp)
+
 
 def make_data_openloop(gamma: float) -> None:
     """
     Thin adapter over your OpenLoop.make_data(...).
     """
     # Example placeholder:
-    Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=False, PLOT=False, gamma = gamma)
+    Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=False, PLOT=False, gamma=gamma)
 
 # ----------------------------- objective construction -----------------------------
 
@@ -176,16 +174,13 @@ def _evaluate_gamma_once(gamma: float,
 
     t0 = time.time()
     # 1) baseline MBD
-    _ = run_main(gamma, FROM_DATA=False, comp=False)
+    _ = run_main(gamma=gamma, FROM_DATA=False, comp=False)
     # 2) generate data with this gamma
-    make_data_openloop(gamma)
-    print("check"); sys.exit(0)
+    #make_data_openloop(gamma=gamma)
     # 3) DDD run
-    _ = run_main(gamma, FROM_DATA=True, comp=False)
-    print("check"); sys.exit(0)
+    _ = run_main(gamma=gamma, FROM_DATA=True, comp=False)
     # 4) final comparison (must return the 'report' dict)
-    report = run_main(gamma, FROM_DATA=True, comp=True)
-    print("check"); sys.exit(0)
+    report = run_main(gamma=gamma, FROM_DATA=True, comp=True)
 
     obj = _build_scalar_objective(
         report,
@@ -291,6 +286,8 @@ def optimize_gamma(
             )
         except Exception as e:
             # If a run crashes, treat as infinite objective. Yes, harsh. That’s the point.
+            print(e)
+            sys.exit(0)
             return float("inf"), {"gamma": float(g), "error": repr(e)}
 
     res = _golden_section_minimize(f, float(gamma_bounds[0]), float(gamma_bounds[1]),

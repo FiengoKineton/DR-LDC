@@ -21,7 +21,7 @@ class baseline_optim_problem():
         cl = Closed_Loop()  # instantiate simulation class
         api = MatricesAPI()
 
-        plant, ctrl0 = api.get_system(FROM_DATA=FROM_DATA)
+        plant, ctrl0 = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma)
         api.print_plant(plant)
 
         Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt = run_once(plant=plant, ctrl0=ctrl0, Sigma_nom=Sigma_nom)
@@ -126,7 +126,7 @@ class lmi_pipeline_optim_problem():
         cl = Closed_Loop() 
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        plant, _ = api.get_system(FROM_DATA=FROM_DATA)
+        plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma)
         api.print_plant(plant)
 
         # 2) Solve DRO-LMI (choose "correlated" or "independent")
