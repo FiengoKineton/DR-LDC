@@ -273,6 +273,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     parser.add_argument("--base", action="store_true", help="Run baseline optimization")
+    parser.add_argument("--p", action="store_true", help="Force Plot")
     parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
     args = parser.parse_args()
 
@@ -287,7 +288,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
-    plot = bool(p.get("plot", False))
+    plot = (bool(p.get("plot", False)) if runID != "GammaOpt" else False) if not args.p else True
     _data = "DDD" if FROM_DATA else "MBD"
     gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     comp = args.comp if comp is None else comp

@@ -166,7 +166,7 @@ class Closed_Loop():
 
     def plot_timeseries(self, sim):
         T = sim["T"]
-        t = np.arange(T) / self.ts
+        t = np.arange(T) * self.ts
 
         # States x
         plt.figure(figsize=(10, 6))

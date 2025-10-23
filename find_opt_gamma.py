@@ -358,8 +358,8 @@ def optimize_gamma(
 if __name__ == "__main__":
     res = optimize_gamma(
         gamma_bounds=(0.0, 1.0),
-        signals=["y", "z"],
-        signal_mix_weights={"y": 0.5, "z": 0.5},
+        signals=["y", "z", "x", "u"],
+        signal_mix_weights={"y": 0.3, "z": 0.4, "x": 0.2, "u": 0.1},
         use_nrmse=True,
         weights={"traj": 1.0, "mats": 0.1, "stab": 20.0},
         delta_weights={"ctrl": 1.0, "plant": 0.7, "comp": 0.3},

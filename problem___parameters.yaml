@@ -2,7 +2,8 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
   model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
   FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
-  plot: false
+  plot: true
+  save: false
 
   simulation:
     ts: 0.05
@@ -17,7 +18,7 @@ params:
   directories:
     data: "./out/data/session_"
     artifacts: "./out/artifacts/"
-    runID: "GammaOpt"
+    runID: "GammaOpt"                           # "GammaOpt"
 
   plant:
     #type: explicit  # change to random_stable if there a change of dimensions
@@ -32,7 +33,7 @@ params:
 
   ambiguity:
     model: "W2"                           # "W2" => Wasserstein-2 | "KL" => Kullback-Leibler
-    gamma: 0.5                            # 0.028251205750965087
+    gamma: 0.6173008513140374             # 0.028251205750965087
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]   # [[0.64033495, -0.44049879], [-0.44049879, 0.46091297]]
   
 

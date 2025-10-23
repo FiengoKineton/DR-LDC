@@ -152,6 +152,8 @@ def run_once(plant: Plant = None,
     print(f"Plant dims nx={nx}, nw={nw}, nu={nu}, nz={nz}, ny={ny}")
 
     # 3) Baseline cost with initial controller
+    if Sigma_nom[0].size != nw: 
+        Sigma_nom = np.eye(nw)
     base_cost = opt.simulate_cost(plant, ctrl0, Sigma_nom, T=T_cost_init, burnin=burnin_init, seed=0)
     print(f"Baseline long-run cost E||z||^2 ≈ {base_cost:.4f}")
 

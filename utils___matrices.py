@@ -478,8 +478,10 @@ class MatricesAPI():
 
         if not Path(self.csv_path).exists(): 
             Open_Loop(gamma=gamma)
-            #plant, _ = self.get_system(FROM_DATA=False, gamma=gamma)
-            #op.make_data(plant=plant, gamma=gamma)
+
+        data_csv = str(self.csv_path)
+        if not data_csv:
+            raise("Provide data_csv='path/to/file.csv' to read data.")
             
 
         # ------------------------- CSV LOADING HELPERS -------------------------
@@ -530,7 +532,8 @@ class MatricesAPI():
 
         # ------------------------- UTILS -------------------------
 
-        def demean(M): return M - M.mean(axis=1, keepdims=True)
+        def demean(M): 
+            return M - M.mean(axis=1, keepdims=True)
 
         def _bw_from_residual_svd(R: np.ndarray, energy: float = 0.95) -> Tuple[np.ndarray, int, np.ndarray]:
             nx, T = R.shape
@@ -554,38 +557,53 @@ class MatricesAPI():
 
         # ------------------------- LOAD DATA -------------------------
 
-        data_csv = str(self.csv_path)
-        if not data_csv:
-            print("Provide data_csv='path/to/file.csv' to read data.")
-            return self.make_example_system()
-
         blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
-        X_raw = blocks["X"]
-        X = demean(X_raw)
-        U = demean(blocks["U"])
-        X_next = demean(blocks["X_next"])
+        X_raw, U_raw, X1_raw = blocks["X"], blocks["U"], blocks["X_next"]
+        X, U, X_next = demean(X_raw), demean(U_raw), demean(X1_raw)
+        T = X_raw.shape[1]
 
         nx, _, nu, ny, nz = self.get_dimensions_from_yaml()
 
         # Identification options
-        ident = self.p.get("ident", {})
+        ident          = self.p.get("ident", {})
         use_bc         = bool(ident.get("use_bc", False))
         use_iv         = bool(ident.get("use_iv", False))
-        sigma_v2       = 2.5e-4                                 # ignored by IV | (2.5e-4, "estimate_from_repeats")
+        plant_iv_ols   = bool(ident.get("plant_iv_ols", False))
+        sigma_v2       = None                                              # 2.5e-4
         stable_project = True
         nw_energy      = 0.95
         X_iv_path      = ident.get("X_iv_path", None)
 
-        # ------------------------- IV instruments (optional) -------------------------
-        X_iv = None
+        # ---------- Raw “moments” for the SDP (no demeaning) ----------
+        Phi_raw = np.vstack([U_raw, X_raw])   # (nu+nx) x T
+        Z0 = (X_raw @ Phi_raw.T) / T           # nx x (nu+nx)
+        Z1 = (X1_raw @ Phi_raw.T) / T           # nx x (nu+nx)
+
+        # ---------- Apply BC/IV substitutions for the SDP ----------
+        Z0_use, Z1_use = Z0, Z1
+        method_note = "Naive (biased)"
+
         if use_iv:
             if X_iv_path is None:
-                raise ValueError("use_iv=True but no 'X_iv_path' provided in self.p['ident'].")
+                raise ValueError("use_iv=True but no 'X_iv_path' provided.")
             headers_iv, data_iv = _read_csv_with_headers(X_iv_path, delimiter=delimiter)
-            X_iv_block = _pick_columns(headers_iv, data_iv, "x")
-            if X_iv_block.shape != X_raw.shape:
-                raise ValueError(f"IV state shape mismatch: {X_iv_block.shape} vs {X_raw.shape}")
-            X_iv = demean(X_iv_block[:, :X.shape[1]])  # align to same T
+            X0_iv_raw = _pick_columns(headers_iv, data_iv, "x")
+            if X0_iv_raw.shape != X_raw.shape:
+                raise ValueError(f"[IV] state shape mismatch: {X0_iv_raw.shape} vs {X_raw.shape}")
+            Phi_iv = np.vstack([U_raw, X0_iv_raw])
+            Z0_use = (X_raw @ Phi_iv.T) / T
+            Z1_use = (X1_raw @ Phi_iv.T) / T
+            method_note = "IV moments used in SDP"
+
+        elif use_bc:
+            if sigma_v2 is None:
+                sigma_v2, _ = _estimate_sigma_v2_diff(X_raw)  # single-run fallback
+            Psi = np.hstack([np.zeros((nx, nu)), (T * sigma_v2) * np.eye(nx)])  # nx x (nu+nx)
+            Z0_use = Z0 - (1.0 / T) * Psi
+            Z1_use = Z1
+            method_note = f"BC moments used in SDP (σ_v^2={sigma_v2:.3e})"
+
+        print(f"[DDD] identification mode: {method_note}")
 
         # ------------------------- A, Bu estimation (ridge on centered time-domain) -------------------------
 
@@ -608,8 +626,8 @@ class MatricesAPI():
 
         # ------------------------- Outputs (same as before) -------------------------
 
-        Y = blocks["Y"]          # may be None
-        Z = blocks["Z"]          # may be None
+        Y = demean(blocks["Y"])          # may be None
+        Z = demean(blocks["Z"])          # may be None
 
         if (Y is None or Y.size == 0) or (Z is None or Z.size == 0):
             Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
@@ -654,7 +672,7 @@ class MatricesAPI():
         # ------------------------- Bias-Correction (optional) and IV (optional) diagnostics -------------------------
 
         # Build projected “moments” for diagnostics and optional BC/IV replacement of A,Bu
-        T = X.shape[1]
+        T       = X.shape[1]
         Phi     = np.vstack([U, X])                    # (nu+nx) x T
         Xbar0   = (X @ Phi.T) / T                      # nx x (nu+nx)
         Xbar1   = (X_next @ Phi.T) / T
@@ -662,6 +680,7 @@ class MatricesAPI():
         method_note = "Naive (biased)"
 
         if use_iv:
+            X_iv = None
             Phi_iv  = np.vstack([U, X_iv])             # instruments
             if np.linalg.matrix_rank(Phi_iv) < (nx + nu):
                 raise RuntimeError("[IV] rank(Phi_iv) deficient; collect a better second run.")
@@ -678,14 +697,10 @@ class MatricesAPI():
             Xbar1_bc = Xbar1
             method_note = f"BC(sigma_v2={sigma_v2:.3e}) (A,Bu from ridge time-domain)"
 
-        # ------------------------- Diagnostics -------------------------
+        # ---------- Diagnostics ----------
         rho_A = float(np.max(np.abs(np.linalg.eigvals(A))))
         rel_resid = float(np.linalg.norm(R) / (np.linalg.norm(X_next) + 1e-12))
-        cond_DDt = float(np.linalg.cond(D @ D.T + ridge * np.eye(D.shape[0])))
-
-        print("[DDD] method:", method_note)
-        print(f"[DDD] rho(A)={rho_A:.6f},  rel_residual={rel_resid:.3e},  cond([X;U][X;U]^T+λI)={cond_DDt:.2e}")
-        print(f"[DDD] Bw columns selected (energy {nw_energy:.2f}): {Bw.shape[1]}")
+        print(f"[DDD] rho(A)={rho_A:.6f}, rel_residual={rel_resid:.3e}, Bw_cols={Bw.shape[1]} (energy={nw_energy:.2f})")
 
         # Build plant
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
