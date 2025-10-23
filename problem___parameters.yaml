@@ -2,7 +2,7 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
   model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
   FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
-  plot: true
+  plot: false
 
   simulation:
     ts: 0.05

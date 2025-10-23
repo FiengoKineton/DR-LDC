@@ -128,23 +128,53 @@ def _stability_penalty(report: Dict[str, Any],
                 pen += float(math.log1p(math.exp(slope * margin)) / slope)
     return pen
 
-def _build_scalar_objective(report: Dict[str, Any],
+def _build_scalar_objective(report: dict,
                             *,
-                            signal: str = "y",
+                            # you may pass either `signal` (str) or `signals` (list[str])
+                            signal: str | None = None,
+                            signals: list[str] | None = None,
+                            signal_mix_weights: dict[str,float] | None = None,
                             use_nrmse: bool = True,
                             w_traj: float = 1.0,
                             w_mats: float = 0.1,
                             w_stab: float = 10.0,
-                            delta_weights: Dict[str, float] = None) -> Dict[str, float]:
+                            delta_weights: dict[str,float] | None = None) -> dict[str,float]:
     """
-    Compose the final scalar objective f = w_traj*E + w_mats*D + w_stab*P
-    where:
-      E = RMSE/NRMSE between MBD and DDD on chosen signal
-      D = aggregated Frobenius deltas across selected matrices
-      P = stability penalty from spectral radius
-    Returns a dict with the components and the total.
+    Compose f = w_traj*E + w_mats*D + w_stab*P.
+    E is a (possibly weighted) average of per-signal RMSE/NRMSE across the selected signals.
     """
-    E = _mse_from_traj_errors(report, signal, use_nrmse=use_nrmse)
+    import numpy as np
+
+    # normalize input
+    if signals is None:
+        if signal is None:
+            signal = "y"   # default
+        signals = [signal]
+    else:
+        # make sure it's a clean list of unique strings
+        signals = [str(s) for s in signals]
+    if signal_mix_weights is None:
+        # equal weights for whatever you passed
+        signal_mix_weights = {s: 1.0 for s in signals}
+
+    # gather per-signal errors
+    per_sig_vals = []
+    per_sig_used = []
+    for s in signals:
+        val = _mse_from_traj_errors(report, s, use_nrmse=use_nrmse)
+        if np.isfinite(val):
+            w = float(signal_mix_weights.get(s, 1.0))
+            per_sig_vals.append((val, w))
+            per_sig_used.append(s)
+
+    if not per_sig_vals:
+        E = float("inf")   # nothing usable, call it infeasible
+    else:
+        num = sum(v * w for v, w in per_sig_vals)
+        den = sum(w for _, w in per_sig_vals)
+        E = float(num / den) if den > 0 else float("inf")
+
+    # matrix deltas
     D = _matrix_distance_from_deltas(
         report,
         ctrl_keys=("Ac","Bc","Cc","Dc"),
@@ -153,15 +183,28 @@ def _build_scalar_objective(report: Dict[str, Any],
         p_ctrl=2.0, p_plant=2.0, p_comp=2.0,
         weights=delta_weights or {"ctrl": 1.0, "plant": 1.0, "comp": 0.5},
     )
+
+    # stability penalty
     P = _stability_penalty(report, rho_target=0.999, slope=80.0)
+
     total = float(w_traj * E + w_mats * D + w_stab * P)
-    return {"E_traj": E, "D_mats": D, "P_stab": P, "total": total}
+    return {
+        "E_traj": E,
+        "D_mats": D,
+        "P_stab": P,
+        "total": total,
+        "signals_used": per_sig_used,
+        "use_nrmse": bool(use_nrmse),
+    }
+
 
 # ----------------------------- evaluation wrapper -----------------------------
 
 def _evaluate_gamma_once(gamma: float,
                          *,
                          signal: str,
+                         signals: list[str],
+                         signal_mix_weights: dict[str,float],
                          use_nrmse: bool,
                          weights: Dict[str, float],
                          delta_weights: Dict[str, float],
@@ -184,7 +227,9 @@ def _evaluate_gamma_once(gamma: float,
 
     obj = _build_scalar_objective(
         report,
-        signal=signal,
+        signal=signal,               # may be ignored if `signals` is not None
+        signals=signals,             # capture from outer scope via closure or add param
+        signal_mix_weights=signal_mix_weights,
         use_nrmse=use_nrmse,
         w_traj=weights.get("traj", 1.0),
         w_mats=weights.get("mats", 0.1),
@@ -250,6 +295,8 @@ def optimize_gamma(
     *,
     gamma_bounds: Tuple[float, float],
     signal: str = "y",         # choose among {"x","u","y","z","xc"}
+    signals: list[str] | None = None,  # NEW: to combine multiple
+    signal_mix_weights: dict[str,float] | None = None,  # NEW: weights among signals
     use_nrmse: bool = True,    # True -> use NRMSE, False -> RMSE
     weights: Dict[str, float] = None,      # {"traj":1.0, "mats":0.1, "stab":10.0}
     delta_weights: Dict[str, float] = None,# {"ctrl":1.0,"plant":1.0,"comp":0.5}
@@ -279,6 +326,8 @@ def optimize_gamma(
             return _evaluate_gamma_once(
                 float(g),
                 signal=signal,
+                signals=signals,
+                signal_mix_weights=signal_mix_weights,
                 use_nrmse=use_nrmse,
                 weights=weights,
                 delta_weights=delta_weights,
@@ -308,11 +357,11 @@ def optimize_gamma(
 
 if __name__ == "__main__":
     res = optimize_gamma(
-        gamma_bounds=(0.0, 1.0),     # see how to set this below
-        signal="z",                  # or "y" if that’s your KPI
-        use_nrmse=True,              # scale-free objective across channels
+        gamma_bounds=(0.0, 1.0),
+        signals=["y", "z"],
+        signal_mix_weights={"y": 0.5, "z": 0.5},
+        use_nrmse=True,
         weights={"traj": 1.0, "mats": 0.1, "stab": 20.0},
         delta_weights={"ctrl": 1.0, "plant": 0.7, "comp": 0.3},
-        tol=5e-3,
-        max_iter=30,
+        tol=5e-3, max_iter=30,
     )
