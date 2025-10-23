@@ -3,8 +3,10 @@ import argparse, csv, yaml, sys
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
+from typing import Optional, Dict, Any, Iterable
+
 from utils___matrices import MatricesAPI
-from utils___systems import Plant, Controller
+from utils___systems import Plant, Controller, Plant_cl
 from utils___ambiguity import WassersteinAmbiguitySet
 
 
@@ -29,9 +31,9 @@ class Closed_Loop():
     def test(self):
         # Use the same plant as the optimization example (seed=7)
         api = MatricesAPI()
-        plant, _ = api.get_system(seed=7, FROM_DATA=False)
+        plant, ctrl = api.get_system()
 
-        Ac = np.array([
+        """Ac = np.array([
             [ 0.3449, -0.4085,  0.    ,  0.    ],
             [-0.4279,  0.4803,  0.    ,  0.    ],
             [ 0.    ,  0.    ,  0.    ,  0.    ],
@@ -56,9 +58,9 @@ class Closed_Loop():
         ], dtype=float)
 
         ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
-        Sigma_w = 0.7 * np.eye(2)
+        Sigma_w = 0.7 * np.eye(2)"""
 
-        sim = self.simulate_closed_loop(plant, ctrl, Sigma_w, T=800, seed=11)
+        sim = self.simulate_closed_loop(plant, ctrl)
         print("Simulated shapes:",
             {k: v.shape for k, v in sim.items() if isinstance(v, np.ndarray)})
 
@@ -70,6 +72,7 @@ class Closed_Loop():
     def simulate_closed_loop(self, plant: Plant,
                             ctrl: Controller,
                             Sigma_w: np.ndarray = None,
+                            gamma: float = None,
                             seed: int = 11,
                             x0: np.ndarray | None = None,
                             xc0: np.ndarray | None = None):
@@ -95,8 +98,8 @@ class Closed_Loop():
 
         # Initial conditions
         T = int(self.Tf / self.ts)
-        x = np.zeros((nx, 1)) if x0 is None else np.asarray(x0, float).reshape(nx, 1)
-        xc = np.zeros((nxc, 1)) if xc0 is None else np.asarray(xc0, float).reshape(nxc, 1)
+        x = np.zeros((nx, 1)) #if x0 is None else np.asarray(x0, float).reshape(nx, 1)
+        xc = np.zeros((nxc, 1)) #if xc0 is None else np.asarray(xc0, float).reshape(nxc, 1)
 
         # Precompute a sampling factor for w
         if Sigma_w is not None:
@@ -112,9 +115,8 @@ class Closed_Loop():
         Y  = np.zeros((T, ny))
         U  = np.zeros((T, nu))
         Z  = np.zeros((T, nz))
-        Wlog = np.zeros((T, nw))
 
-        wass = WassersteinAmbiguitySet()
+        wass = WassersteinAmbiguitySet(gamma)
         W = wass.sample(T=T)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -128,7 +130,7 @@ class Closed_Loop():
             # Build a target state covariance. Easiest defensible choice:
             #   Sigma_state = Bw_hat Bw_hat^T (+ tiny isotropic pad).
             eps = 1e-6
-            Sigma_state = Bw @ Bw.T + eps * np.eye(Bw.shape[0])
+            Sigma_state = Bw @ Bw.T + eps * np.eye(nx)
 
             # Sample state disturbances with that covariance (shape: T x nx)
             D = wass.sample(T=T, Sigma=Sigma_state)
@@ -215,6 +217,174 @@ class Closed_Loop():
     def save_npz(self, sim, fname="cl_timeseries.npz"):
         np.savez_compressed(fname, **sim)
         return fname
+
+    def simulate_composite(self, Pcl: Plant_cl, gamma: float) -> Dict[str, Any]:
+        """
+        Simulate the composed system:
+            X_{t+1} = Acl X_t + Bcl w_t
+            z_t     = Ccl X_t + Dcl w_t
+        with X_0 = 0 (or provided X0).
+
+        Args:
+            Pcl: Plant_cl with (Acl,Bcl,Ccl,Dcl)
+            W: disturbance trajectory (T, nw). If provided, overrides Sigma_w.
+            Sigma_w: covariance of w_t (nw,nw), i.i.d. Gaussian if W is None.
+            seed: RNG seed when sampling w_t.
+            X0: initial state (nX,) or (nX,1). Defaults to zeros.
+
+        Returns dict with:
+            'X' (T, nX), 'Z' (T, nz), 'W' (T, nw),
+            sizes and timing metadata.
+        """
+
+        A = np.asarray(Pcl.Acl, dtype=float)
+        B = np.asarray(Pcl.Bcl, dtype=float)
+        C = np.asarray(Pcl.Ccl, dtype=float)
+        D = np.asarray(Pcl.Dcl, dtype=float)
+
+        nX = A.shape[0]
+        nw = B.shape[1]
+        nz = C.shape[0]
+
+        # Horizon
+        T = int(round(self.Tf / self.ts))
+        if T <= 0:
+            raise ValueError("Non-positive simulation horizon. Check Tf and ts.")
+
+        # Initial condition
+        x = np.zeros((nX, 1))
+
+        # Disturbance generation
+        wass = WassersteinAmbiguitySet(gamma)
+        W = wass.sample(T=T)
+        if W.ndim == 1:
+            W = W.reshape(T, 1)
+
+        if W.shape[1] == nw:
+            # Great. Use directly.
+            pass
+        else:
+            # Case 2: mismatch. DO NOT "average columns".
+            # Sample *state-space* disturbance then project onto span(Bw_hat).
+            # Build a target state covariance. Easiest defensible choice:
+            #   Sigma_state = Bw_hat Bw_hat^T (+ tiny isotropic pad).
+            eps = 1e-6
+            Sigma_state = B @ B.T + eps * np.eye(nX)
+
+            # Sample state disturbances with that covariance (shape: T x nx)
+            d = wass.sample(T=T, Sigma=Sigma_state)
+
+            # Project each d_t onto col(Bw_hat) via pseudoinverse
+            B_pinv = np.linalg.pinv(B)     # (nw_hat x nx)
+            W = (d @ B_pinv.T)                  # (T x nw_hat)
+
+        # Storage
+        X = np.zeros((T, nX))
+        Z = np.zeros((T, nz))
+
+        # Rollout
+        for t in range(T):
+            w = W[t, :].reshape(nw, 1)
+            z = C @ x + D @ w
+            X[t, :] = x.ravel()
+            Z[t, :] = z.ravel()
+            x = A @ x + B @ w
+
+        return {
+            "X": X,               # (T, nX)
+            "Z": Z,               # (T, nz)
+            "W": W,               # (T, nw)
+            "T": T, "ts": self.ts,
+            "nX": nX, "nw": nw, "nz": nz,
+        }
+
+    def plot_composite(self,
+                        sim: dict,
+                        show_X: bool = True,
+                        show_Z: bool = True,
+                        show_W: bool = False,
+                        X_idx: Optional[Iterable[int]] = None,
+                        Z_idx: Optional[Iterable[int]] = None,
+                        W_idx: Optional[Iterable[int]] = None,
+                        suptitle: Optional[str] = None):
+        """
+        Plot time series for the composed closed-loop simulation.
+
+        Args:
+            sim: dict from simulate_composite()
+                 must contain keys 'X', 'Z', 'W', 'T', 'ts', 'nX','nz','nw'
+            show_X, show_Z, show_W: enable/disable each panel
+            *_idx: optional iterable of component indices to plot; defaults to all
+            suptitle: optional overall title
+
+        Behavior:
+            - x-axis is physical time (k * ts)
+            - each signal gets its own figure to avoid clutter
+        """
+        T   = int(sim["T"])
+        ts  = float(sim["ts"])
+        t   = np.arange(T) * ts
+
+        def _ensure_indices(n: int, sel: Optional[Iterable[int]]):
+            if sel is None:
+                return list(range(n))
+            # validate and unique-preserve order
+            idx = list(dict.fromkeys(int(i) for i in sel))
+            bad = [i for i in idx if i < 0 or i >= n]
+            if bad:
+                raise IndexError(f"indices {bad} out of range [0, {n-1}]")
+            return idx
+
+        if show_X:
+            X = np.asarray(sim["X"])
+            nX = int(sim["nX"])
+            xi = _ensure_indices(nX, X_idx)
+            plt.figure(figsize=(10, 6))
+            for i in xi:
+                plt.plot(t, X[:, i], label=f"X[{i}]")
+            ttl = "Composite state X(t)"
+            if suptitle: ttl = f"{suptitle} — {ttl}"
+            plt.title(ttl)
+            plt.xlabel("time")
+            plt.ylabel("state")
+            plt.grid(True, alpha=0.3)
+            if len(xi) <= 12:
+                plt.legend(ncol=2, framealpha=0.8)
+
+        if show_Z:
+            Z = np.asarray(sim["Z"])
+            nz = int(sim["nz"])
+            zi = _ensure_indices(nz, Z_idx)
+            plt.figure(figsize=(10, 6))
+            for i in zi:
+                plt.plot(t, Z[:, i], label=f"z[{i}]")
+            ttl = "Performance output z(t)"
+            if suptitle: ttl = f"{suptitle} — {ttl}"
+            plt.title(ttl)
+            plt.xlabel("time")
+            plt.ylabel("output")
+            plt.grid(True, alpha=0.3)
+            if len(zi) <= 12:
+                plt.legend(ncol=2, framealpha=0.8)
+
+        if show_W:
+            W = np.asarray(sim["W"])
+            nw = int(sim["nw"])
+            wi = _ensure_indices(nw, W_idx)
+            plt.figure(figsize=(10, 5))
+            for i in wi:
+                plt.plot(t, W[:, i], label=f"w[{i}]")
+            ttl = "Disturbance w(t)"
+            if suptitle: ttl = f"{suptitle} — {ttl}"
+            plt.title(ttl)
+            plt.xlabel("time")
+            plt.ylabel("disturbance")
+            plt.grid(True, alpha=0.3)
+            if len(wi) <= 12:
+                plt.legend(ncol=2, framealpha=0.8)
+
+        plt.show()
+
 
 
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
@@ -745,10 +915,10 @@ class Open_Loop():
 ## ------------------------------ MAIN ENTRY POINT ---------------------------------
 
 if __name__ == "__main__":
-    CL = False
-    OL = True
+    CL = 1
+    OL = 0
 
-    if CL: Closed_Loop()
+    if CL: Closed_Loop(TEST=True)
     if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=True)
 
 

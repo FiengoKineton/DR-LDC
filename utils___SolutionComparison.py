@@ -2,8 +2,10 @@ import json, sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Tuple, Optional, Mapping
 
-from utils___systems import Plant, Controller
+
+from utils___systems import Plant, Controller, Plant_cl
 from utils___simulate import Closed_Loop
 from utils___matrices import MatricesAPI
 
@@ -36,6 +38,15 @@ class ResultsComparator:
             Dyw=np.array(d["Dyw"], dtype=float),
         )
 
+    @staticmethod
+    def _plant_cl_from_dict(d: dict) -> 'Plant_cl':
+        return Plant_cl(
+            Acl=np.array(d["Acl"], dtype=float),
+            Bcl=np.array(d["Bcl"], dtype=float),
+            Ccl=np.array(d["Ccl"], dtype=float),
+            Dcl=np.array(d["Dcl"], dtype=float),
+        )
+    
     @staticmethod
     def _controller_from_dict(d: dict) -> 'Controller':
         return Controller(
@@ -99,29 +110,96 @@ class ResultsComparator:
         }
 
     @staticmethod
-    def _npz_extract_states(npz: dict):
-        # time
-        t = None
-        for tk in ("t", "time", "times"):
-            if tk in npz:
-                t = npz[tk]
-                break
-        # states
-        X = None
-        for xk in ("x", "X", "states", "state", "traj_X", "traj"):
-            if xk in npz:
-                X = npz[xk]
-                break
+    def _npz_extract_states(npz: Mapping) -> Tuple[np.ndarray, np.ndarray,
+                                                   Optional[np.ndarray],
+                                                   Optional[np.ndarray],
+                                                   Optional[np.ndarray], 
+                                                   Optional[np.ndarray]]:
+        """
+        Extract time vector t and trajectories X (state), and optionally Y (measured),
+        Z (performance), U (input) from an npz-like mapping.
+
+        Returns:
+            t : (T,)               time index (np.arange(T) if absent)
+            X : (T, nx)            states (required)
+            Y : (T, ny) or None    measured outputs if present
+            Z : (T, nz) or None    performance outputs if present
+            U : (T, nu) or None    inputs if present
+
+        Rules:
+        - Accepts many plausible keys for robustness.
+        - If an array is shaped (n, T), it is transposed to (T, n).
+        - 1D arrays are promoted to (T, 1).
+        - Missing streams are returned as None.
+        """
+
+        def _get_first(npz_map, keys):
+            for k in keys:
+                if k in npz_map:
+                    return np.array(npz_map[k])
+            return None
+
+        def _to_time_major(arr: Optional[np.ndarray]) -> Optional[np.ndarray]:
+            if arr is None:
+                return None
+            arr = np.array(arr)
+            # Squeeze harmless singleton dims
+            arr = np.squeeze(arr)
+            if arr.ndim == 1:
+                # Promote to (T, 1)
+                return arr.reshape(-1, 1)
+            if arr.ndim != 2:
+                raise ValueError(f"Expected 1D or 2D array, got shape {arr.shape}")
+            T, n = arr.shape
+            # Heuristic: if it's (n, T) with n << T, flip to (T, n)
+            if T < n:
+                arr = arr.T
+            return arr
+
+        # Time
+        t = _get_first(npz, keys=("t", "time", "times"))
+        if t is not None:
+            t = np.ravel(t)
+
+        # State X (required)
+        X = _get_first(npz, keys=("x", "X", "states", "state", "traj_X", "traj"))
         if X is None:
             raise KeyError("Could not find a state matrix in NPZ (x/X/states/state/traj_X/traj).")
-        X = np.array(X)
-        # We prefer (T, nx). If it's (nx, T) and nx<T, leave it; either way we’ll plot row-wise time.
+        X = _to_time_major(X)
+
+        # Y, Z, U (optional; multiple likely aliases)
+        Y = _get_first(npz, keys=("y", "Y", "meas", "measured", "outputs_y", "traj_Y"))
+        Z = _get_first(npz, keys=("z", "Z", "perf", "performance", "outputs_z", "traj_Z"))
+        U = _get_first(npz, keys=("u", "U", "input", "inputs", "traj_U"))
+        Xc = _get_first(npz, keys=("xc", "x_c", "Xc", "X_c"))
+
+        Y = _to_time_major(Y)
+        Z = _to_time_major(Z)
+        U = _to_time_major(U)
+        Xc = _to_time_major(Xc)
+
+        # If time missing, synthesize from X length
         if t is None:
             t = np.arange(X.shape[0])
-        return t, X
+
+        # Basic length consistency check; mismatch won’t hard-fail, just warn in logs if you use logging
+        T = X.shape[0]
+        for name, arr in (("Y", Y), ("Z", Z), ("U", U), ("Xc", Xc)):
+            if arr is not None and arr.shape[0] != T:
+                # Align by truncation to the minimum T to avoid broadcasting disasters.
+                Tmin = min(T, arr.shape[0])
+                X = X[:Tmin]
+                t = t[:Tmin]
+                if Y is not None: Y = Y[:Tmin]
+                if Z is not None: Z = Z[:Tmin]
+                if U is not None: U = U[:Tmin]
+                if Xc is not None: Xc = Xc[:Tmin]
+                break
+
+        return t, X, Y, Z, U, Xc
 
     @staticmethod
-    def _plot_overlay_states(t, XM, XD, title: str):
+    def _plot_overlay_states(t, XM, XD, l, title: str):
         XM = np.atleast_2d(XM)
         XD = np.atleast_2d(XD)
         T = min(XM.shape[0], XD.shape[0])
@@ -138,17 +216,85 @@ class ResultsComparator:
         for i, ax in enumerate(axes):
             ax.plot(t, XM[:, i], label="MBD", linewidth=1.6)
             ax.plot(t, XD[:, i], label="DDD", linewidth=1.6, linestyle="--")
-            ax.set_ylabel(f"x[{i}]")
+            ax.set_ylabel(f"{l}[{i}]")
             ax.grid(True, alpha=0.3)
         axes[-1].set_xlabel("time")
         axes[0].set_title(title)
         axes[0].legend(loc="best")
         plt.tight_layout()
-        plt.show()
+        #plt.show()
+
+    def _eig_stats(self, A: np.ndarray) -> dict:
+        vals = np.linalg.eigvals(A)
+        absvals = np.abs(vals)
+        rho = float(absvals.max()) if absvals.size else float("nan")
+        dist_uc = float((1.0 - absvals).min()) if absvals.size else float("nan")  # positive is good
+        out = {
+            "spectral_radius": rho,
+            "is_stable_disc": bool(rho < 1.0),
+            "min_margin_to_unit_circle": dist_uc,
+            "eigvals_real": np.real(vals).tolist(),
+            "eigvals_imag": np.imag(vals).tolist(),
+            "fro_norm": float(np.linalg.norm(A, "fro")),
+            "two_norm": float(np.linalg.norm(A, 2)),
+            "shape": list(A.shape),
+            "rank": int(np.linalg.matrix_rank(A)),
+        }
+        try:
+            out["cond_2"] = float(np.linalg.cond(A))
+        except Exception:
+            out["cond_2"] = None
+        return out
+
+    def _stream_stats(self, arr: np.ndarray, name: str) -> dict:
+        """Accepts (T,n) or None. Returns scalar KPIs per signal and aggregated."""
+        if arr is None:
+            return {"present": False}
+        arr = np.asarray(arr)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        T, n = arr.shape
+        finite = np.isfinite(arr)
+        nan_count = int(np.isnan(arr).sum())
+        inf_count = int(np.isinf(arr).sum())
+        any_bad = bool((~finite).any())
+        rms = float(np.sqrt(np.mean(arr[finite]**2))) if finite.any() else float("nan")
+        mean = float(np.mean(arr[finite])) if finite.any() else float("nan")
+        std = float(np.std(arr[finite])) if finite.any() else float("nan")
+        max_abs = float(np.max(np.abs(arr[finite]))) if finite.any() else float("nan")
+        l2_energy = float(np.sqrt(np.sum(arr[finite]**2))) if finite.any() else float("nan")
+        return {
+            "present": True, "name": name, "T": int(T), "n_signals": int(n),
+            "nan_count": nan_count, "inf_count": inf_count, "any_nonfinite": any_bad,
+            "rms": rms, "mean": mean, "std": std, "max_abs": max_abs, "l2_energy": l2_energy,
+        }
+
+    def plant_to_dict(self, P: Plant):
+        return {
+            "A": P.A.tolist(),
+            "Bw": P.Bw.tolist(),
+            "Bu": P.Bu.tolist(),
+            "Cz": P.Cz.tolist(),
+            "Dzw": P.Dzw.tolist(),
+            "Dzu": P.Dzu.tolist(),
+            "Cy": P.Cy.tolist(),
+            "Dyw": P.Dyw.tolist(),
+        }
+
+    def plant_cl_to_dict(self, P: Plant_cl):
+        return {
+            "Acl": P.Acl.tolist(),
+            "Bcl": P.Bcl.tolist(), 
+            "Ccl": P.Ccl.tolist(), 
+            "Dcl": P.Dcl.tolist()
+        }
+
+    def controller_to_dict(self, C: Controller):
+        return {"Ac": C.Ac.tolist(), "Bc": C.Bc.tolist(), "Cc": C.Cc.tolist(), "Dc": C.Dc.tolist()}
 
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
-    def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", plot: bool = True) -> dict:
+    def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", plot: bool = True, re_evaluate: bool = False) -> dict:
         """
         Compare MBD vs DDD for the SAME method ('lmi' or 'baseline').
 
@@ -170,7 +316,9 @@ class ResultsComparator:
         j_mbd = run_dir / f"{base}_MBD___results_run.json"
         j_ddd = run_dir / f"{base}_DDD___results_run.json"
         z_mbd = run_dir / f"{base}_MBD___closed_loop_run.npz"
-        z_ddd = run_dir / f"{base}_DDD___closed_loop_run.npz"
+        z_ddd = run_dir / f"{base}_DDD___closed_loop_run.npz"        
+        c_mbd = run_dir / f"{base}_MBD___closed_loop_composite.npz"
+        c_ddd = run_dir / f"{base}_DDD___closed_loop_composite.npz"
 
         if not j_mbd.exists() or not j_ddd.exists():
             raise FileNotFoundError(f"Missing JSON(s): {j_mbd} or {j_ddd}")
@@ -191,14 +339,29 @@ class ResultsComparator:
                 return self._plant_from_dict(J["plant"])
             raise KeyError("No plant found in JSON payload.")
 
+        def _plnt_cl_from_any(J):
+            if "composite_closed_loop" in J:
+                return self._plant_cl_from_dict(J["composite_closed_loop"])
+            raise KeyError("No composite_closed_loop found in JSON payload.")
+
         ctrlM = _ctrl_from_any(JM)
         plntM = _plnt_from_any(JM)
+        plnt_clM = _plnt_cl_from_any(JM)
         ctrlD = _ctrl_from_any(JD)
         plntD = _plnt_from_any(JD)
+        plnt_clD = _plnt_cl_from_any(JD)
 
         # Objective values if present
         objM = JM.get("meta", {}).get("objective", JM.get("optimized_cost"))
         objD = JD.get("meta", {}).get("objective", JD.get("optimized_cost"))
+        obj_gap = None
+        obj_winner = None
+        try:
+            obj_gap = float(objD) - float(objM) if (objM is not None and objD is not None) else None
+            if obj_gap is not None:
+                obj_winner = "DDD" if float(objD) < float(objM) else ("MBD" if float(objM) < float(objD) else "tie")
+        except Exception:
+            pass
 
         # deltas_ctrl
         deltas_ctrl = {
@@ -225,6 +388,64 @@ class ResultsComparator:
             #"Dzw": self._fro_stats(plntD.Dzw, plntM.Dzw),
         }
 
+        deltas_composite = {
+            "Acl": self._fro_stats(plnt_clD.Acl, plnt_clM.Acl),
+            #"Bcl": self._fro_stats(plnt_clD.Bcl, plnt_clM.Bcl),
+            "Ccl": self._fro_stats(plnt_clD.Ccl, plnt_clM.Ccl),
+            #"Dcl": self._fro_stats(plnt_clD.Dcl, plnt_clM.Dcl),
+        }
+
+        # Spectral/stability stats on Acl
+        spec_M = self._eig_stats(plnt_clM.Acl)
+        spec_D = self._eig_stats(plnt_clD.Acl)
+
+        # Shapes/ranks snapshot
+        def _shape_rank(M):
+            return {"shape": list(M.shape), "rank": int(np.linalg.matrix_rank(M))}
+        shapes_ranks = {
+            "ctrl_MBD": {k: _shape_rank(getattr(ctrlM, k)) for k in ("Ac","Bc","Cc","Dc")},
+            "ctrl_DDD": {k: _shape_rank(getattr(ctrlD, k)) for k in ("Ac","Bc","Cc","Dc")},
+            "plant_MBD": {k: _shape_rank(getattr(plntM, k)) for k in ("A","Bu","Bw","Cy","Dyw","Cz","Dzu","Dzw")},
+            "plant_DDD": {k: _shape_rank(getattr(plntD, k)) for k in ("A","Bu","Bw","Cy","Dyw","Cz","Dzu","Dzw")},
+            "comp_MBD": {k: _shape_rank(getattr(plnt_clM, k)) for k in ("Acl","Bcl","Ccl","Dcl")},
+            "comp_DDD": {k: _shape_rank(getattr(plnt_clD, k)) for k in ("Acl","Bcl","Ccl","Dcl")},
+        }
+
+        # Time-series KPIs (if NPZ present)
+        kpis_M, kpis_D = {}, {}
+        if z_mbd.exists():
+            dataM = np.load(z_mbd, allow_pickle=True)
+            tM, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
+            kpis_M = {
+                "x":  self._stream_stats(XM, "x"),
+                "xc": self._stream_stats(XcM, "xc"),
+                "u":  self._stream_stats(UM, "u"),
+                "y":  self._stream_stats(YM, "y"),
+                "z":  self._stream_stats(ZM, "z"),
+            }
+        if z_ddd.exists():
+            dataD = np.load(z_ddd, allow_pickle=True)
+            tD, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
+            kpis_D = {
+                "x":  self._stream_stats(XD, "x"),
+                "xc": self._stream_stats(XcD, "xc"),
+                "u":  self._stream_stats(UD, "u"),
+                "y":  self._stream_stats(YD, "y"),
+                "z":  self._stream_stats(ZD, "z"),
+            }
+
+        # Optional composite time-series KPIs
+        comp_kpis_M, comp_kpis_D = {}, {}
+        if c_mbd.exists():
+            cM = np.load(c_mbd, allow_pickle=True)
+            t, X, _, Z, *_ = self._npz_extract_states(cM)
+            comp_kpis_M = {"x": self._stream_stats(X, "x"), "z": self._stream_stats(Z, "z")}
+        if c_ddd.exists():
+            cD = np.load(c_ddd, allow_pickle=True)
+            t, X, _, Z, *_ = self._npz_extract_states(cD)
+            comp_kpis_D = {"x": self._stream_stats(X, "x"), "z": self._stream_stats(Z, "z")}
+
+
         print("\n=== Plant matrix deltas_plnt (DDD minus MBD) ===")
         for k, st in deltas_plnt.items():
             print(f"{k}: shape={st['shape']}, ‖Δ‖_F={st['fro_norm']:.3e}, "
@@ -241,48 +462,124 @@ class ResultsComparator:
         c_MDB = Controller(Ac=ctrlM.Ac, Bc=ctrlM.Bc, Cc=ctrlM.Cc, Dc=ctrlM.Dc)
         p_DDD = Plant(A=plntD.A, Bu=plntD.Bu, Bw=plntD.Bw, Cy=plntD.Cy, Dyw=plntD.Dyw, Cz=plntD.Cz, Dzu=plntD.Dzu, Dzw=plntD.Dzw)
         c_DDD = Controller(Ac=ctrlD.Ac, Bc=ctrlD.Bc, Cc=ctrlD.Cc, Dc=ctrlD.Dc)
-        print("\n=== Matrices MBD ===")
-        api.print_plant(plant=p_MDB)
-        api.print_controller(ctrl=c_MDB)
-        print("\n=== Matrices DDD ===")
-        api.print_plant(plant=p_DDD)
-        api.print_controller(ctrl=c_DDD)
-        
+        if plot:
+            print("\n=== Matrices MBD ===")
+            api.print_plant(plant=p_MDB)
+            api.print_controller(ctrl=c_MDB)
+            api.print_plant_cl(plant_cl=plnt_clM)
+            print("\n=== Matrices DDD ===")
+            api.print_plant(plant=p_DDD)
+            api.print_controller(ctrl=c_DDD)
+            api.print_plant_cl(plant_cl=plnt_clD)
+
 
         # Plots
         if z_mbd.exists() and z_ddd.exists() and plot:
             dataM = np.load(z_mbd)
             dataD = np.load(z_ddd)
-            tM, XM = self._npz_extract_states(dataM)
-            tD, XD = self._npz_extract_states(dataD)
+            t, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
+            _, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
             T = min(XM.shape[0], XD.shape[0])
-            title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
-            self._plot_overlay_states(tM if len(tM) == T else np.arange(T), XM, XD, title)
-        
-        
-            # Re-simulate both
-            cl = Closed_Loop()
-            print("simulating closed loop of MDB...")
-            sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB)
-            print("simulating closed loop of DDD...")
-            sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD)
 
-            print("plotting MDB...")
-            cl.plot_timeseries(sim_m)
-            print("plotting DDD...")
-            cl.plot_timeseries(sim_d)
+            title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title)            
+            title = f"{method.upper()} closed-loop: cntrl states (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "x", title)
+            title = f"{method.upper()} closed-loop: inputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", title)
+            title = f"{method.upper()} closed-loop: outputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", title)            
+            title = f"{method.upper()} closed-loop: perf. outputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title)
+            plt.show()
+
+            if re_evaluate:
+                # Re-simulate both
+                cl = Closed_Loop()
+                print("simulating closed loop of MDB...")
+                sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB)
+                print("simulating closed loop of DDD...")
+                sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD)
+
+                print("plotting MDB...")
+                cl.plot_timeseries(sim_m)
+                print("plotting DDD...")
+                cl.plot_timeseries(sim_d)
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
 
+        if c_mbd.exists() and c_ddd.exists() and plot:
+            dataM = np.load(c_mbd)
+            dataD = np.load(c_ddd)
+            t, XM, _, ZM, *_ = self._npz_extract_states(dataM)
+            _, XD, _, ZD, *_ = self._npz_extract_states(dataD)
+            T = min(XM.shape[0], XD.shape[0])
+
+            title = f"{method.upper()} composite closed-loop: states (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title)            
+            title = f"{method.upper()} composite closed-loop: perf. outputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title)
+            plt.show()
+
+            if re_evaluate:
+                # Re-simulate both
+                cl = Closed_Loop()
+                print("simulating closed loop of MDB...")
+                sim_m = cl.simulate_composite(Pcl=plnt_clM)
+                print("simulating closed loop of DDD...")
+                sim_d = cl.simulate_closed_loop(Pcl=plnt_clD)
+
+                print("plotting composite MDB...")
+                cl.plot_timeseries(sim_m)
+                print("plotting composite DDD...")
+                cl.plot_timeseries(sim_d)
+        else:
+            print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
+
+        # Assemble report
         report = {
             "paths": {
-                "mbd_json": str(j_mbd),
-                "ddd_json": str(j_ddd),
-                "mbd_npz": str(z_mbd),
-                "ddd_npz": str(z_ddd),
+                "mbd_json": str(j_mbd), "ddd_json": str(j_ddd),
+                "mbd_npz": str(z_mbd),  "ddd_npz": str(z_ddd),
+                "mbd_comp_npz": str(c_mbd), "ddd_comp_npz": str(c_ddd),
             },
-            "objectives": {"MBD": objM, "DDD": objD},
-            "matrix_deltas_ctrl": deltas_ctrl,
+            "meta": {
+                "method": method,
+                "mbd_meta": JM.get("meta", {}),
+                "ddd_meta": JD.get("meta", {}),
+            },
+            "objectives": {
+                "MBD": objM, "DDD": objD,
+                "gap_DDD_minus_MBD": obj_gap, "winner_lower_is_better": obj_winner,
+            },
+            "controller_deltas": deltas_ctrl,
+            "plant_deltas": deltas_plnt,
+            "composite_deltas": deltas_composite,
+            "shapes_ranks": shapes_ranks,
+            "stability": {
+                "MBD": spec_M,
+                "DDD": spec_D,
+            },
+            "timeseries_kpis": {
+                "MBD": kpis_M,
+                "DDD": kpis_D,
+                "composite_MBD": comp_kpis_M,
+                "composite_DDD": comp_kpis_D,
+            },
+            "Matrices": {
+                "Controllers": {
+                    "MBD": self.controller_to_dict(c_MDB), 
+                    "DDD": self.controller_to_dict(c_DDD),
+                },
+                "Composite Plants": {
+                    "MBD": self.plant_cl_to_dict(plnt_clM), 
+                    "DDD": self.plant_cl_to_dict(plnt_clD),
+                },
+                "Plants": {
+                    "MBD": self.plant_to_dict(p_MDB), 
+                    "DDD": self.plant_to_dict(p_DDD),
+                },
+            }
         }
         # Save side-by-side comparison JSON next to the MBD run
         out_comp = (self.out_root / method / f"{base}___comparison_MBD_vs_DDD.json")

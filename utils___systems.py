@@ -33,6 +33,20 @@ class Controller:
         return nxc
 
 @dataclass
+class Plant_cl: 
+    Acl: np.ndarray
+    Bcl: np.ndarray
+    Ccl: np.ndarray
+    Dcl: np.ndarray
+
+    def dims(self):
+        nx_cl = self.Acl.shape[0]
+        nw_cl = self.Bcl.shape[1]
+        nz_cl = self.Ccl.shape[0]
+        return nx_cl, nw_cl, nz_cl
+
+
+@dataclass
 class DROLMIResult:
     solver: str
     status: str

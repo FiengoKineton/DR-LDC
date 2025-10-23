@@ -11,7 +11,7 @@ class WassersteinAmbiguitySet:
     - W_ind: iid disturbances with that marginal
     - W_cor: arbitrary temporal correlation but each marginal in the ball
     """
-    def __init__(self, yaml_path = "problem___parameters.yaml"):
+    def __init__(self, gamma: float = None, yaml_path = "problem___parameters.yaml"):
         if yaml is None:
             raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
         with open(yaml_path, "r", encoding="utf-8") as f:
@@ -21,7 +21,7 @@ class WassersteinAmbiguitySet:
         set = p.get("ambiguity", {})
         sim = p.get("simulation", {})
         Sigma_nom = np.array(set["Sigma_nom"], dtype=float) 
-        gamma = float(set.get("gamma", 0.0))
+        gamma = float(set.get("gamma", 0.0)) if gamma is None else gamma
         Tf = sim.get("TotTime", 100)
         self.ts = sim.get("ts", 0.5)
         
@@ -137,6 +137,7 @@ class WassersteinAmbiguitySet:
         if Sigma is None:
             Sigma_target = self.Sigma_nom
         else:
+            self.Sigma_nom = np.eye(Sigma[0].size)
             Sigma_target = self.project_cov_to_ball(Sigma)
 
         n = Sigma_target.shape[0]

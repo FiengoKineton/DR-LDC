@@ -52,7 +52,8 @@ class Optim_Problem():
 
         return cost_accum / max(cnt, 1)
 
-    def pack_vars(self, Ac, Bc, Cc, Dc): return np.concatenate([Ac.flatten(), Bc.flatten(), Cc.flatten(), Dc.flatten()])
+    def pack_vars(self, Ac, Bc, Cc, Dc): 
+        return np.concatenate([Ac.flatten(), Bc.flatten(), Cc.flatten(), Dc.flatten()])
 
     def unpack_vars(self, theta, shapes):
         Ac_shape, Bc_shape, Cc_shape, Dc_shape = shapes

@@ -2,7 +2,7 @@ import __main__
 import re, json, yaml, sys
 import numpy as np
 from scipy.linalg import sqrtm, expm
-from utils___systems import Plant, Controller
+from utils___systems import Plant, Controller, Plant_cl
 from typing import Tuple, Optional, List
 from numpy.linalg import eigvals, norm
 
@@ -806,6 +806,14 @@ class MatricesAPI():
         print(f"Dzu [{plant.Dzu.shape}]:\n", plant.Dzu)
         print(f"Cy [{plant.Cy.shape}]:\n", plant.Cy)
         print(f"Dyw [{plant.Dyw.shape}]:\n", plant.Dyw)
+        print("\n\n")
+
+    def print_plant_cl(self, plant_cl: Plant_cl):
+        print("\nComposite Plant Matrices:")
+        print(f"Acl [{plant_cl.Acl.shape}]:\n", plant_cl.Acl)
+        print(f"Bcl [{plant_cl.Bcl.shape}]:\n", plant_cl.Bcl)
+        print(f"Ccl [{plant_cl.Ccl.shape}]:\n", plant_cl.Ccl)
+        print(f"Dcl [{plant_cl.Dcl.shape}]:\n", plant_cl.Dcl)
         print("\n\n")
 
     def print_controller(self, ctrl: Controller):
