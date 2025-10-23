@@ -1,12 +1,12 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
   model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
-  FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
+  FROM_DATA: false                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
   plot: false
 
   simulation:
     ts: 0.05
-    TotTime: 25
+    TotTime: 50
   
   ident:
     use_bc: false
@@ -15,8 +15,9 @@ params:
 
   
   directories:
-    data: "./out/data/session"
+    data: "./out/data/session_GammaOpt"
     artifacts: "./out/artifacts/"
+    runID: "GammaOpt"
 
   plant:
     #type: explicit  # change to random_stable if there a change of dimensions

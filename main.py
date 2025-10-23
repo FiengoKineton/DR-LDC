@@ -15,13 +15,13 @@ from utils___SolutionComparison import ResultsComparator
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False):
+    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, FROM_DATA: bool = None):
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
         api = MatricesAPI()
 
-        plant, ctrl0 = api.get_system()
+        plant, ctrl0 = api.get_system(FROM_DATA=FROM_DATA)
         api.print_plant(plant)
 
         Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt = run_once(plant=plant, ctrl0=ctrl0, Sigma_nom=Sigma_nom)
@@ -119,14 +119,14 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, gamma: float, Sigma_nom: np.ndarray, plot: bool = False):
+    def __init__(self, params: dict, out: Path, gamma: float, Sigma_nom: np.ndarray, plot: bool = False, FROM_DATA: bool = False):
 
         recover = Recover()
         api = MatricesAPI()
         cl = Closed_Loop() 
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        plant, _ = api.get_system()
+        plant, _ = api.get_system(FROM_DATA=FROM_DATA)
         api.print_plant(plant)
 
         # 2) Solve DRO-LMI (choose "correlated" or "independent")
@@ -269,7 +269,7 @@ class lmi_pipeline_optim_problem():
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
-def main(gamma: float):
+def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     parser.add_argument("--base", action="store_true", help="Run baseline optimization")
@@ -283,31 +283,33 @@ def main(gamma: float):
 
     p = cfg.get("params", {})
     out = p.get("directories", {}).get("artifacts", "./out/artifacts/")
+    runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent")
-    FROM_DATA = bool(p.get("FROM_DATA", False))
+    FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
     plot = bool(p.get("plot", False))
     _data = "DDD" if FROM_DATA else "MBD"
     gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
+    comp = args.comp if comp is None else comp
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
-    path_name = f"/run_04___{_type}_{_model}_{_data}"
+    path_name = f"/run_{runID}___{_type}_{_model}_{_data}"
 
-    if args.comp:
+    if comp:
         cmp = ResultsComparator(out_root=out)
         method = "base" if args.base else "lmi"
-        cmp.compare_mbd_vs_ddd(path_name=path_name, method=method, plot=plot)
+        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=method, plot=plot)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
         if args.base:
             print("\nRunning baseline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/baseline" + path_name
-            baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot)
-        if args.lmi:
+            baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot, FROM_DATA=FROM_DATA)
+        else:
             print("\nRunning LMI pipeline optimization...")
             out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name
-            lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot)
+            lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot, FROM_DATA=FROM_DATA)
 
 
 if __name__ == "__main__":

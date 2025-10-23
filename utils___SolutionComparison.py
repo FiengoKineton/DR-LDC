@@ -292,9 +292,122 @@ class ResultsComparator:
     def controller_to_dict(self, C: Controller):
         return {"Ac": C.Ac.tolist(), "Bc": C.Bc.tolist(), "Cc": C.Cc.tolist(), "Dc": C.Dc.tolist()}
 
+    def _traj_error_stats(
+        self,
+        A, B,
+        *,
+        name: str,
+        burn_in: int = 0,
+        normalize: str = None,   # {None, "std", "range"}
+    ) -> dict:
+        """
+        Compare two time-series arrays (T,n): stats for A vs B.
+
+        normalize:
+        None    => plain errors
+        "std"   => NRMSE = RMSE / std(B) per channel (fallback to global std if zero)
+        "range" => NRMSE = RMSE / (max(B)-min(B)) per channel (fallback if degenerate)
+
+        Returns overall scalars plus per-channel arrays.
+        """
+        import numpy as np
+        if A is None or B is None:
+            return {"present": False, "name": name}
+
+        A = np.asarray(A); B = np.asarray(B)
+        if A.ndim == 1: A = A.reshape(-1, 1)
+        if B.ndim == 1: B = B.reshape(-1, 1)
+
+        T = min(A.shape[0], B.shape[0])
+        A = A[:T]; B = B[:T]
+
+        if burn_in > 0:
+            A = A[burn_in:]
+            B = B[burn_in:]
+
+        finite = np.isfinite(A) & np.isfinite(B)
+        if not finite.any():
+            return {"present": True, "name": name, "T": int(A.shape[0]), "n": int(A.shape[1]),
+                    "any_nonfinite": True}
+
+        # mask out non-finite entries columnwise
+        E_list, rmse_cols, mae_cols, maxabs_cols, corr_cols, nrmse_cols = [], [], [], [], [], []
+        l2_energy_cols = []
+        ncols = A.shape[1]
+        for j in range(ncols):
+            f = finite[:, j]
+            a = A[f, j]; b = B[f, j]
+            e = a - b
+            E_list.append(e)
+            if e.size == 0:
+                rmse_cols.append(np.nan); mae_cols.append(np.nan)
+                maxabs_cols.append(np.nan); l2_energy_cols.append(np.nan)
+                corr_cols.append(np.nan); nrmse_cols.append(np.nan)
+                continue
+            rmse = float(np.sqrt(np.mean(e**2)))
+            mae  = float(np.mean(np.abs(e)))
+            maxa = float(np.max(np.abs(e)))
+            l2e  = float(np.sqrt(np.sum(e**2)))
+            rmse_cols.append(rmse); mae_cols.append(mae)
+            maxabs_cols.append(maxa); l2_energy_cols.append(l2e)
+            # correlation is optional; guard degenerate variance
+            if np.std(a) > 0 and np.std(b) > 0:
+                corr = float(np.corrcoef(a, b)[0, 1])
+            else:
+                corr = np.nan
+            corr_cols.append(corr)
+
+            if normalize == "std":
+                denom = np.std(b)
+                nrmse = rmse / denom if denom > 0 else np.nan
+            elif normalize == "range":
+                rng = np.max(b) - np.min(b)
+                nrmse = rmse / rng if rng > 0 else np.nan
+            else:
+                nrmse = np.nan
+            nrmse_cols.append(float(nrmse))
+
+        # aggregate over columns using finite values
+        rmse_cols_np = np.array(rmse_cols, dtype=float)
+        mae_cols_np  = np.array(mae_cols, dtype=float)
+        max_cols_np  = np.array(maxabs_cols, dtype=float)
+        l2_cols_np   = np.array(l2_energy_cols, dtype=float)
+        nrmse_cols_np = np.array(nrmse_cols, dtype=float)
+        corr_cols_np  = np.array(corr_cols, dtype=float)
+
+        def _finite_mean(x): 
+            x = x[np.isfinite(x)]
+            return float(np.mean(x)) if x.size else float("nan")
+
+        overall = {
+            "present": True,
+            "name": name,
+            "T_used": int(A.shape[0]),
+            "n_signals": int(ncols),
+            "rmse_mean": _finite_mean(rmse_cols_np),
+            "mae_mean":  _finite_mean(mae_cols_np),
+            "maxabs_mean": _finite_mean(max_cols_np),
+            "l2_energy_mean": _finite_mean(l2_cols_np),
+            "corr_mean": _finite_mean(corr_cols_np),
+            "nrmse_mean": _finite_mean(nrmse_cols_np),
+            "rmse_cols": rmse_cols,
+            "mae_cols": mae_cols,
+            "maxabs_cols": maxabs_cols,
+            "l2_energy_cols": l2_energy_cols,
+            "corr_cols": corr_cols,
+            "nrmse_cols": nrmse_cols,
+            "normalize": normalize,
+            "burn_in": int(burn_in),
+        }
+        # a cleaner single scalar to optimize on if you need just one:
+        overall["rmse_overall"] = overall["rmse_mean"]
+        overall["nrmse_overall"] = overall["nrmse_mean"]
+        return overall
+
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
-    def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", plot: bool = True, re_evaluate: bool = False) -> dict:
+    def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", plot: bool = True, re_evaluate: bool = False,
+                           burn_in: int = 0, normalize: str = None, error_weights: dict = None) -> dict:
         """
         Compare MBD vs DDD for the SAME method ('lmi' or 'baseline').
 
@@ -457,6 +570,43 @@ class ResultsComparator:
         print(f"{method.upper()} DDD objective: {objD}")
 
 
+        traj_errors = {}
+        aggregate = {"weighted_rmse": None, "weights": None}
+
+        if z_mbd.exists() and z_ddd.exists():
+            # Pairwise errors: MBD vs DDD
+            err_x  = self._traj_error_stats(XM, XD, name="x",  burn_in=burn_in, normalize=normalize)
+            err_xc = self._traj_error_stats(XcM, XcD, name="xc", burn_in=burn_in, normalize=normalize)
+            err_u  = self._traj_error_stats(UM, UD, name="u",  burn_in=burn_in, normalize=normalize)
+            err_y  = self._traj_error_stats(YM, YD, name="y",  burn_in=burn_in, normalize=normalize)
+            err_z  = self._traj_error_stats(ZM, ZD, name="z",  burn_in=burn_in, normalize=normalize)
+            traj_errors = {"x": err_x, "xc": err_xc, "u": err_u, "y": err_y, "z": err_z}
+
+            # Aggregate scalar for tuning: default to y,z only unless you say otherwise
+            if error_weights is None:
+                error_weights = {"y": 0.5, "z": 0.5}
+            num = 0.0; den = 0.0
+            for k, w in error_weights.items():
+                e = traj_errors.get(k, {})
+                rmse = e.get("nrmse_overall") if normalize else e.get("rmse_overall")
+                if rmse is not None and np.isfinite(rmse):
+                    num += float(w) * float(rmse)
+                    den += float(w)
+            aggregate["weighted_rmse"] = float(num / den) if den > 0 else None
+            aggregate["weights"] = {k: float(v) for k, v in error_weights.items()}
+
+        # Optional: composite closed-loop error if you saved composite NPZs
+        comp_errors = {}
+        if c_mbd.exists() and c_ddd.exists():
+            cM = np.load(c_mbd, allow_pickle=True); cD = np.load(c_ddd, allow_pickle=True)
+            _, XMc, _, ZMc, *_ = self._npz_extract_states(cM)
+            _, XDc, _, ZDc, *_ = self._npz_extract_states(cD)
+            comp_errors = {
+                "x": self._traj_error_stats(XMc, XDc, name="x_comp", burn_in=burn_in, normalize=normalize),
+                "z": self._traj_error_stats(ZMc, ZDc, name="z_comp", burn_in=burn_in, normalize=normalize),
+            }
+
+
         api = MatricesAPI()
         p_MDB = Plant(A=plntM.A, Bu=plntM.Bu, Bw=plntM.Bw, Cy=plntM.Cy, Dyw=plntM.Dyw, Cz=plntM.Cz, Dzu=plntM.Dzu, Dzw=plntM.Dzw)
         c_MDB = Controller(Ac=ctrlM.Ac, Bc=ctrlM.Bc, Cc=ctrlM.Cc, Dc=ctrlM.Dc)
@@ -579,7 +729,12 @@ class ResultsComparator:
                     "MBD": self.plant_to_dict(p_MDB), 
                     "DDD": self.plant_to_dict(p_DDD),
                 },
-            }
+            },
+            "trajectory_errors": {
+                "signals": traj_errors,
+                "composite": comp_errors,
+                "aggregate": aggregate,
+            },
         }
         # Save side-by-side comparison JSON next to the MBD run
         out_comp = (self.out_root / method / f"{base}___comparison_MBD_vs_DDD.json")

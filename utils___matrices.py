@@ -168,7 +168,7 @@ class MatricesAPI():
         self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
 
 
-    def get_system(self, Generating_data=False, **kwargs):
+    def get_system(self, FROM_DATA: bool = None, Generating_data=False, **kwargs):
         """
         If FROM_DATA=True, pass data_csv="path/to/file.csv" (and optional settings).
         Example:
@@ -178,8 +178,9 @@ class MatricesAPI():
                     nw=None, ny=None, nz=None,
                     ridge=1e-6)
         """
-
-        if self.p.get("FROM_DATA", False) and not Generating_data:
+        FROM_DATA = FROM_DATA if FROM_DATA is not None else self.p.get("FROM_DATA", False)
+        
+        if FROM_DATA or Generating_data:                    
             print("\nBuilding system from data...\n\n")
             return self.make_matrices_from_data(**kwargs)
         else:

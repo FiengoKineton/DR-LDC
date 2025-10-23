@@ -116,7 +116,7 @@ class Closed_Loop():
         U  = np.zeros((T, nu))
         Z  = np.zeros((T, nz))
 
-        wass = WassersteinAmbiguitySet(gamma)
+        wass = WassersteinAmbiguitySet(gamma=gamma)
         W = wass.sample(T=T)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -255,7 +255,7 @@ class Closed_Loop():
         x = np.zeros((nX, 1))
 
         # Disturbance generation
-        wass = WassersteinAmbiguitySet(gamma)
+        wass = WassersteinAmbiguitySet(gamma=gamma)
         W = wass.sample(T=T)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -390,12 +390,11 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=False):
+    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=False, PLOT=False, gamma: float = None):
         self.p = cfg.get("params", {})
         out = self.p.get("directories", {}).get("data", "./out/data/session_01")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent")
-        #_data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
         self.csv_path = out + f"___{_type}_{_model}.csv"    # _{_data}
 
@@ -408,7 +407,7 @@ class Open_Loop():
         self.Tf = self.p.get("simulation", {}).get("TotTime", 0.05)
 
 
-        if MAKE_DATA: self.make_data()
+        if MAKE_DATA: self.make_data(gamma=gamma)
         if EVAL_FROM_PATH: self.evaluate_from_path()
         if PLOT: 
             metrics = self.plot_est_vs_truth(x0_mode="e1", show=True)
@@ -420,7 +419,7 @@ class Open_Loop():
     """
 
 
-    def make_data(self):
+    def make_data(self, gamma: float = None):
         ap = argparse.ArgumentParser(description="Simulate open-loop with persistently exciting input and save CSV.")
         ap.add_argument("--T", type=int, default=3000, help="number of time steps")
         ap.add_argument("--seed", type=int, default=0)
@@ -434,7 +433,7 @@ class Open_Loop():
         T = args.T
         rng = np.random.default_rng(args.seed)
 
-        wass = WassersteinAmbiguitySet()
+        wass = WassersteinAmbiguitySet(gamma=gamma)
         W = wass.sample(T=T).T
         api = MatricesAPI()
         plant, _ = api.get_system(Generating_data=True)
