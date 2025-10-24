@@ -1,4 +1,0 @@
-numpy
-scipy
-cvxpy>=1.4
-matplotlib
