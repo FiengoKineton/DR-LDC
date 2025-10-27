@@ -28,6 +28,23 @@ Both produce controllers for the same plant model and evaluate closed-loop perfo
 
 ---
 
+## Optimal γ by parameter combination
+
+The optimization produced the following γ values for `method="lmi"` with `model="correlated"`.  
+If the combo isn’t listed (different `model` or `method`), γ is taken from the config at `ambiguity.gamma`.
+
+| method | model       | stabilise | use_set_out_mats | runID                       | γ (opt)            |
+|:------:|:-----------:|:---------:|:----------------:|:----------------------------|:-------------------|
+| lmi    | correlated  | true      | true             | Opt&SetOutMats&Stabilise    | 0.41640786499873816 |
+| lmi    | correlated  | true      | false            | Opt&Stabilise               | 0.6180339887498949  |
+| lmi    | correlated  | false     | true             | Opt&SetOutMats              | 0.06888370749726605 |
+| lmi    | correlated  | false     | false            | Opt                          | 0.9016994374947425  |
+| lmi    | independent | —         | —                | —                            | `ambiguity.gamma`   |
+| other  | —           | —         | —                | —                            | `ambiguity.gamma`   |
+
+
+---
+
 ## ⚙️ How It Works
 
 ### Overview
@@ -44,14 +61,14 @@ The repository supports two synthesis modes:
 
 ```mermaid
 flowchart TD
-    P1[problem___parameters.yaml] --> A1[utilis___systems.py<br>Plant & Controller classes]
-    A1 --> A2[utilis___matrices.py<br>Compose (A,B,C,D)]
-    A2 --> A3[problem___baseline.py<br>Monte Carlo Optimization]
-    A2 --> A4[problem___dro_lmi.py<br>DRO-LMI Synthesis]
-    A3 --> S1[utilis___simulate.py<br>Closed-Loop Simulation]
-    A4 --> R1[Recover Controller]
+    P1["problem___parameters.yaml"] --> A1["utilis___systems.py<br/>Plant &amp; Controller classes"]
+    A1 --> A2["utilis___matrices.py<br/>Compose (A,B,C,D)"]
+    A2 --> A3["problem___baseline.py<br/>Monte Carlo Optimization"]
+    A2 --> A4["problem___dro_lmi.py<br/>DRO-LMI Synthesis"]
+    A3 --> S1["utilis___simulate.py<br/>Closed-Loop Simulation"]
+    A4 --> R1["Recover Controller"]
     R1 --> S1
-    S1 --> OUT[out/artifacts/ JSON + NPZ]
+    S1 --> OUT["out/artifacts/ JSON + NPZ + PDF"]
 ```
 
 ---
@@ -132,7 +149,7 @@ Artifacts stored in `out/artifacts/lmi/`.
 Each run generates:
 - `*.json` → parameters, matrices, metadata  
 - `*.npz` → trajectories and arrays  
-- `.png` plots under the same directory  
+- `.pdf` plots under the same directory  
 
 ---
 
