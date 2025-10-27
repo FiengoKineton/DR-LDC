@@ -2,8 +2,9 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # VAR ------------------------------ "lmi" or "base"
   model: "correlated"                                                           # VAR ------------------------------ "correlated" or "independent"
-  FROM_DATA: true                                                               # VAR ------------------------------ true or false
+  FROM_DATA: false                                                               # VAR ------------------------------ true or false
 
+  save: true                                                                    # VAR ------------------------------ true or false
   plot: true                                                                    # VAR ------------------------------ true or false
   ALL: false                                                                    # VAR ------------------------------ true or false
   use_set_out_mats: true                                                        # VAR ------------------------------ true or false
@@ -22,7 +23,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "GammaOptSetOutMatsUnstabilised"                                     # VAR ------------------------------ look for the names in main.py
+    runID: "temp"                                                 # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set

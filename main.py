@@ -283,27 +283,30 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
         cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
-    out = p.get("directories", {}).get("artifacts", "./out/artifacts/")
-    runID = p.get("directories", {}).get("runID", "temp")
+    out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
+    _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent")
     _method = p.get("method", "lmi")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
-    plot = bool(p.get("plot", False)) if runID != "GammaOpt" else False
+    plot = bool(p.get("plot", False)) if _runID != "GammaOpt" else False
     _data = "DDD" if FROM_DATA else "MBD"
     gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     comp = args.comp if comp is None else comp
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
-    path_name = f"/run_{runID}___{_type}_{_model}_{_data}"
+    path_name = f"{_type}_{_model}_{_data}"
 
     if comp:
-        cmp = ResultsComparator(out_root=out)
-        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, plot=plot)
+        cmp = ResultsComparator(out_root=out, save=p.get("save", False))
+        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=plot)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
-        out = Path(out).with_suffix("").as_posix() + f"/{_method}" + path_name
+        out = out / f"{_method}" / f"run_{_runID}"
+        out.mkdir(parents=True, exist_ok=True)
+        out = out / path_name
+        out = out.as_posix()
 
         if _method == "base":
             print("\nRunning baseline optimization...")

@@ -382,13 +382,13 @@ if __name__ == "__main__":
 
     p = cfg.get("params", {})
     out = p.get("directories", {}).get("artifacts", "./out/artifacts/")
-    runID = p.get("directories", {}).get("runID", "temp")
+    _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent")
     _method = p.get("method", "lmi")
 
-    path_name = f"/run_{runID}___{_type}_{_model}_GammaSweep.csv"
-    csv_path = Path(out).with_suffix("").as_posix() + f"/{_method}" + path_name
+    path_name = f"/{_type}_{_model}_GammaSweep.csv"
+    csv_path = Path(out).with_suffix("").as_posix() + f"/{_method}" + f"/run_{_runID}" + path_name
 
     # one unified schema for ALL rows
     fields = [

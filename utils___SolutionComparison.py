@@ -1,4 +1,4 @@
-import json, sys
+import json, sys, os
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,11 +12,12 @@ from utils___matrices import MatricesAPI
 
 
 class ResultsComparator:
-    def __init__(self, out_root: str):
+    def __init__(self, out_root: str, save: bool = False):
         """
         out_root: artifacts root, e.g. "./out/artifacts/"
         """
         self.out_root = Path(out_root).with_suffix("")
+        self.save = save
 
     # ------------------------ helpers: i/o & reconstruction ------------------------
 
@@ -199,7 +200,7 @@ class ResultsComparator:
         return t, X, Y, Z, U, Xc
 
     @staticmethod
-    def _plot_overlay_states(t, XM, XD, l, title: str):
+    def _plot_overlay_states(t, XM, XD, l, title: str, save: bool, save_path: str):
         XM = np.atleast_2d(XM)
         XD = np.atleast_2d(XD)
         T = min(XM.shape[0], XD.shape[0])
@@ -222,6 +223,10 @@ class ResultsComparator:
         axes[0].set_title(title)
         axes[0].legend(loc="best")
         plt.tight_layout()
+
+        if save: 
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
         #plt.show()
 
     def _eig_stats(self, A: np.ndarray) -> dict:
@@ -406,7 +411,7 @@ class ResultsComparator:
 
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
-    def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", plot: bool = True, re_evaluate: bool = False,
+    def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", ID: str = "temp", plot: bool = True, re_evaluate: bool = False,
                            burn_in: int = 0, normalize: str = None, error_weights: dict = None) -> dict:
         """
         Compare MBD vs DDD for the SAME method ('lmi' or 'baseline').
@@ -418,6 +423,7 @@ class ResultsComparator:
           and their ___closed_loop_run.npz
         """
         method = method.strip().lower()
+        ID = ID.strip().lower()
         assert method in ("lmi", "base"), "method must be 'lmi' or 'baseline'"
 
         suffix = path_name.lstrip("/\\")
@@ -425,7 +431,7 @@ class ResultsComparator:
             raise ValueError("path_name must end with '_MBD' or '_DDD'.")
 
         base = suffix.rsplit("_", 1)[0]
-        run_dir = self.out_root / method
+        run_dir = self.out_root / method / f"run_{ID}"
         j_mbd = run_dir / f"{base}_MBD___results_run.json"
         j_ddd = run_dir / f"{base}_DDD___results_run.json"
         z_mbd = run_dir / f"{base}_MBD___closed_loop_run.npz"
@@ -632,15 +638,20 @@ class ResultsComparator:
             T = min(XM.shape[0], XD.shape[0])
 
             title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title)            
+            save_path = run_dir / f"{base}_overlay_sys_states.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title, save=self.save, save_path=save_path)            
             title = f"{method.upper()} closed-loop: cntrl states (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", title)
+            save_path = run_dir / f"{base}_overlay_ctrl_states.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", title, save=self.save, save_path=save_path)
             title = f"{method.upper()} closed-loop: inputs (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", title)
+            save_path = run_dir / f"{base}_overlay_ctrl_inputs.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", title, save=self.save, save_path=save_path)
             title = f"{method.upper()} closed-loop: outputs (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", title)            
+            save_path = run_dir / f"{base}_overlay_sys_outputs.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", title, save=self.save, save_path=save_path)            
             title = f"{method.upper()} closed-loop: perf. outputs (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title)
+            save_path = run_dir / f"{base}_overlay_perf_outputs.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title, save=self.save, save_path=save_path)
             plt.show()
 
             if re_evaluate:
@@ -666,9 +677,11 @@ class ResultsComparator:
             T = min(XM.shape[0], XD.shape[0])
 
             title = f"{method.upper()} composite closed-loop: states (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title)            
+            save_path = run_dir / f"{base}_overlay_CL_sys_states.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title, save=self.save, save_path=save_path)            
             title = f"{method.upper()} composite closed-loop: perf. outputs (MBD vs DDD)"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title)
+            save_path = run_dir / f"{base}_overlay_CL_perf_outputs.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title, save=self.save, save_path=save_path)
             plt.show()
 
             if re_evaluate:
@@ -737,7 +750,7 @@ class ResultsComparator:
             },
         }
         # Save side-by-side comparison JSON next to the MBD run
-        out_comp = (self.out_root / method / f"{base}___comparison_MBD_vs_DDD.json")
+        out_comp = (self.out_root / method / f"run_{ID}" / f"{base}___comparison_MBD_vs_DDD.json")
         with open(out_comp, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         print(f"[compare] saved summary: {out_comp}")
