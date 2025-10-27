@@ -4,6 +4,13 @@ from scipy.linalg import sqrtm
 import yaml, sys
 import matplotlib.pyplot as plt
 
+yaml_path = "problem___parameters.yaml"
+if yaml is None:
+    raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+with open(yaml_path, "r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
+
+
 
 class WassersteinAmbiguitySet:
     """
@@ -11,11 +18,7 @@ class WassersteinAmbiguitySet:
     - W_ind: iid disturbances with that marginal
     - W_cor: arbitrary temporal correlation but each marginal in the ball
     """
-    def __init__(self, gamma: float = None, yaml_path = "problem___parameters.yaml"):
-        if yaml is None:
-            raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+    def __init__(self, gamma: float = None):
 
         p = cfg.get("params", {})
         set = p.get("ambiguity", {})
@@ -97,7 +100,7 @@ class WassersteinAmbiguitySet:
 
     # ---------- sampling utilities ----------
 
-    def sample(self, T:int, Sigma: np.ndarray = None) -> np.ndarray:
+    def sample(self, T:int = None, Sigma: np.ndarray = None) -> np.ndarray:
         """
         Sample a disturbance sequence of length T from the ambiguity set.
         Uses the specified mode ("independent" or "correlated").
@@ -173,10 +176,101 @@ class WassersteinAmbiguitySet:
         S = self.empirical_marginal_cov(w)
         return self.is_member_gaussian(S)
 
+# =====================================================================================
+
+class WithoutNoise():
+    def __init__(self):
+        p = cfg.get("params", {})
+        sim = p.get("simulation", {})
+        Tf = sim.get("TotTime", 100)
+        self.ts = sim.get("ts", 0.5)
+        
+        self.mode = p.get("model", "independent")
+        self.T = int(Tf / self.ts)
+        self.Sigma_nom = None
+        self.gamma = None
+        self.rng = np.random.default_rng()
+        self._chol_nom = None
+        self.time = np.arange(self.T)*self.ts
+        self.p = p
+
+    def sample(self, T:int = None, Sigma: np.ndarray = None) -> np.ndarray:
+        T = T if T is not None else self.T
+        nw = Sigma[0].size if Sigma is not None else self.p.get("dimensions", {}).get("nw", 2)
+        return np.zeros((T, nw))
+
+    def is_member_empirical(self, w: np.ndarray) -> bool:
+        return True
+
+# =====================================================================================
+
+class GaussianNoise:
+    def __init__(self):
+        p   = cfg.get("params", {})
+        amb = p.get("ambiguity", {})
+        sim = p.get("simulation", {})
+        self.Sigma = np.array(amb.get("Sigma", np.eye(1)))
+        self.Sigma_nom = self.Sigma
+        self.gamma = None
+        Tf      = float(sim.get("TotTime", 100.0))
+        self.ts = float(sim.get("ts", 0.5))
+        self.T  = int(round(Tf / self.ts))
+        self.time = np.arange(self.T) * self.ts
+        self.rng = np.random.default_rng()
+
+    def sample(self, T: int = None):
+        T = int(T) if T is not None else self.T
+        L = cholesky(0.5*(self.Sigma + self.Sigma.T))
+        z = self.rng.standard_normal(size=(T, L.shape[0]))
+        return z @ L.T
+    
+    def is_member_empirical(self, w: np.ndarray) -> bool:
+        return True
+
+# =====================================================================================
+
+class Disturbances:
+    """
+    Thin delegating wrapper. Disturbances.impl holds the real object.
+    You can call dist.sample(T=...) regardless of which model you selected.
+    """
+    def __init__(self, gamma: float = None, model: str = None):
+        p   = cfg.get("params", {})
+        amb = p.get("ambiguity", {})
+        model = amb.get("model", "W2") if model is None else model
+        self.impl = self._select(model, gamma)
+
+        # convenience mirrors so your demo prints work
+        self.mode = getattr(self.impl, "mode", model)
+        self.gamma = getattr(self.impl, "gamma", gamma)
+        self.Sigma_nom = getattr(self.impl, "Sigma_nom", None)
+        self.time = getattr(self.impl, "time", None)
+        self.ts = getattr(self.impl, "ts", None)
+        self.T = getattr(self.impl, "T", None)
+
+    def _select(self, model: str, gamma: float):
+        if model == "W2":
+            if gamma is not None and gamma < 0:
+                raise ValueError("gamma must be nonnegative")
+            return WassersteinAmbiguitySet(gamma=gamma)
+        if model == "zero":
+            return WithoutNoise()
+        if model == "Gaussian":
+            return GaussianNoise()
+        raise ValueError(f"Unknown ambiguity model: {model}")
+
+    def __getattr__(self, name: str):
+        # delegate all other attributes/methods to the concrete implementation
+        return getattr(self.impl, name)
+
+    def __repr__(self):
+        return f"Disturbances(mode={self.mode!r}, gamma={self.gamma!r})"
+
+# =====================================================================================
 
 if __name__ == "__main__":
     # simple test
-    wass = WassersteinAmbiguitySet()
+    wass = Disturbances(model="Gaussian")
     print("Nominal Sigma:\n", wass.Sigma_nom)
     print("Gamma:", wass.gamma)
     print("Mode:", wass.mode)
@@ -188,7 +282,7 @@ if __name__ == "__main__":
 
     plt.figure()
     plt.title(f"{wass.mode} samples")
-    plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
+    #plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
     plt.plot(t, w)
     plt.xlabel("Time")
     plt.grid()

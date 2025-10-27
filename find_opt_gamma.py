@@ -382,9 +382,10 @@ if __name__ == "__main__":
 
     p = cfg.get("params", {})
     out = p.get("directories", {}).get("artifacts", "./out/artifacts/")
+    m = p.get("ambiguity", {}).get("model", "W2")
     _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
-    _model = p.get("model", "independent")
+    _model = p.get("model", "independent") if m=="W2" else m
     _method = p.get("method", "lmi")
 
     path_name = f"/{_type}_{_model}_GammaSweep.csv"

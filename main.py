@@ -284,15 +284,21 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
     p = cfg.get("params", {})
     out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
+    m = p.get("ambiguity", {}).get("model", "W2")
     _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
-    _model = p.get("model", "independent")
+    _model = p.get("model", "independent") if m == "W2" else m
     _method = p.get("method", "lmi")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
     plot = bool(p.get("plot", False)) if plot is None else plot
     _data = "DDD" if FROM_DATA else "MBD"
-    gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     comp = args.comp if comp is None else comp
+
+    #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
+    if gamma is None or m != "W2":
+        gamma = p.get("ambiguity", {}).get("gamma", 0.5)
+    else:
+        gamma = gamma
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 

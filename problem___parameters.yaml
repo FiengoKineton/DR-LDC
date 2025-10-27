@@ -23,7 +23,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "temp"                                                               # VAR ------------------------------ look for the names in main.py
+    runID: "NoiseFree"                                                               # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
@@ -36,7 +36,7 @@ params:
 
 
   ambiguity:
-    model: "W2"                                                                 # set
+    model: "zero"                                                               # VAR ------------------------------ [W2, zero, Gaussian]
     gamma: 0.5                                                                  # VAR ------------------------------ look for the values in main.py
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
   

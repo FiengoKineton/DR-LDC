@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, Iterable
 
 #from utils___matrices import MatricesAPI
 from utils___systems import Plant, Controller, Plant_cl
-from utils___ambiguity import WassersteinAmbiguitySet
+from utils___ambiguity import Disturbances
 
 
 yaml_path="problem___parameters.yaml"
@@ -117,7 +117,7 @@ class Closed_Loop():
         U  = np.zeros((T, nu))
         Z  = np.zeros((T, nz))
 
-        wass = WassersteinAmbiguitySet(gamma=gamma)
+        wass = Disturbances(gamma=gamma)
         W = wass.sample(T=T)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -256,7 +256,7 @@ class Closed_Loop():
         x = np.zeros((nX, 1))
 
         # Disturbance generation
-        wass = WassersteinAmbiguitySet(gamma=gamma)
+        wass = Disturbances(gamma=gamma)
         W = wass.sample(T=T)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -439,7 +439,7 @@ class Open_Loop():
         T = args.T
         rng = np.random.default_rng(args.seed)
 
-        wass = WassersteinAmbiguitySet(gamma=gamma)
+        wass = Disturbances(gamma=gamma)
         W = wass.sample(T=T).T
         #api = MatricesAPI()
         #plant, _ = api.get_system(Generating_data=True)
