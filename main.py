@@ -270,12 +270,12 @@ class lmi_pipeline_optim_problem():
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
 def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
-    #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
-    #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
+    parser = argparse.ArgumentParser(description="DRO LMI Optimization")
+    parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
     #parser.add_argument("--p", action="store_true", help="Force Plot")
     #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
-    #args = parser.parse_args()
+    args = parser.parse_args()
 
     if yaml is None:
         raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
@@ -292,7 +292,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     plot = bool(p.get("plot", False)) if runID != "GammaOpt" else False
     _data = "DDD" if FROM_DATA else "MBD"
     gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
-    #comp = args.comp if comp is None else comp
+    comp = args.comp if comp is None else comp
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
@@ -322,9 +322,20 @@ if __name__ == "__main__":
 
     p = cfg.get("params", {})
 
-    if p.get("method", "lmi") == "lmi":
-        if bool(p.get("use_set_out_mats", False)):
-            gamma = 0.17960675006309104
+    if p.get("method", "lmi") == "lmi":                         # set method: "lmi"
+        if p.get("model", "correlated") == "correlated":        # ------| set model: "correlated"
+            if bool(p.get("ident", {}).get("stabilise", True)): # ------|-------| set stabilise: true
+                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: GammaOptSetOutMats
+                    gamma = 0.17960675006309104
+                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: GammaOpt
+                    gamma = 0.6173008513140374
+            else:                                               # ------|-------| set stabilise: false
+                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: GammaOptSetOutMatsUnstabilised
+                    gamma = 0.6173008513140374
+                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: GammaOptUnstabilised
+                    gamma = 0.07774746368890678
+        else:                                                   # ------| set model: "independent"
+            gamma = p.get("ambiguity", {}).get("gamma", 0.5)
     else:
         gamma = p.get("ambiguity", {}).get("gamma", 0.5)
 

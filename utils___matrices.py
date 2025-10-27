@@ -571,7 +571,7 @@ class MatricesAPI():
         use_iv         = bool(ident.get("use_iv", False))
         plant_iv_ols   = bool(ident.get("plant_iv_ols", False))
         sigma_v2       = None                                              # 2.5e-4
-        stable_project = True
+        stable_project = bool(ident.get("stabilise", True))
         nw_energy      = 0.95
         X_iv_path      = ident.get("X_iv_path", None)
 

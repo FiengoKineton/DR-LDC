@@ -924,10 +924,10 @@ class Open_Loop():
 ## ------------------------------ MAIN ENTRY POINT ---------------------------------
 
 if __name__ == "__main__":
-    CL = 1
-    OL = 0
+    CL = 0
+    OL = 1
 
-    if CL: Closed_Loop(TEST=True)
-    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True, PLOT=True)
+    if CL: Closed_Loop(TEST=False)
+    if OL: Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=True)
 
 
