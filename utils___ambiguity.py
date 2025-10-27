@@ -10,7 +10,7 @@ if yaml is None:
 with open(yaml_path, "r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
 
-
+# =====================================================================================
 
 class WassersteinAmbiguitySet:
     """
@@ -209,8 +209,7 @@ class GaussianNoise:
         p   = cfg.get("params", {})
         amb = p.get("ambiguity", {})
         sim = p.get("simulation", {})
-        self.Sigma = np.array(amb.get("Sigma", np.eye(1)))
-        self.Sigma_nom = self.Sigma
+        self.Sigma_nom = np.array(amb["Sigma_nom"], dtype=float)
         self.gamma = None
         Tf      = float(sim.get("TotTime", 100.0))
         self.ts = float(sim.get("ts", 0.5))
@@ -218,9 +217,10 @@ class GaussianNoise:
         self.time = np.arange(self.T) * self.ts
         self.rng = np.random.default_rng()
 
-    def sample(self, T: int = None):
+    def sample(self, T: int = None, Sigma: np.ndarray = None) -> np.ndarray:
         T = int(T) if T is not None else self.T
-        L = cholesky(0.5*(self.Sigma + self.Sigma.T))
+        Sigma = Sigma if Sigma is not None else self.Sigma_nom
+        L = cholesky(0.5*(Sigma + Sigma.T))
         z = self.rng.standard_normal(size=(T, L.shape[0]))
         return z @ L.T
     

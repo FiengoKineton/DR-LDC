@@ -163,9 +163,10 @@ class MatricesAPI():
     def __init__(self):
         self.p = cfg.get("params", {})
         out = self.p.get("directories", {}).get("data", "./out/data/session_")
+        m = self.p.get("ambiguity", {}).get("model", "W2")
         runID = self.p.get("directories", {}).get("runID", "temp")
         _type = self.p.get("plant", {}).get("type", "explicit")
-        _model = self.p.get("model", "independent")
+        _model = self.p.get("model", "independent") if m == "W2" else m
         #_data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
         self.csv_path = out + f"{runID}___{_type}_{_model}.csv"    # _{_data}
@@ -558,22 +559,26 @@ class MatricesAPI():
 
         # ------------------------- LOAD DATA -------------------------
 
-        blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
-        X_raw, U_raw, X1_raw = blocks["X"], blocks["U"], blocks["X_next"]
-        X, U, X_next = demean(X_raw), demean(U_raw), demean(X1_raw)
-        T = X_raw.shape[1]
-
-        nx, _, nu, ny, nz = self.get_dimensions_from_yaml()
-
         # Identification options
         ident          = self.p.get("ident", {})
         use_bc         = bool(ident.get("use_bc", False))
+        zero_mean      = bool(ident.get("zero_mean", False))
         use_iv         = bool(ident.get("use_iv", False))
         plant_iv_ols   = bool(ident.get("plant_iv_ols", False))
         sigma_v2       = None                                              # 2.5e-4
         stable_project = bool(ident.get("stabilise", True))
         nw_energy      = 0.95
         X_iv_path      = ident.get("X_iv_path", None)
+
+        blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
+        X_raw, U_raw, X1_raw = blocks["X"], blocks["U"], blocks["X_next"]
+        if zero_mean:
+            X, U, X_next = demean(X_raw), demean(U_raw), demean(X1_raw)
+        else:
+            X, U, X_next = X_raw, U_raw, X1_raw
+        T = X_raw.shape[1]
+
+        nx, _, nu, ny, nz = self.get_dimensions_from_yaml()
 
         # ---------- Raw “moments” for the SDP (no demeaning) ----------
         Phi_raw = np.vstack([U_raw, X_raw])   # (nu+nx) x T
@@ -627,8 +632,10 @@ class MatricesAPI():
 
         # ------------------------- Outputs (same as before) -------------------------
 
-        Y = demean(blocks["Y"])          # may be None
-        Z = demean(blocks["Z"])          # may be None
+        if zero_mean:
+            Y, Z = demean(blocks["Y"]), demean(blocks["Z"])  
+        else: 
+            Y, Z = blocks["Y"], blocks["Z"]
 
         if self.use_set_out_mats or ((Y is None or Y.size == 0) or (Z is None or Z.size == 0)):
             Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices(nw=nw_eff)

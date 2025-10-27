@@ -1,7 +1,7 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # VAR ------------------------------ "lmi" or "base"
-  model: "correlated"                                                           # VAR ------------------------------ "correlated" or "independent"
+  model: "independent"                                                           # VAR ------------------------------ "correlated" or "independent"
   FROM_DATA: 0                                                                  # VAR ------------------------------ true or false
 
   save: 1                                                                       # VAR ------------------------------ true or false
@@ -17,13 +17,14 @@ params:
   ident:
     use_bc: 0                                                                   # set | not used yet
     use_iv: 0                                                                   # set | not used yet
+    zero_mean: 0                                                                # set | leave it at 0
     X_iv_path: "data/experiment_iv_states.csv"                                  # set | not used yet
-    stabilise: 0                                                                # VAR ------------------------------ true or false
+    stabilise: 0                                                                # set | leave it at 0
   
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "NoiseFree"                                                               # VAR ------------------------------ look for the names in main.py
+    runID: "temp"                                                               # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
@@ -36,7 +37,7 @@ params:
 
 
   ambiguity:
-    model: "zero"                                                               # VAR ------------------------------ [W2, zero, Gaussian]
+    model: "W2"                                                                 # VAR ------------------------------ [W2, zero, Gaussian]
     gamma: 0.5                                                                  # VAR ------------------------------ look for the values in main.py
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
   
