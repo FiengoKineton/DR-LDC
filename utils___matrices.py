@@ -169,6 +169,7 @@ class MatricesAPI():
         #_data = "DDD" if bool(self.p.get("FROM_DATA", False)) else "MBD"
 
         self.csv_path = out + f"{runID}___{_type}_{_model}.csv"    # _{_data}
+        self.use_set_out_mats = bool(self.p.get("use_set_out_mats", False))
 
 
     def get_system(self, FROM_DATA: bool = None, Generating_data: bool = False, gamma: float = None, **kwargs):
@@ -197,7 +198,7 @@ class MatricesAPI():
 
     # ------------------------- EXAMPLE SYSTEM CONSTRUCTION -------------------------
 
-    def build_out_matrices(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def build_out_matrices(self, nw: int = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
         # ======================================================================
         # Output-construction helpers
@@ -308,7 +309,7 @@ class MatricesAPI():
 
         dims = self.p.get("dimensions", {})
         nx = int(dims.get("nx"))
-        nw = int(dims.get("nw"))
+        nw = int(dims.get("nw")) if nw is None else nw
         nu = int(dims.get("nu"))
         ny = int(dims.get("ny"))
 
@@ -629,8 +630,8 @@ class MatricesAPI():
         Y = demean(blocks["Y"])          # may be None
         Z = demean(blocks["Z"])          # may be None
 
-        if (Y is None or Y.size == 0) or (Z is None or Z.size == 0):
-            Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
+        if self.use_set_out_mats or ((Y is None or Y.size == 0) or (Z is None or Z.size == 0)):
+            Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices(nw=nw_eff)
         else:
             # Y regression on [X; R]
             if ny is None:

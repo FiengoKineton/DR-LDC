@@ -1,10 +1,13 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}  # {nx: 4, nu: 2, nw: 2, ny: 2}
-  method: "lmi"                             # "base" or "lmi"
+  method: "lmi"                             # "base" or "lmi" or "comp"
   model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
   FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
+
   plot: true
-  save: false
+  ALL: false
+  use_set_out_mats: false
+
 
   simulation:
     ts: 0.05
@@ -19,7 +22,7 @@ params:
   directories:
     data: "./out/data/session_"
     artifacts: "./out/artifacts/"
-    runID: "01"                           # "GammaOpt"
+    runID: "02"                           # "xx" or "GammaOpt" or "SetOutMats"
 
   plant:
     #type: explicit  # change to random_stable if there a change of dimensions

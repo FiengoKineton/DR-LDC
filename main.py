@@ -270,12 +270,12 @@ class lmi_pipeline_optim_problem():
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
 def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
-    parser = argparse.ArgumentParser(description="DRO LMI Optimization")
-    parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
-    parser.add_argument("--base", action="store_true", help="Run baseline optimization")
-    parser.add_argument("--p", action="store_true", help="Force Plot")
-    parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
-    args = parser.parse_args()
+    #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
+    #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
+    #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
+    #parser.add_argument("--p", action="store_true", help="Force Plot")
+    #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
+    #args = parser.parse_args()
 
     if yaml is None:
         raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
@@ -289,10 +289,10 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     _model = p.get("model", "independent")
     _method = p.get("method", "lmi")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
-    plot = (bool(p.get("plot", False)) if runID != "GammaOpt" else False) if not args.p else True
+    plot = bool(p.get("plot", False)) if runID != "GammaOpt" else False
     _data = "DDD" if FROM_DATA else "MBD"
     gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
-    comp = args.comp if comp is None else comp
+    #comp = args.comp if comp is None else comp
 
     Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
 
@@ -315,4 +315,15 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
 
 
 if __name__ == "__main__":
-    main()
+    if yaml is None:
+        raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+    with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    p = cfg.get("params", {})
+    if bool(p.get("ALL", False)):
+        main(FROM_DATA=False)
+        main(FROM_DATA=True)
+        main(comp=True)
+    else:
+        main()
