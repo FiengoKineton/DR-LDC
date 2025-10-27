@@ -321,9 +321,17 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
-    if bool(p.get("ALL", False)):
-        main(FROM_DATA=False)
-        main(FROM_DATA=True)
-        main(comp=True)
+
+    if p.get("method", "lmi") == "lmi":
+        if bool(p.get("use_set_out_mats", False)):
+            gamma = 0.17960675006309104
     else:
-        main()
+        gamma = p.get("ambiguity", {}).get("gamma", 0.5)
+
+
+    if bool(p.get("ALL", False)):
+        main(FROM_DATA=False, gamma=gamma)
+        main(FROM_DATA=True, gamma=gamma)
+        main(comp=True, gamma=gamma)
+    else:
+        main(gamma=gamma)

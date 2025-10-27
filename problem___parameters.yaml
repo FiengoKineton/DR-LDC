@@ -4,8 +4,8 @@ params:
   model: "correlated"                       # "independent" | "correlated"  => the paper uses Correlated
   FROM_DATA: true                           # true => use data-driven DRO-LDC | false => use model-based DRO-LDC
 
-  plot: true
-  ALL: false
+  plot: false
+  ALL: true
   use_set_out_mats: false
 
 
@@ -37,7 +37,7 @@ params:
 
   ambiguity:
     model: "W2"                           # "W2" => Wasserstein-2 | "KL" => Kullback-Leibler
-    gamma: 0.6180339887498949             # 0.028251205750965087
+    gamma: 0.6180339887498949             # 0.399413 if SetOutMats
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]   # [[0.64033495, -0.44049879], [-0.44049879, 0.46091297]]
   
 
