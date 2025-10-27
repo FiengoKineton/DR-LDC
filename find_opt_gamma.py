@@ -11,11 +11,10 @@ make an optmisation problem based on the value of gamma such that i run
 """
 
 
-import math
-import sys
-import time
+import math, time, sys, yaml, csv, os, datetime
+from pathlib import Path
 import numpy as np
-from typing import Callable, Dict, Any, Tuple, Optional, List
+from typing import Callable, Dict, Any, Tuple, List
 
 from main import main
 from utils___simulate import Open_Loop
@@ -356,12 +355,115 @@ def optimize_gamma(
 # ==========================================================================================================================================================
 
 if __name__ == "__main__":
+    gamma_bounds = (0.0, 1.0)
+    signals = ["y", "z", "x", "u"]
+    signal_mix_weights = {"y": 0.3, "z": 0.4, "x": 0.2, "u": 0.1}
+    use_nrmse = True
+    weights = {"traj": 1.0, "mats": 0.1, "stab": 20.0}
+    delta_weights = {"ctrl": 1.0, "plant": 0.7, "comp": 0.3}
+    tol = 5e-3
+    max_iter = 30
+
     res = optimize_gamma(
-        gamma_bounds=(0.0, 1.0),
-        signals=["y", "z", "x", "u"],
-        signal_mix_weights={"y": 0.3, "z": 0.4, "x": 0.2, "u": 0.1},
-        use_nrmse=True,
-        weights={"traj": 1.0, "mats": 0.1, "stab": 20.0},
-        delta_weights={"ctrl": 1.0, "plant": 0.7, "comp": 0.3},
-        tol=5e-3, max_iter=30,
+        gamma_bounds=gamma_bounds,
+        signals=signals,
+        signal_mix_weights=signal_mix_weights,
+        use_nrmse=use_nrmse,
+        weights=weights,
+        delta_weights=delta_weights,
+        tol=tol, max_iter=max_iter,
     )
+
+
+    if yaml is None:
+        raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
+    with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    p = cfg.get("params", {})
+    out = p.get("directories", {}).get("artifacts", "./out/artifacts/")
+    runID = p.get("directories", {}).get("runID", "temp")
+    _type = p.get("plant", {}).get("type", "explicit")
+    _model = p.get("model", "independent")
+    _method = p.get("method", "lmi")
+
+    path_name = f"/run_{runID}___{_type}_{_model}_GammaSweep.csv"
+    csv_path = Path(out).with_suffix("").as_posix() + f"/{_method}" + path_name
+
+    # one unified schema for ALL rows
+    fields = [
+        # evaluation summary
+        "timestamp","tag","gamma","obj_total","E_traj","D_mats","P_stab",
+        "elapsed_sec","signals_used","use_nrmse","rho_mbd","rho_ddd",
+        # optimizer result footprint
+        "iters","interval_lo","interval_hi","history_len",
+        # knobs passed in
+        "gamma_lo","gamma_hi","signals","signal_mix_weights",
+        "w_traj","w_mats","w_stab","dw_ctrl","dw_plant","dw_comp","tol","max_iter",
+    ]
+
+    is_new = not os.path.exists(csv_path)
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as fcsv:
+        w = csv.DictWriter(fcsv, fieldnames=fields)
+        if is_new:
+            w.writeheader()
+
+        # write each history point as tag=eval
+        for h in res.get("history", []):
+            w.writerow({
+                "timestamp": now,
+                "tag": "eval",
+                "gamma": h.get("gamma"),
+                "obj_total": h.get("obj"),
+                # no detailed metrics for eval points -> leave blank
+                "E_traj": "", "D_mats": "", "P_stab": "",
+                "elapsed_sec": "", "signals_used": "", "use_nrmse": "",
+                "rho_mbd": "", "rho_ddd": "",
+                # overall result context is constant; include for every row
+                "iters": res.get("iters"),
+                "interval_lo": (res.get("interval") or [None, None])[0],
+                "interval_hi": (res.get("interval") or [None, None])[1],
+                "history_len": len(res.get("history", [])),
+                # knobs
+                "gamma_lo": gamma_bounds[0],
+                "gamma_hi": gamma_bounds[1],
+                "signals": ",".join(signals),
+                "signal_mix_weights": ";".join(f"{k}:{v}" for k, v in signal_mix_weights.items()),
+                "w_traj": weights["traj"], "w_mats": weights["mats"], "w_stab": weights["stab"],
+                "dw_ctrl": delta_weights["ctrl"], "dw_plant": delta_weights["plant"], "dw_comp": delta_weights["comp"],
+                "use_nrmse": use_nrmse, "tol": tol, "max_iter": max_iter,
+            })
+
+        # write the best row with full metrics
+        best = res["best_payload"]; obj = best["objective"]; rpt = best.get("report", {}) or {}
+        rho_mbd = ((rpt.get("stability") or {}).get("MBD", {}) or {}).get("spectral_radius", "")
+        rho_ddd = ((rpt.get("stability") or {}).get("DDD", {}) or {}).get("spectral_radius", "")
+
+        w.writerow({
+            "timestamp": now,
+            "tag": "best",
+            "gamma": res["best_gamma"],
+            "obj_total": obj.get("total"),
+            "E_traj": obj.get("E_traj"),
+            "D_mats": obj.get("D_mats"),
+            "P_stab": obj.get("P_stab"),
+            "elapsed_sec": best.get("elapsed_sec", ""),
+            "signals_used": ",".join(obj.get("signals_used", [])) if obj.get("signals_used") else "",
+            "use_nrmse": obj.get("use_nrmse", use_nrmse),
+            "rho_mbd": rho_mbd,
+            "rho_ddd": rho_ddd,
+            "iters": res.get("iters"),
+            "interval_lo": (res.get("interval") or [None, None])[0],
+            "interval_hi": (res.get("interval") or [None, None])[1],
+            "history_len": len(res.get("history", [])),
+            "gamma_lo": gamma_bounds[0],
+            "gamma_hi": gamma_bounds[1],
+            "signals": ",".join(signals),
+            "signal_mix_weights": ";".join(f"{k}:{v}" for k, v in signal_mix_weights.items()),
+            "w_traj": weights["traj"], "w_mats": weights["mats"], "w_stab": weights["stab"],
+            "dw_ctrl": delta_weights["ctrl"], "dw_plant": delta_weights["plant"], "dw_comp": delta_weights["comp"],
+            "tol": tol, "max_iter": max_iter,
+        })
+

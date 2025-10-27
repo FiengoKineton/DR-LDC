@@ -287,6 +287,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent")
+    _method = p.get("method", "lmi")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
     plot = (bool(p.get("plot", False)) if runID != "GammaOpt" else False) if not args.p else True
     _data = "DDD" if FROM_DATA else "MBD"
@@ -299,18 +300,18 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
 
     if comp:
         cmp = ResultsComparator(out_root=out)
-        method = "base" if args.base else "lmi"
-        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=method, plot=plot)
+        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, plot=plot)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
-        if args.base:
+        out = Path(out).with_suffix("").as_posix() + f"/{_method}" + path_name
+
+        if _method == "base":
             print("\nRunning baseline optimization...")
-            out = Path(out).with_suffix("").as_posix() + "/baseline" + path_name
             baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot, FROM_DATA=FROM_DATA)
         else:
             print("\nRunning LMI pipeline optimization...")
-            out = Path(out).with_suffix("").as_posix() + "/lmi" + path_name
             lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot, FROM_DATA=FROM_DATA)
+
 
 
 if __name__ == "__main__":
