@@ -61,14 +61,15 @@ The repository supports two synthesis modes:
 
 ```mermaid
 flowchart TD
-    P1["problem___parameters.yaml"] --> A1["utilis___systems.py<br/>Plant &amp; Controller classes"]
-    A1 --> A2["utilis___matrices.py<br/>Compose (A,B,C,D)"]
+    P1["problem___parameters.yaml"] --> A1["utils___systems.py<br/>Plant &amp; Controller classes"]
+    A1 --> A0["utils___simulate.py<br/Gather OpenLoop Data>"]
+    A0 --> A2["utils___matrices.py<br/>Compose (A,B,C,D)"]
     A2 --> A3["problem___baseline.py<br/>Monte Carlo Optimization"]
     A2 --> A4["problem___dro_lmi.py<br/>DRO-LMI Synthesis"]
-    A3 --> S1["utilis___simulate.py<br/>Closed-Loop Simulation"]
+    A3 --> S1["utils___simulate.py<br/>Closed-Loop Simulation"]
     A4 --> R1["Recover Controller"]
     R1 --> S1
-    S1 --> OUT["out/artifacts/ JSON + NPZ + PDF"]
+    S1 --> OUT["out/artifacts/ <br/JSON + NPZ + PDF>"]
 ```
 
 ---
