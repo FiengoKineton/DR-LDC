@@ -2,12 +2,12 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # VAR ------------------------------ "lmi" or "base"
   model: "correlated"                                                           # VAR ------------------------------ "correlated" or "independent"
-  FROM_DATA: false                                                               # VAR ------------------------------ true or false
+  FROM_DATA: 0                                                                  # VAR ------------------------------ true or false
 
-  save: true                                                                    # VAR ------------------------------ true or false
-  plot: true                                                                    # VAR ------------------------------ true or false
-  ALL: false                                                                    # VAR ------------------------------ true or false
-  use_set_out_mats: true                                                        # VAR ------------------------------ true or false
+  save: 1                                                                       # VAR ------------------------------ true or false
+  plot: 0                                                                       # VAR ------------------------------ true or false
+  ALL: 1                                                                        # VAR ------------------------------ true or false
+  use_set_out_mats: 0                                                           # VAR ------------------------------ true or false
 
 
   simulation:
@@ -15,15 +15,15 @@ params:
     TotTime: 50                                                                 # set
   
   ident:
-    use_bc: false                                                               # set | not used yet
-    use_iv: false                                                               # set | not used yet
+    use_bc: 0                                                                   # set | not used yet
+    use_iv: 0                                                                   # set | not used yet
     X_iv_path: "data/experiment_iv_states.csv"                                  # set | not used yet
-    stabilise: False                                                            # VAR ------------------------------ true or false
+    stabilise: 0                                                                # VAR ------------------------------ true or false
   
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "temp"                                                 # VAR ------------------------------ look for the names in main.py
+    runID: "temp"                                                               # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
@@ -51,4 +51,4 @@ params:
 
     measured:
       select: "first"                                                           # set | or "random"
-      dyw_zero: true                                                            # set | Dyw = 0 unless you really measure w
+      dyw_zero: 1                                                               # set | Dyw = 0 unless you really measure w

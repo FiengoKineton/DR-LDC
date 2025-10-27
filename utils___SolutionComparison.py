@@ -630,7 +630,7 @@ class ResultsComparator:
 
 
         # Plots
-        if z_mbd.exists() and z_ddd.exists() and plot:
+        if z_mbd.exists() and z_ddd.exists() and self.save:
             dataM = np.load(z_mbd)
             dataD = np.load(z_ddd)
             t, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
@@ -652,7 +652,7 @@ class ResultsComparator:
             title = f"{method.upper()} closed-loop: perf. outputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_perf_outputs.pdf"
             self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title, save=self.save, save_path=save_path)
-            plt.show()
+            if plot: plt.show()
 
             if re_evaluate:
                 # Re-simulate both
@@ -669,7 +669,7 @@ class ResultsComparator:
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
 
-        if c_mbd.exists() and c_ddd.exists() and plot:
+        if c_mbd.exists() and c_ddd.exists() and self.save:
             dataM = np.load(c_mbd)
             dataD = np.load(c_ddd)
             t, XM, _, ZM, *_ = self._npz_extract_states(dataM)
@@ -682,7 +682,7 @@ class ResultsComparator:
             title = f"{method.upper()} composite closed-loop: perf. outputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_CL_perf_outputs.pdf"
             self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title, save=self.save, save_path=save_path)
-            plt.show()
+            if plot: plt.show()
 
             if re_evaluate:
                 # Re-simulate both

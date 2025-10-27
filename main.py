@@ -269,7 +269,7 @@ class lmi_pipeline_optim_problem():
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
-def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
+def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None):
     parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
@@ -289,7 +289,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None):
     _model = p.get("model", "independent")
     _method = p.get("method", "lmi")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
-    plot = bool(p.get("plot", False)) if _runID != "GammaOpt" else False
+    plot = bool(p.get("plot", False)) if plot is None else plot
     _data = "DDD" if FROM_DATA else "MBD"
     gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     comp = args.comp if comp is None else comp
@@ -328,15 +328,15 @@ if __name__ == "__main__":
     if p.get("method", "lmi") == "lmi":                         # set method: "lmi"
         if p.get("model", "correlated") == "correlated":        # ------| set model: "correlated"
             if bool(p.get("ident", {}).get("stabilise", True)): # ------|-------| set stabilise: true
-                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: GammaOptSetOutMats
-                    gamma = 0.17960675006309104
-                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: GammaOpt
-                    gamma = 0.6173008513140374
+                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats&Stabilise
+                    gamma = 0.41640786499873816
+                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: Opt&Stabilise
+                    gamma = 0.6180339887498949
             else:                                               # ------|-------| set stabilise: false
-                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: GammaOptSetOutMatsUnstabilised
-                    gamma = 0.6173008513140374
-                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: GammaOptUnstabilised
-                    gamma = 0.07774746368890678
+                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats
+                    gamma = 0.06888370749726605
+                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: Opt
+                    gamma = 0.9016994374947425
         else:                                                   # ------| set model: "independent"
             gamma = p.get("ambiguity", {}).get("gamma", 0.5)
     else:

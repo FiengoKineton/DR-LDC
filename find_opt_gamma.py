@@ -21,14 +21,14 @@ from utils___simulate import Open_Loop
 
 # ----------------------------- wiring to your pipeline -----------------------------
 
-def run_main(gamma: float, *, FROM_DATA: bool = False, comp: bool = False) -> Dict[str, Any]:
+def run_main(gamma: float, *, FROM_DATA: bool = False, comp: bool = False, plot: bool = False) -> Dict[str, Any]:
     """
     Thin adapter over your main.main(...). Must return the 'report' dict
     exactly with the structure you showed. If main.main writes JSON,
     load and return it here instead.
     """
     # Example placeholder:
-    return main(gamma=gamma, FROM_DATA=FROM_DATA, comp=comp)
+    return main(gamma=gamma, FROM_DATA=FROM_DATA, comp=comp, plot=plot)
 
 
 def make_data_openloop(gamma: float) -> None:
@@ -216,13 +216,13 @@ def _evaluate_gamma_once(gamma: float,
 
     t0 = time.time()
     # 1) baseline MBD
-    _ = run_main(gamma=gamma, FROM_DATA=False, comp=False)
+    _ = run_main(gamma=gamma, FROM_DATA=False, comp=False, plot=False)
     # 2) generate data with this gamma
     #make_data_openloop(gamma=gamma)
     # 3) DDD run
-    _ = run_main(gamma=gamma, FROM_DATA=True, comp=False)
+    _ = run_main(gamma=gamma, FROM_DATA=True, comp=False, plot=False)
     # 4) final comparison (must return the 'report' dict)
-    report = run_main(gamma=gamma, FROM_DATA=True, comp=True)
+    report = run_main(gamma=gamma, FROM_DATA=True, comp=True, plot=False)
 
     obj = _build_scalar_objective(
         report,
