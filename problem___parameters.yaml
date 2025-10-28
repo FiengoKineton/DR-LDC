@@ -4,15 +4,16 @@ params:
   model: "correlated"                                                           # set | may be var ("correlated" or "independent")
   FROM_DATA: 0                                                                  # VAR ------------------------------ true or false
 
-  save: 1                                                                       # VAR ------------------------------ true or false
+  save: 0                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
-  ALL: 1                                                                        # VAR ------------------------------ true or false
+  ALL: 0                                                                        # VAR ------------------------------ true or false
   use_set_out_mats: 0                                                           # set | may be var (true or false)
+  SNR: 1                                                                        # set
 
 
   simulation:
     ts: 0.05                                                                    # set
-    TotTime: 30                                                                # set
+    TotTime: 30                                                                 # set
   
   ident:
     use_bc: 0                                                                   # set | not used yet

@@ -10,6 +10,7 @@ from utils___systems import Plant, Controller, Plant_cl, Noise
 from utils___simulate import Closed_Loop 
 from utils___matrices import Recover, MatricesAPI, compose_closed_loop
 from utils___SolutionComparison import ResultsComparator
+from utils___SNR import SNRAnalyzer
 
 
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
@@ -48,6 +49,9 @@ class baseline_optim_problem():
         if plot: 
             cl.plot_timeseries(sim=sim, save=save, out=out)
             cl.plot_composite(sim=sim_composite, save=save, out=out)
+    
+        self.plant, self.ctrl, self.Y, self.Sigma_nom = plant, ctrl_opt, sim["Y"], Sigma_nom
+
 
     def plant_to_dict(self, P: Plant):
         return {
@@ -115,6 +119,9 @@ class baseline_optim_problem():
         }
         return Sigma_nom, ctrl, plant, meta
 
+    def get_snr_vars(self):
+        return self.plant, self.ctrl, self.Y, self.Sigma_nom
+
 
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
@@ -130,7 +137,7 @@ class lmi_pipeline_optim_problem():
         api.print_plant(plant)
 
         # 2) Solve DRO-LMI (choose "correlated" or "independent")
-        model = params.get("model", "correlated")                # \in {"correlated", "independent"}
+        model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
         res = build_and_solve_dro_lmi(
             plant=plant,
             api=api,
@@ -257,6 +264,8 @@ class lmi_pipeline_optim_problem():
         for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho']:
             print(f"\n{key} =")
             print(Data[key])
+        
+        self.plant, self.ctrl, self.Y, self.Sigma_nom = plant, ctrl, sim["Y"], Sigma_nom
 
 
     def plant_to_dict(self, P: Plant):
@@ -286,10 +295,13 @@ class lmi_pipeline_optim_problem():
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+    def get_snr_vars(self):
+        return self.plant, self.ctrl, self.Y, self.Sigma_nom
+
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
-def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None):
+def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False):
     parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
@@ -343,12 +355,22 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
         if _method == "base":
             print("\nRunning baseline optimization...")
-            baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
+            opt = baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
         else:
             print("\nRunning LMI pipeline optimization...")
-            lmi_pipeline_optim_problem(params=p, out=out, noise=noise, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
+            opt = lmi_pipeline_optim_problem(params=p, out=out, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
+
+    if bool(p.get("SNR", 1)): 
+        plant, ctrl, Y, Sigma = opt.get_snr_vars()
+        an = SNRAnalyzer(plant=plant, ctrl=ctrl, Sigma=Sigma)
+        res = an.snr()
+        print({k: v for k, v in res.items() if k.endswith("_dB") or k=="spectral_radius_Acl"})
+        an.plot_bars(title="SNR for my controller")
+        an.plot_output_psd(Y, fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
 
 
+
+# ----------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     if yaml is None:
@@ -378,9 +400,10 @@ if __name__ == "__main__":
         gamma = p.get("ambiguity", {}).get("gamma", 0.5)
 
 
-    if bool(p.get("ALL", False)):
-        main(FROM_DATA=False, gamma=gamma)
-        main(FROM_DATA=True, gamma=gamma)
-        main(comp=True, gamma=gamma)
+    ALL = bool(p.get("ALL", False))
+    if ALL:
+        main(FROM_DATA=False, gamma=gamma, ALL=ALL)
+        main(FROM_DATA=True, gamma=gamma, ALL=ALL)
+        main(comp=True, gamma=gamma, ALL=ALL)
     else:
         main(gamma=gamma)

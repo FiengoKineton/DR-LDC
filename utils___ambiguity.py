@@ -287,7 +287,7 @@ class WassersteinAmbiguitySet:
 
 # =====================================================================================
 
-class WithoutNoise():
+class WithoutNoise:
     def __init__(self):
         p = cfg.get("params", {})
         sim = p.get("simulation", {})
