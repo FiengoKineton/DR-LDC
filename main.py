@@ -50,7 +50,7 @@ class baseline_optim_problem():
             cl.plot_timeseries(sim=sim, save=save, out=out)
             cl.plot_composite(sim=sim_composite, save=save, out=out)
     
-        self.plant, self.ctrl, self.Y, self.Sigma_nom = plant, ctrl_opt, sim["Y"], Sigma_nom
+        self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl_opt, sim, Sigma_nom
 
 
     def plant_to_dict(self, P: Plant):
@@ -120,7 +120,7 @@ class baseline_optim_problem():
         return Sigma_nom, ctrl, plant, meta
 
     def get_snr_vars(self):
-        return self.plant, self.ctrl, self.Y, self.Sigma_nom
+        return self.plant, self.ctrl, self.sim, self.Sigma_nom
 
 
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
@@ -259,13 +259,13 @@ class lmi_pipeline_optim_problem():
 
         Data = {
             'gamma': res.gamma, 'lambda': res.lambda_opt, 'Sigma_nom': Sigma_nom,
-            'A_c': Ac, 'B_c':Bc, 'C_c': Cc, 'D_c': Dc, 'A_cl': Acl, 'rho': rho,
+            'A_c': Ac, 'B_c':Bc, 'C_c': Cc, 'D_c': Dc, 'A_cl': Acl, 'rho': rho, 'var' : noise.var,
         }
-        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho']:
+        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho', 'var']:
             print(f"\n{key} =")
             print(Data[key])
         
-        self.plant, self.ctrl, self.Y, self.Sigma_nom = plant, ctrl, sim["Y"], Sigma_nom
+        self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl, sim, Sigma_nom
 
 
     def plant_to_dict(self, P: Plant):
@@ -296,7 +296,7 @@ class lmi_pipeline_optim_problem():
             json.dump(payload, f, indent=2)
 
     def get_snr_vars(self):
-        return self.plant, self.ctrl, self.Y, self.Sigma_nom
+        return self.plant, self.ctrl, self.sim, self.Sigma_nom
 
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
@@ -361,13 +361,30 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             opt = lmi_pipeline_optim_problem(params=p, out=out, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
 
     if bool(p.get("SNR", 1)): 
-        plant, ctrl, Y, Sigma = opt.get_snr_vars()
+        plant, ctrl, sim, Sigma = opt.get_snr_vars()
         an = SNRAnalyzer(plant=plant, ctrl=ctrl, Sigma=Sigma)
         res = an.snr()
-        print({k: v for k, v in res.items() if k.endswith("_dB") or k=="spectral_radius_Acl"})
+        print({k: v for k, v in res.items()}) # if k.endswith("_dB") or k=="spectral_radius_Acl"})
         an.plot_bars(title="SNR for my controller")
-        an.plot_output_psd(Y, fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
 
+        if _plot:
+            an.plot_output_psd(sim["X"], "x", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
+            an.plot_output_psd(sim["Y"], "y", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
+            an.plot_output_psd(sim["Z"], "z", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
+            an.plot_output_psd(sim["U"], "u", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
+
+        # 1) Evaluate SNR via kernels for any Σ
+        res = an.snr_from_kernels()
+        print(res)
+
+        # 2) Worst/best directions (trace-normalized Σ)
+        print("Z worst/best:", an.worst_best_snr("z"))
+
+        # 3) Sweep Σ orientation in a 2D subspace and plot
+        thetas, traces = an.plot_snr_rotation_sweep(Sigma0=Sigma_nom, dims=(0,1), n_angles=181)
+
+        # 4) Plot worst/best SNR bands
+        an.plot_worst_best_lines()
 
 
 # ----------------------------------------------------------------------------------

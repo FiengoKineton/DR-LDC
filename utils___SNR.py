@@ -3,6 +3,7 @@ import numpy as np
 from numpy.linalg import eigvals
 from scipy.linalg import solve_discrete_lyapunov
 import matplotlib.pyplot as plt
+import sys
 
 class SNRAnalyzer:
     """
@@ -62,6 +63,8 @@ class SNRAnalyzer:
 
         # Precompute covariance splits
         self._covs = self._compute_covariances()
+
+        self._precompute_kernels()
 
     # --------------------- closed-loop composition ---------------------
     def _compose_closed_loop(self):
@@ -165,7 +168,7 @@ class SNRAnalyzer:
         if show: plt.show()
         return fig
 
-    def plot_output_psd(self, y: np.ndarray, fs: float, nfft: int = 2048, show=True):
+    def plot_output_psd(self, y: np.ndarray, tlt: str, fs: float, nfft: int = 2048, show=True):
         """
         Periodogram PSD for y (T x ny). One axis, one curve per channel.
         Detrends mean. Zero-pads to 'pad' = next power of two >= max(nfft, T).
@@ -199,7 +202,7 @@ class SNRAnalyzer:
 
         plt.figure(figsize=(6.4, 4.2))
         for j in range(m):
-            plt.plot(freqs, psd_db[:, j], label=f"y[{j}]")
+            plt.plot(freqs, psd_db[:, j], label=f"{tlt}[{j}]")
         plt.xlabel("Frequency [Hz]")
         plt.ylabel("PSD [dB]")
         plt.title("Output PSD (periodogram)")
@@ -209,3 +212,143 @@ class SNRAnalyzer:
             plt.show()
 
         return freqs, psd
+
+
+    # ===================== KERNEL (Σ-linear) SNR FORMULATION =====================
+
+    def _lyap_obs(self, C):
+        """Solve X = Acl^T X Acl + C^T C (observer Lyapunov)."""
+        return solve_discrete_lyapunov(self.Acl.T, C.T @ C)
+
+    def _sym(self, M):
+        return 0.5 * (M + M.T)
+
+    def _precompute_kernels(self):
+        """
+        Precompute X_q, K_q = Bcl^T X_q Bcl and R_q = D_qw^T D_qw for q in {y,u,z}.
+        Then SNR_q(Σ) = <K_q, Σ>/<R_q, Σ>, independent of the scale of Σ.
+        """
+        Xy = self._lyap_obs(self.Cy_cl)
+        Xu = self._lyap_obs(self.Cu_cl)
+        Xz = self._lyap_obs(self.Cz_cl)
+
+        Ky = self._sym(self.Bcl.T @ Xy @ self.Bcl)
+        Ku = self._sym(self.Bcl.T @ Xu @ self.Bcl)
+        Kz = self._sym(self.Bcl.T @ Xz @ self.Bcl)
+
+        Ry = self._sym(self.Dyw_cl.T @ self.Dyw_cl)
+        Ru = self._sym(self.Duw_cl.T @ self.Duw_cl)
+        Rz = self._sym(self.Dzw_cl.T @ self.Dzw_cl)
+
+        self._K = {"y": Ky, "u": Ku, "z": Kz}
+        self._R = {"y": Ry, "u": Ru, "z": Rz}
+
+    # call kernels once at the end of __init__
+    #   add this line at the end of your current __init__:
+    #   self._precompute_kernels()
+
+    def snr_from_kernels(self, Sig: np.ndarray = None):
+        """
+        Evaluate SNR_y/u/z using the kernel formula:
+            SNR_q(Σ) = tr(K_q Σ) / tr(R_q Σ).
+        Useful to sweep Σ without re-solving Lyapunov for P.
+        """
+        Sigma = self.Sigma if Sig is None else Sig
+
+        def ratio(K, R):
+            num = float(np.trace(K @ Sigma))
+            den = float(np.trace(R @ Sigma))
+            return np.inf if den <= 1e-16 else num / den
+
+        SNRy = ratio(self._K["y"], self._R["y"])
+        SNRu = ratio(self._K["u"], self._R["u"])
+        SNRz = ratio(self._K["z"], self._R["z"])
+        return {
+            "SNR_y": SNRy, "SNR_y_dB": float(self._todB(SNRy)),
+            "SNR_u": SNRu, "SNR_u_dB": float(self._todB(SNRu)),
+            "SNR_z": SNRz, "SNR_z_dB": float(self._todB(SNRz)),
+        }
+
+    # -------- generalized eigen analysis: worst/best Σ directions (trace-normed) -----
+
+    def _pinv_sqrt(self, M, rcond=1e-12):
+        """Return M^{-1/2} on range(M) (Moore-Penrose via eig)."""
+        w, V = np.linalg.eigh(self._sym(M))
+        w = np.clip(w, 0.0, None)
+        keep = w > rcond * (w.max() if w.size else 1.0)
+        if not np.any(keep):   # R is numerically zero ⇒ no direct noise feedthrough
+            return None
+        Dmh = np.zeros_like(w)
+        Dmh[keep] = 1.0 / np.sqrt(w[keep])
+        return V @ np.diag(Dmh) @ V.T
+
+    def worst_best_snr(self, port: str = "z"):
+        """
+        Max/min SNR_q over PSD Σ with tr(Σ)=1:
+            SNR extremes are eigenvalues of R^{-1/2} K R^{-1/2} on range(R).
+        Returns (snr_min, snr_max).
+        """
+        K = self._K[port]; R = self._R[port]
+        Rmh = self._pinv_sqrt(R)
+        if Rmh is None:
+            return (np.inf, np.inf)  # no noise in that port; SNR is infinite
+        S = self._sym(Rmh @ K @ Rmh)  # similar to the generalized eigen pencil (K,R)
+        w = np.linalg.eigvalsh(S)
+        w = w[np.isfinite(w)]
+        return float(w.min()), float(w.max())
+
+    # ----------------------- plotting: SNR vs Σ direction ---------------------------
+
+    def plot_snr_rotation_sweep(self, Sigma0: np.ndarray, dims=(0,1), n_angles: int = 181,
+                                ports=("y","u","z"), show=True):
+        Sigma0 = self._sym(np.array(Sigma0, float))
+        nw = Sigma0.shape[0]
+        i, j = dims
+        if i == j or i >= nw or j >= nw:
+            raise ValueError("dims must be two distinct valid indices.")
+
+        thetas = np.linspace(0, np.pi, n_angles)
+        snr_traces = {p: np.zeros_like(thetas) for p in ports}
+
+        for k, th in enumerate(thetas):
+            c, s = np.cos(th), np.sin(th)
+            R = np.eye(nw)
+            # correct 2×2 rotation embedding
+            R[np.ix_([i, j], [i, j])] = np.array([[c, -s],
+                                                [s,  c]])
+            Sig = R @ Sigma0 @ R.T
+            vals = self.snr_from_kernels(Sig)
+            for p in ports:
+                snr_traces[p][k] = vals[f"SNR_{p}"]
+
+        plt.figure(figsize=(7.4, 4.2))
+        for p in ports:
+            plt.plot(np.rad2deg(thetas), self._todB(snr_traces[p]), label=f"SNR_{p}(Σ(θ))")
+        plt.xlabel(f"rotation angle θ [deg] in subspace {dims}")
+        plt.ylabel("SNR [dB]")
+        plt.title("SNR vs disturbance orientation (kernel method)")
+        plt.legend()
+        plt.tight_layout()
+        if show: plt.show()
+        return thetas, snr_traces
+
+
+    def plot_worst_best_lines(self, ports=("y","u","z"), show=True):
+        """
+        Horizontal lines for worst/best-case SNR under tr(Σ)=1 for each port,
+        using generalized eigenvalues of (K,R).
+        """
+        mins, maxs = [], []
+        for p in ports:
+            m, M = self.worst_best_snr(p)
+            mins.append(self._todB(m)); maxs.append(self._todB(M))
+
+        x = np.arange(len(ports))
+        plt.figure(figsize=(6.2, 3.8))
+        plt.hlines(mins, x-0.3, x+0.3, colors="tab:red",  label="min dB")
+        plt.hlines(maxs, x-0.3, x+0.3, colors="tab:green",label="max dB")
+        plt.xticks(x, [f"SNR_{p}" for p in ports]); plt.ylabel("dB")
+        plt.title("Worst/best SNR over trace-normalized Σ")
+        plt.legend(); plt.tight_layout()
+        if show: plt.show()
+        return dict(min_dB=np.array(mins), max_dB=np.array(maxs))

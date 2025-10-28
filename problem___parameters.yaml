@@ -42,7 +42,7 @@ params:
     gamma: 0.5                                                                  # set
     fixGamma: 1                                                                 # set | may be var (true or false)
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
-    var: 0.5                                                                      # set
+    var: 1                                                                      # set
   
 
   outputs:
