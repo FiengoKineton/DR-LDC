@@ -2,10 +2,10 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # VAR ------------------------------ "lmi" or "base"
   model: "correlated"                                                           # VAR ------------------------------ "correlated" or "independent"
-  FROM_DATA: 0                                                                  # VAR ------------------------------ true or false
+  FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
 
-  save: 1                                                                       # VAR ------------------------------ true or false
-  plot: 1                                                                       # VAR ------------------------------ true or false
+  save: 0                                                                       # VAR ------------------------------ true or false
+  plot: 0                                                                       # VAR ------------------------------ true or false
   ALL: 0                                                                        # VAR ------------------------------ true or false
   use_set_out_mats: 0                                                           # VAR ------------------------------ true or false
 
@@ -24,7 +24,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "Compare"                                                               # VAR ------------------------------ look for the names in main.py
+    runID: "temp"                                                               # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
@@ -37,10 +37,11 @@ params:
 
 
   ambiguity:
-    model: "W2"                                                                 # VAR ------------------------------ [W2, zero, Gaussian]
+    model: "Gaussian"                                                           # VAR ------------------------------ [W2, zero, Gaussian]
     gamma: 0.5                                                                  # VAR ------------------------------ look for the values in main.py
     fixGamma: 1                                                                 # VAR ------------------------------ true or false
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
+    var: 1                                                                      # VAR ------------------------------
   
 
   outputs:

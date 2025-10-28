@@ -1,7 +1,7 @@
 # dro_lmi.py
 import numpy as np
 import cvxpy as cp
-from utils___systems import Plant, DROLMIResult
+from utils___systems import Plant, DROLMIResult, Noise
 from utils___matrices import MatricesAPI
 import sys
 
@@ -10,8 +10,7 @@ import sys
 def build_and_solve_dro_lmi(
     plant: Plant,
     api: MatricesAPI,
-    Sigma_nom: np.ndarray,
-    gamma: float,
+    noise: Noise,
     model: str = "correlated",  # or "independent"
     eps_def: float = 1e-5,
     alpha_cap: float = 1e2,  # keep X, Y from exploding
@@ -26,8 +25,9 @@ def build_and_solve_dro_lmi(
     A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
     nx, nw, nu, nz, ny = plant.dims()
 
+    Sigma_nom, gamma, var = noise.Sigma_nom, noise.gamma, noise.var
 
-    Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw)
+    Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, var)
 
     # Decision variables
     lam = cp.Variable(nonneg=True, name="lambda")

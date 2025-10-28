@@ -45,6 +45,17 @@ class Plant_cl:
         nz_cl = self.Ccl.shape[0]
         return nx_cl, nw_cl, nz_cl
 
+@dataclass
+class Noise:
+    Sigma_nom: np.ndarray
+    var: float
+    n: int
+    avrg: float
+    gamma: float
+
+    def dims(self):
+        nw = self.Sigma_nom.shape[0]
+        return nw
 
 @dataclass
 class DROLMIResult:

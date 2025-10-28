@@ -18,13 +18,13 @@ class WassersteinAmbiguitySet:
     - W_ind: iid disturbances with that marginal
     - W_cor: arbitrary temporal correlation but each marginal in the ball
     """
-    def __init__(self, gamma: float = None):
+    def __init__(self, gamma: float = None, ellipse: bool = False, n: int = None, var: float = None):
 
         p = cfg.get("params", {})
         set = p.get("ambiguity", {})
         sim = p.get("simulation", {})
-        Sigma_nom = np.array(set["Sigma_nom"], dtype=float) 
-        gamma = float(set.get("gamma", 0.0)) if gamma is None else gamma
+        Sigma_nom = np.array(set["Sigma_nom"], dtype=float) if n is None or var is None else var * np.eye(n)
+        gamma = float(set.get("gamma", 0.5)) if gamma is None else gamma
         Tf = sim.get("TotTime", 100)
         self.ts = sim.get("ts", 0.5)
         
@@ -35,6 +35,7 @@ class WassersteinAmbiguitySet:
         self.rng = np.random.default_rng()
         self._chol_nom = None
         self.time = np.arange(self.T)*self.ts
+        self.ellipse = ellipse
 
 
     @staticmethod
@@ -98,6 +99,106 @@ class WassersteinAmbiguitySet:
         return cov_on_geodesic(hi)
 
 
+    # ---------- Define ellipse --------------
+
+    def _confidence_ellipse(self, ax, cov2, mean2=None, nsig=2.0, label=None, lw=1.5, ls='-'):
+        """
+        Draw an nsig-sigma ellipse for a 2x2 covariance 'cov2' centered at 'mean2'.
+        """
+        if mean2 is None:
+            mean2 = np.zeros(2)
+        # eigen-decomp
+        vals, vecs = np.linalg.eigh(cov2)
+        # sort desc
+        order = np.argsort(vals)[::-1]
+        vals, vecs = vals[order], vecs[:, order]
+        # param
+        theta = np.linspace(0, 2*np.pi, 400)
+        circle = np.vstack((np.cos(theta), np.sin(theta)))  # 2xM
+        # nsig scaling (chi-square with 2 dof: radius^2 = nsig^2 is fine for visualization)
+        L = vecs @ np.diag(np.sqrt(vals)) @ (nsig * np.eye(2))
+        pts = (L @ circle).T + mean2  # Mx2
+        ax.plot(pts[:,0], pts[:,1], linewidth=lw, linestyle=ls, label=label)
+
+    def _w2_boundary_covariances(self, Sigma_nom, gamma):
+        """
+        Produce a few SPD covariances on the W2 boundary around Sigma_nom, sharing eigenvectors.
+        For each principal axis k: set sqrt(lambda_k)' = max(0, sqrt(lambda_k) ± gamma),
+        others unchanged. Return list of (Sigma_boundary, tag).
+        """
+        # eigendecompose Sigma_nom (assume SPD)
+        d, U = np.linalg.eigh(0.5*(Sigma_nom + Sigma_nom.T))
+        d = np.maximum(d, 1e-15)
+        s = np.sqrt(d)
+        out = []
+        for k in range(len(d)):
+            for sign, tag in [(+1, f"+γ along axis {k}"), (-1, f"-γ along axis {k}")]:
+                s_new = s.copy()
+                s_new[k] = max(1e-15, s[k] + sign*gamma)
+                d_new = s_new**2
+                Sig_new = U @ np.diag(d_new) @ U.T
+                out.append((Sig_new, tag))
+        return out
+
+    def plot_samples_with_wasserstein_bounds(
+        self, w, Sigma_nom, dims=(0,1), nsig=2.0, show_empirical=True, max_boundary=4
+    ):
+        """
+        Scatter the samples w[:, dims] and overlay:
+        - nominal nsig-σ ellipse for Sigma_nom[dims,dims]
+        - empirical nsig-σ ellipse (optional)
+        - a few W2-boundary ellipses constructed by axis-wise eigenvalue shifts of Sigma_nom
+        Notes:
+        • This visualizes *marginal covariance* bounds, not a hard envelope for points.
+        • Accurate for the commuting case (shared eigenvectors); still informative otherwise.
+        """
+        w = np.asarray(w)
+        i, j = dims
+        if i == j:
+            raise ValueError("Pick two distinct dimensions for plotting.")
+        # 2D marginal samples
+        W2 = w[:, [i, j]]
+        mu = W2.mean(axis=0)
+        # 2D covariances
+        Sig_nom_2d = Sigma_nom[np.ix_([i,j],[i,j])]
+        Sig_emp_2d = np.cov(W2.T, bias=False)  # zero-mean vs sample mean doesn’t matter visually
+
+        # Build a few 2D boundary covariances
+        boundaries = self._w2_boundary_covariances(Sigma_nom, self.gamma)
+        # Keep at most 'max_boundary' ellipses, but favor ones that actually change i or j axes
+        chosen = []
+        for Sig_b, tag in boundaries:
+            Sig_b_2d = Sig_b[np.ix_([i,j],[i,j])]
+            chosen.append((Sig_b_2d, tag))
+            if len(chosen) >= max_boundary:
+                break
+
+        # Plot
+        fig, ax = plt.subplots(figsize=(6.2, 6.2))
+        ax.scatter(W2[:,0], W2[:,1], s=10, alpha=0.35, label="samples")
+        self._confidence_ellipse(ax, Sig_nom_2d, mean2=mu, nsig=nsig, label=f"nominal (Σ_nom), {nsig}σ", lw=2.0)
+        if show_empirical:
+            self._confidence_ellipse(ax, Sig_emp_2d, mean2=mu, nsig=nsig, label=f"empirical, {nsig}σ", ls='--')
+
+        for Sig_b_2d, tag in chosen:
+            self._confidence_ellipse(ax, Sig_b_2d, mean2=mu, nsig=nsig, label=f"W2-boundary: {tag}", ls=':')
+
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xlabel(f"w[{i}]")
+        ax.set_ylabel(f"w[{j}]")
+        ax.set_title(f"Samples and W2(·, Σ_nom) ≤ γ bounds (γ={self.gamma}, dims={dims})")
+        ax.legend(loc="best", fontsize=8)
+        plt.tight_layout()
+        #plt.show()
+        return ax
+
+    def plot_all_pairs(self, w, Sigma_nom, max_pairs=6):
+        n = w.shape[1]
+        pairs = [(i, j) for i in range(n) for j in range(i+1, n)]
+        for (i, j) in pairs[:max_pairs]:
+            self.plot_samples_with_wasserstein_bounds(w, Sigma_nom, dims=(i, j))
+
+
     # ---------- sampling utilities ----------
 
     def sample(self, T:int = None, Sigma: np.ndarray = None) -> np.ndarray:
@@ -108,11 +209,16 @@ class WassersteinAmbiguitySet:
         """
         T = T if T is not None else self.T
         if self.mode == "independent":
-            return self.sample_iid(T=T, Sigma=Sigma)
-        elif self.mode == "correlated":
-            return self.sample_correlated(T=T, Sigma=Sigma)
+            s, S = self.sample_iid(T=T, Sigma=Sigma)
         else:
-            raise ValueError(f"Unknown ambiguity mode: {self.mode}")
+            s, S = self.sample_correlated(T=T, Sigma=Sigma)
+        
+        if self.ellipse: 
+            #self.plot_samples_with_wasserstein_bounds(s, S)
+            self.plot_all_pairs(s, S)
+            plt.show()
+        return s
+
 
     def sample_iid(self, T: int, Sigma: np.ndarray = None) -> np.ndarray:
         """
@@ -129,7 +235,7 @@ class WassersteinAmbiguitySet:
         L = cholesky(self._sym(Sigma_use))
         n = L.shape[0]
         z = self.rng.standard_normal(size=(T, n))
-        return z @ L.T
+        return z @ L.T, Sigma_use
 
     def sample_correlated(self, T: int, rho: float = 0.9, Sigma: np.ndarray = None) -> np.ndarray:
         """
@@ -140,8 +246,10 @@ class WassersteinAmbiguitySet:
         if Sigma is None:
             Sigma_target = self.Sigma_nom
         else:
-            self.Sigma_nom = np.eye(Sigma[0].size)
+            #self.Sigma_nom = np.eye(Sigma[0].size)
             Sigma_target = self.project_cov_to_ball(Sigma)
+
+        assert self.is_member_gaussian(Sigma_target), "Projected Sigma is not inside the W2-ball. Numerical issue."
 
         n = Sigma_target.shape[0]
         # stable isotropic dynamics
@@ -160,9 +268,10 @@ class WassersteinAmbiguitySet:
         for t in range(T - 1):
             eps = self.rng.standard_normal(n) @ LQ.T
             w[t + 1] = F @ w[t] + eps
-        return w
+        return w, Sigma_target
 
     # ---------- empirical utilities ----------
+
     def empirical_marginal_cov(self, w: np.ndarray) -> np.ndarray:
         """
         Given samples w shape (T, n), return sample covariance of the marginal (zero-mean enforced).
@@ -205,17 +314,21 @@ class WithoutNoise():
 # =====================================================================================
 
 class GaussianNoise:
-    def __init__(self):
+    def __init__(self, n: int = None, var: float = None):
         p   = cfg.get("params", {})
         amb = p.get("ambiguity", {})
         sim = p.get("simulation", {})
-        self.Sigma_nom = np.array(amb["Sigma_nom"], dtype=float)
-        self.gamma = None
-        Tf      = float(sim.get("TotTime", 100.0))
-        self.ts = float(sim.get("ts", 0.5))
-        self.T  = int(round(Tf / self.ts))
-        self.time = np.arange(self.T) * self.ts
-        self.rng = np.random.default_rng()
+
+        self.n          = p.get("dimensions", {}).get("nw", 2) if n is None else n
+        self.var        = amb.get("var", 0) if var is None else var
+        self.Sigma_nom  = np.array(amb["Sigma_nom"], dtype=float) if self.var==0 else self.var * np.eye(self.n)
+        self.gamma      = None
+
+        Tf          = float(sim.get("TotTime", 100.0))
+        self.ts     = float(sim.get("ts", 0.5))
+        self.T      = int(round(Tf / self.ts))
+        self.time   = np.arange(self.T) * self.ts
+        self.rng    = np.random.default_rng()
 
     def sample(self, T: int = None, Sigma: np.ndarray = None) -> np.ndarray:
         T = int(T) if T is not None else self.T
@@ -234,11 +347,11 @@ class Disturbances:
     Thin delegating wrapper. Disturbances.impl holds the real object.
     You can call dist.sample(T=...) regardless of which model you selected.
     """
-    def __init__(self, gamma: float = None, model: str = None):
+    def __init__(self, gamma: float = None, model: str = None, n: int = None, var: float = None, ellipse: bool = None):
         p   = cfg.get("params", {})
         amb = p.get("ambiguity", {})
         model = amb.get("model", "W2") if model is None else model
-        self.impl = self._select(model, gamma)
+        self.impl = self._select(model, gamma, n, var, ellipse)
 
         # convenience mirrors so your demo prints work
         self.mode = getattr(self.impl, "mode", model)
@@ -248,15 +361,15 @@ class Disturbances:
         self.ts = getattr(self.impl, "ts", None)
         self.T = getattr(self.impl, "T", None)
 
-    def _select(self, model: str, gamma: float):
+    def _select(self, model: str, gamma: float, n: int, var: float, ellipse: bool):
         if model == "W2":
             if gamma is not None and gamma < 0:
                 raise ValueError("gamma must be nonnegative")
-            return WassersteinAmbiguitySet(gamma=gamma)
+            return WassersteinAmbiguitySet(gamma=gamma, ellipse=ellipse, n=n, var=var)
         if model == "zero":
             return WithoutNoise()
         if model == "Gaussian":
-            return GaussianNoise()
+            return GaussianNoise(n=n, var=var)
         raise ValueError(f"Unknown ambiguity model: {model}")
 
     def __getattr__(self, name: str):
@@ -270,7 +383,7 @@ class Disturbances:
 
 if __name__ == "__main__":
     # simple test
-    wass = Disturbances(model="Gaussian")
+    wass = Disturbances(model="W2", gamma=0.5, n=2, var=0.7, ellipse=True)
     print("Nominal Sigma:\n", wass.Sigma_nom)
     print("Gamma:", wass.gamma)
     print("Mode:", wass.mode)
@@ -280,11 +393,12 @@ if __name__ == "__main__":
     w = wass.sample()
     print(wass.is_member_empirical(w))
 
-    plt.figure()
-    plt.title(f"{wass.mode} samples")
-    #plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
-    plt.plot(t, w)
-    plt.xlabel("Time")
-    plt.grid()
-    plt.legend()
-    plt.show()
+    if 1:
+        plt.figure()
+        plt.title(f"{wass.mode} samples")
+        #plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
+        plt.plot(t, w)
+        plt.xlabel("Time")
+        plt.grid()
+        plt.legend()
+        plt.show()

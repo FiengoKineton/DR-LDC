@@ -12,7 +12,7 @@ from utils___matrices import MatricesAPI
 
 
 class ResultsComparator:
-    def __init__(self, out_root: str, save: bool = False):
+    def __init__(self, out_root: str, save: bool = True):
         """
         out_root: artifacts root, e.g. "./out/artifacts/"
         """
@@ -750,10 +750,11 @@ class ResultsComparator:
             },
         }
         # Save side-by-side comparison JSON next to the MBD run
-        out_comp = (self.out_root / method / f"run_{ID}" / f"{base}___comparison_MBD_vs_DDD.json")
-        with open(out_comp, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2)
-        print(f"[compare] saved summary: {out_comp}")
+        if self.save:
+            out_comp = (self.out_root / method / f"run_{ID}" / f"{base}___comparison_MBD_vs_DDD.json")
+            with open(out_comp, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+            print(f"[compare] saved summary: {out_comp}")
         return report
 
     # ------------------------ public: baseline vs LMI (your provided logic) ------------------------
@@ -829,10 +830,11 @@ class ResultsComparator:
             "deltas_ctrl": {k: (ml.get(k, np.nan) - mb.get(k, np.nan)) for k in set(mb) | set(ml)},
         }
 
-        comp_out = self.out_root.as_posix() + path_name + "___comparison_baseline_vs_lmi.json"
-        with open(comp_out, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2)
-        print(f"[compare] saved summary: {comp_out}")
+        if self.save:
+            comp_out = self.out_root.as_posix() + path_name + "___comparison_baseline_vs_lmi.json"
+            with open(comp_out, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+            print(f"[compare] saved summary: {comp_out}")
 
         # Compact console table
         def _fmt(x):

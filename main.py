@@ -6,7 +6,7 @@ from pathlib import Path
 from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi
 
-from utils___systems import Plant, Controller, Plant_cl
+from utils___systems import Plant, Controller, Plant_cl, Noise
 from utils___simulate import Closed_Loop 
 from utils___matrices import Recover, MatricesAPI, compose_closed_loop
 from utils___SolutionComparison import ResultsComparator
@@ -30,19 +30,19 @@ class baseline_optim_problem():
 
         # Persist everything needed for reproducible simulation
         json_path = out + f"___results_run.json"
-        self.save_results_json(json_path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant, plant_cl)
+        if save: self.save_results_json(json_path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant, plant_cl)
         print(f"[saved] {json_path}")
 
         # Load back the exact same objects and simulate
         Sigma_loaded, ctrl_loaded, plant_loaded, _ = self.load_results_json(json_path)
         sim = cl.simulate_closed_loop(plant_loaded, ctrl_loaded, Sigma_loaded, gamma)
         out_npz = out + f"___closed_loop_run.npz"
-        cl.save_npz(sim, str(out_npz))
+        if save: cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
         sim_composite = cl.simulate_composite(plant_cl, gamma)
         out_composite = out + f"___closed_loop_composite.npz"
-        cl.save_npz(sim_composite, str(out_composite))
+        if save: cl.save_npz(sim_composite, str(out_composite))
         print(f"[saved] {out_composite}")
 
         if plot: 
@@ -119,7 +119,7 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, gamma: float, Sigma_nom: np.ndarray, plot: bool = False, save: bool = False, FROM_DATA: bool = False):
+    def __init__(self, params: dict, out: Path, noise: Noise, plot: bool = False, save: bool = False, FROM_DATA: bool = False):
 
         recover = Recover()
         api = MatricesAPI()
@@ -134,8 +134,7 @@ class lmi_pipeline_optim_problem():
         res = build_and_solve_dro_lmi(
             plant=plant,
             api=api,
-            Sigma_nom=Sigma_nom,
-            gamma=gamma,
+            noise=noise,
             model=model,
         )
 
@@ -149,7 +148,7 @@ class lmi_pipeline_optim_problem():
         # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
         Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
         A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
-        Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw)
+        Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
 
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
         ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
@@ -231,19 +230,19 @@ class lmi_pipeline_optim_problem():
         }
 
         out_json = out + f"___results_run.json"
-        self.save_json(out_json, payload)
+        if save: self.save_json(out_json, payload)
         print(f"[saved] {out_json}")
 
         # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
         #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
         sim = cl.simulate_closed_loop(plant, ctrl, Sigma_nom, gamma)
         out_npz = out + f"___closed_loop_run.npz"
-        cl.save_npz(sim, str(out_npz))
+        if save: cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
-        sim_composite = cl.simulate_composite(plant_cl, gamma)
+        sim_composite = cl.simulate_composite(plant_cl, Sigma_nom, gamma)
         out_composite = out + f"___closed_loop_composite.npz"
-        cl.save_npz(sim_composite, str(out_composite))
+        if save: cl.save_npz(sim_composite, str(out_composite))
         print(f"[saved] {out_composite}")
 
         # 7) Plot results
@@ -323,7 +322,11 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     else:
         gamma = gamma
 
-    Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float)
+    var = float(p.get("ambiguity", {})["var"])
+    n = p.get("dimensions", {}).get("nw", 2)
+    Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float) if m!="Gaussian" else var * np.eye(n)
+
+    noise = Noise(Sigma_nom=Sigma_nom, avrg=0, var=var, n=n, gamma=gamma)
 
     path_name = f"{_type}_{_model}_{_data}"
 
@@ -342,7 +345,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
         else:
             print("\nRunning LMI pipeline optimization...")
-            lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
+            lmi_pipeline_optim_problem(params=p, out=out, noise=noise, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
 
 
 

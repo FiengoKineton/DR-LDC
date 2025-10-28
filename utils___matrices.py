@@ -817,14 +817,14 @@ class MatricesAPI():
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
         return plant, ctrl0
 
-    def _augment_matrices(self, B_w, D_vw, D_yw):
+    def _augment_matrices(self, B_w, D_vw, D_yw, var: float = 0):
         nx, _, _, ny, nz = self.get_dimensions_from_yaml()
 
         B_w = np.block([[B_w, (1e-4)*np.eye(nx), np.zeros((nx, ny))]])
         D_vw = np.block([[D_vw, np.zeros((nz, nx + ny))]])
         D_yw = np.block([[D_yw,np.zeros((ny, nx)),(1e-4)*np.eye(ny)]])
         n_w = B_w.shape[1]
-        Sigma_nom = np.eye(n_w)
+        Sigma_nom = np.eye(n_w) if var==0 else var * np.eye(n_w)
         return B_w, D_vw, D_yw, n_w, Sigma_nom
 
 

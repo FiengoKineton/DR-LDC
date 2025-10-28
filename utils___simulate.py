@@ -59,7 +59,7 @@ class Closed_Loop():
         ], dtype=float)
 
         ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
-        Sigma_w = 0.7 * np.eye(2)"""
+        """
 
         sim = self.simulate_closed_loop(plant, ctrl)
         print("Simulated shapes:",
@@ -118,14 +118,14 @@ class Closed_Loop():
         Z  = np.zeros((T, nz))
 
         wass = Disturbances(gamma=gamma)
-        W = wass.sample(T=T)
+        W = wass.sample(T=T, Sigma=Sigma_w)
         if W.ndim == 1:
             W = W.reshape(T, 1)
 
         if W.shape[1] == nw:
             # Great. Use directly.
             pass
-        else:
+        """else:
             # Case 2: mismatch. DO NOT "average columns".
             # Sample *state-space* disturbance then project onto span(Bw_hat).
             # Build a target state covariance. Easiest defensible choice:
@@ -138,7 +138,7 @@ class Closed_Loop():
 
             # Project each d_t onto col(Bw_hat) via pseudoinverse
             Bw_pinv = np.linalg.pinv(Bw)     # (nw_hat x nx)
-            W = (D @ Bw_pinv.T)                  # (T x nw_hat)
+            W = (D @ Bw_pinv.T)                  # (T x nw_hat)"""
         
         for t in range(T):
             w = W[t, :].reshape(nw, 1) # (L @ rng.standard_normal((nw, 1))).astype(float)
@@ -242,7 +242,7 @@ class Closed_Loop():
         np.savez_compressed(fname, **sim)
         return fname
 
-    def simulate_composite(self, Pcl: Plant_cl, gamma: float) -> Dict[str, Any]:
+    def simulate_composite(self, Pcl: Plant_cl, Sigma_w: np.ndarray = None, gamma: float = 0.5) -> Dict[str, Any]:
         """
         Simulate the composed system:
             X_{t+1} = Acl X_t + Bcl w_t
@@ -280,14 +280,14 @@ class Closed_Loop():
 
         # Disturbance generation
         wass = Disturbances(gamma=gamma)
-        W = wass.sample(T=T)
+        W = wass.sample(T=T, Sigma=Sigma_w)
         if W.ndim == 1:
             W = W.reshape(T, 1)
 
         if W.shape[1] == nw:
             # Great. Use directly.
             pass
-        else:
+        """else:
             # Case 2: mismatch. DO NOT "average columns".
             # Sample *state-space* disturbance then project onto span(Bw_hat).
             # Build a target state covariance. Easiest defensible choice:
@@ -300,7 +300,7 @@ class Closed_Loop():
 
             # Project each d_t onto col(Bw_hat) via pseudoinverse
             B_pinv = np.linalg.pinv(B)     # (nw_hat x nx)
-            W = (d @ B_pinv.T)                  # (T x nw_hat)
+            W = (d @ B_pinv.T)                  # (T x nw_hat)"""
 
         # Storage
         X = np.zeros((T, nX))
@@ -438,14 +438,19 @@ class Closed_Loop():
 
 class Open_Loop():
     def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, gamma: float = None, p: bool = None, x0_mode: str = None, s: bool = None):
-        self.p = cfg.get("params", {})
+        p = cfg.get("params", {})
+        self.p = p
         out = self.p.get("directories", {}).get("data", "./out/data/session_")
         m = self.p.get("ambiguity", {}).get("model", "W2")
         runID = self.p.get("directories", {}).get("runID", ".temp")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent") if m == "W2" else m
         PLOT = bool(self.p.get("plot", "false")) if p is None else p
-
+        
+        var = float(p.get("ambiguity", {})["var"])
+        n = p.get("dimensions", {}).get("nw", 2)
+        Sigma_nom = np.array(p.get("ambiguity", {})["Sigma_nom"], dtype=float) if m!="Gaussian" else var * np.eye(n)
+        
         self.csv_path = out + f"{runID}___{_type}_{_model}.csv"    # _{_data}
 
         self.out = Path(self.csv_path)
@@ -460,7 +465,7 @@ class Open_Loop():
         api = MatricesAPI()
         plant, _ = api.get_system(FROM_DATA=False, gamma=gamma)
 
-        if MAKE_DATA: self.make_data(plant=plant, gamma=gamma)
+        if MAKE_DATA: self.make_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
         if EVAL_FROM_PATH: self.evaluate_from_path()
         if PLOT: 
             metrics = self.plot_est_vs_truth(x0_mode="e1" if x0_mode is None else x0_mode, show=True if s is None else s)
@@ -472,7 +477,7 @@ class Open_Loop():
     """
 
 
-    def make_data(self, plant: Plant, gamma: float = None):
+    def make_data(self, plant: Plant, gamma: float = None, Sigma: np.ndarray = None):
         ap = argparse.ArgumentParser(description="Simulate open-loop with persistently exciting input and save CSV.")
         ap.add_argument("--T", type=int, default=3000, help="number of time steps")
         ap.add_argument("--seed", type=int, default=0)
@@ -487,7 +492,7 @@ class Open_Loop():
         rng = np.random.default_rng(args.seed)
 
         wass = Disturbances(gamma=gamma)
-        W = wass.sample(T=T).T
+        W = wass.sample(T=T, Sigma=Sigma).T
         #api = MatricesAPI()
         #plant, _ = api.get_system(Generating_data=True)
         A, Bu, Bw, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bu, plant.Bw, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
