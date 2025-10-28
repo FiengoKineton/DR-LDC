@@ -164,56 +164,79 @@ class Closed_Loop():
             "T": T, "nx": nx, "nxc": nxc, "ny": ny, "nu": nu, "nz": nz, "nw": nw
         }
 
-    def plot_timeseries(self, sim):
+    def plot_timeseries(self, sim, save: bool = False, out: str = None, fmt: str = "pdf", dpi: int = 300, tight: bool = True):
         T = sim["T"]
         t = np.arange(T) * self.ts
 
-        # States x
-        plt.figure(figsize=(10, 6))
+        saved = {}
+
+        def _finalize(fig, name: str):
+            nonlocal saved
+            if tight:
+                try:
+                    fig.tight_layout()
+                except Exception:
+                    pass
+            if save:
+                save_path = out + f"{name}.{fmt}"
+                fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+                plt.close(fig)
+                saved[name] = save_path
+            else:
+                fig.show()
+
+        # 1) Plant states x
+        fig1 = plt.figure(figsize=(10, 6))
         for i in range(sim["nx"]):
             plt.plot(t, sim["X"][:, i], label=f"x[{i}]")
         plt.title("Plant states x")
         plt.xlabel("t")
         plt.legend()
         plt.grid(True, alpha=0.3)
+        _finalize(fig1, "___plant_states_x")
 
-        # Controller states x_c
-        plt.figure(figsize=(10, 6))
+        # 2) Controller states x_c
+        fig2 = plt.figure(figsize=(10, 6))
         for i in range(sim["nxc"]):
             plt.plot(t, sim["Xc"][:, i], label=f"x_c[{i}]")
         plt.title("Controller states x_c")
         plt.xlabel("t")
         plt.legend()
         plt.grid(True, alpha=0.3)
+        _finalize(fig2, "___controller_states_xc")
 
-        # Measured output y
-        plt.figure(figsize=(10, 6))
+        # 3) Measured output y
+        fig3 = plt.figure(figsize=(10, 6))
         for i in range(sim["ny"]):
             plt.plot(t, sim["Y"][:, i], label=f"y[{i}]")
         plt.title("Measured output y")
         plt.xlabel("t")
         plt.legend()
         plt.grid(True, alpha=0.3)
+        _finalize(fig3, "___measured_output_y")
 
-        # Control input u
-        plt.figure(figsize=(10, 5))
+        # 4) Control input u
+        fig4 = plt.figure(figsize=(10, 5))
         for i in range(sim["nu"]):
             plt.plot(t, sim["U"][:, i], label=f"u[{i}]")
         plt.title("Control input u")
         plt.xlabel("t")
         plt.legend()
         plt.grid(True, alpha=0.3)
+        _finalize(fig4, "___control_input_u")
 
-        # Performance output z
-        plt.figure(figsize=(10, 6))
+        # 5) Performance output z
+        fig5 = plt.figure(figsize=(10, 6))
         for i in range(sim["nz"]):
             plt.plot(t, sim["Z"][:, i], label=f"z[{i}]")
         plt.title("Performance output z")
         plt.xlabel("t")
         plt.legend()
         plt.grid(True, alpha=0.3)
+        _finalize(fig5, "___performance_output_z")
 
         plt.show()
+        if save: return saved
 
     def save_npz(self, sim, fname="cl_timeseries.npz"):
         np.savez_compressed(fname, **sim)
@@ -307,7 +330,8 @@ class Closed_Loop():
                         X_idx: Optional[Iterable[int]] = None,
                         Z_idx: Optional[Iterable[int]] = None,
                         W_idx: Optional[Iterable[int]] = None,
-                        suptitle: Optional[str] = None):
+                        suptitle: Optional[str] = None,
+                        save: bool = False, out: str = None, fmt: str = "pdf", dpi: int = 300, tight: bool = True):
         """
         Plot time series for the composed closed-loop simulation.
 
@@ -326,6 +350,24 @@ class Closed_Loop():
         ts  = float(sim["ts"])
         t   = np.arange(T) * ts
 
+        saved = {}
+
+        def _finalize(fig, name: str):
+            nonlocal saved
+            if tight:
+                try:
+                    fig.tight_layout()
+                except Exception:
+                    pass
+            if save:
+                save_path = out + f"{name}.{fmt}"
+                fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+                plt.close(fig)
+                saved[name] = save_path
+            else:
+                fig.show()
+
+
         def _ensure_indices(n: int, sel: Optional[Iterable[int]]):
             if sel is None:
                 return list(range(n))
@@ -340,7 +382,7 @@ class Closed_Loop():
             X = np.asarray(sim["X"])
             nX = int(sim["nX"])
             xi = _ensure_indices(nX, X_idx)
-            plt.figure(figsize=(10, 6))
+            figX = plt.figure(figsize=(10, 6))
             for i in xi:
                 plt.plot(t, X[:, i], label=f"X[{i}]")
             ttl = "Composite state X(t)"
@@ -351,12 +393,13 @@ class Closed_Loop():
             plt.grid(True, alpha=0.3)
             if len(xi) <= 12:
                 plt.legend(ncol=2, framealpha=0.8)
+            _finalize(figX, "___plant_states_X_CL")
 
         if show_Z:
             Z = np.asarray(sim["Z"])
             nz = int(sim["nz"])
             zi = _ensure_indices(nz, Z_idx)
-            plt.figure(figsize=(10, 6))
+            figZ = plt.figure(figsize=(10, 6))
             for i in zi:
                 plt.plot(t, Z[:, i], label=f"z[{i}]")
             ttl = "Performance output z(t)"
@@ -367,12 +410,13 @@ class Closed_Loop():
             plt.grid(True, alpha=0.3)
             if len(zi) <= 12:
                 plt.legend(ncol=2, framealpha=0.8)
+            _finalize(figZ, "___performance_output_Z_CL")
 
         if show_W:
             W = np.asarray(sim["W"])
             nw = int(sim["nw"])
             wi = _ensure_indices(nw, W_idx)
-            plt.figure(figsize=(10, 5))
+            figW = plt.figure(figsize=(10, 5))
             for i in wi:
                 plt.plot(t, W[:, i], label=f"w[{i}]")
             ttl = "Disturbance w(t)"
@@ -383,8 +427,10 @@ class Closed_Loop():
             plt.grid(True, alpha=0.3)
             if len(wi) <= 12:
                 plt.legend(ncol=2, framealpha=0.8)
+            _finalize(figW, "___plant_disturbances_W")
 
         plt.show()
+        if save: return saved
 
 
 
@@ -931,146 +977,3 @@ if __name__ == "__main__":
     m = ["e1", "ones", "random"]
     if CL: Closed_Loop(TEST=False)
     if OL: Open_Loop(MAKE_DATA=1, EVAL_FROM_PATH=1, p=True, x0_mode=m[0], s=False)
-
-    """
-    PaperLike
-        NoiseFree
-            e1
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=1.044e-05
-                [cmp]  Buhat vs Bu      rel=1.135e-07
-                [cmp]  Bwhat vs Bw      subspace_gap=0.000e+00  rel=1.000e+00       
-                [cmp]  Cyhat vs Cy      rel=3.233e-08
-                [cmp] Dywhat vs Dyw     abs=3.284e-07
-                [cmp]  Czhat vs Cz      rel=4.080e-06
-                [cmp] Dzuhat vs Dzu     rel=1.097e-07
-                [cmp] Dzwhat vs Dzw     abs=3.210e-04
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 1.0439859481910079e-05, 'traj_rel_error': 1.5464040578905646e-05, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9998750118201665}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 7), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 7), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 7), 'match': False}}}
-            ones
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=1.044e-05
-                [cmp]  Buhat vs Bu      rel=1.135e-07
-                [cmp]  Bwhat vs Bw      subspace_gap=0.000e+00  rel=1.000e+00       
-                [cmp]  Cyhat vs Cy      rel=3.233e-08
-                [cmp] Dywhat vs Dyw     abs=3.284e-07
-                [cmp]  Czhat vs Cz      rel=4.080e-06
-                [cmp] Dzuhat vs Dzu     rel=1.097e-07
-                [cmp] Dzwhat vs Dzw     abs=3.210e-04
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 1.0439859481910079e-05, 'traj_rel_error': 0.00011236165770693395, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9998750118201665}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 7), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 7), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 7), 'match': False}}}
-            random
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=1.044e-05
-                [cmp]  Buhat vs Bu      rel=1.135e-07
-                [cmp]  Bwhat vs Bw      subspace_gap=0.000e+00  rel=1.000e+00       
-                [cmp]  Cyhat vs Cy      rel=3.233e-08
-                [cmp] Dywhat vs Dyw     abs=3.284e-07
-                [cmp]  Czhat vs Cz      rel=4.080e-06
-                [cmp] Dzuhat vs Dzu     rel=1.097e-07
-                [cmp] Dzwhat vs Dzw     abs=3.210e-04
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 1.0439859481910079e-05, 'traj_rel_error': 0.00010167845678260035, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9998750118201665}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 7), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 7), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 7), 'match': False}}}
-        Gaussian
-            e1
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=1.566e-02
-                [cmp]  Buhat vs Bu      rel=2.137e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=0.000e+00  rel=5.200e-03        
-                [cmp]  Cyhat vs Cy      rel=1.097e-08
-                [cmp] Dywhat vs Dyw     abs=1.214e-11
-                [cmp]  Czhat vs Cz      rel=3.365e-06
-                [cmp] Dzuhat vs Dzu     rel=3.082e-08
-                [cmp] Dzwhat vs Dzw     abs=1.566e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.015663134336058482, 'traj_rel_error': 0.03878359786768288, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9999424386670328}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-            ones
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=3.412e-02
-                [cmp]  Buhat vs Bu      rel=3.925e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=0.000e+00  rel=1.152e-02        
-                [cmp]  Cyhat vs Cy      rel=1.911e-08
-                [cmp] Dywhat vs Dyw     abs=1.236e-11
-                [cmp]  Czhat vs Cz      rel=3.308e-06
-                [cmp] Dzuhat vs Dzu     rel=3.073e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.03412001842685607, 'traj_rel_error': 0.07181927769098195, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9996616173080205}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-            random
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=5.388e-02
-                [cmp]  Buhat vs Bu      rel=5.539e-03
-                [cmp]  Bwhat vs Bw      subspace_gap=1.490e-08  rel=4.559e-03        
-                [cmp]  Cyhat vs Cy      rel=2.383e-08
-                [cmp] Dywhat vs Dyw     abs=1.610e-11
-                [cmp]  Czhat vs Cz      rel=3.352e-06
-                [cmp] Dzuhat vs Dzu     rel=3.071e-08
-                [cmp] Dzwhat vs Dzw     abs=1.560e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.053878907694304694, 'traj_rel_error': 0.07588044995799628, 'rho_true': 0.9998750394917907, 'rho_hat': 1.0000002762830784}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-        correlated
-            e1
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=2.931e-01
-                [cmp]  Buhat vs Bu      rel=4.784e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=1.490e-08  rel=1.491e-01        
-                [cmp]  Cyhat vs Cy      rel=9.349e-09
-                [cmp] Dywhat vs Dyw     abs=1.802e-11
-                [cmp]  Czhat vs Cz      rel=3.992e-06
-                [cmp] Dzuhat vs Dzu     rel=3.086e-08
-                [cmp] Dzwhat vs Dzw     abs=1.855e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.29306403094359046, 'traj_rel_error': 0.1638847521499199, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9998932839433232}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-            ones
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=2.994e-01
-                [cmp]  Buhat vs Bu      rel=2.484e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=2.107e-08  rel=1.024e-01        
-                [cmp]  Cyhat vs Cy      rel=9.934e-09
-                [cmp] Dywhat vs Dyw     abs=1.804e-11
-                [cmp]  Czhat vs Cz      rel=3.958e-06
-                [cmp] Dzuhat vs Dzu     rel=3.069e-08
-                [cmp] Dzwhat vs Dzw     abs=1.839e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.29944352958422815, 'traj_rel_error': 0.682993439757955, 'rho_true': 0.9998750394917907, 'rho_hat': 0.999909842125003}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-            random
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=2.827e-01
-                [cmp]  Buhat vs Bu      rel=4.212e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=2.581e-08  rel=1.344e-01        
-                [cmp]  Cyhat vs Cy      rel=9.298e-09
-                [cmp] Dywhat vs Dyw     abs=1.891e-11
-                [cmp]  Czhat vs Cz      rel=3.969e-06
-                [cmp] Dzuhat vs Dzu     rel=3.072e-08
-                [cmp] Dzwhat vs Dzw     abs=1.845e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.2826890836107835, 'traj_rel_error': 0.7094004030534825, 'rho_true': 0.9998750394917907, 'rho_hat': 1.0004165243920082}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-
-        independent
-            e1
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=1.010e-01
-                [cmp]  Buhat vs Bu      rel=5.270e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=1.490e-08  rel=1.058e-02 
-                [cmp]  Cyhat vs Cy      rel=1.368e-08
-                [cmp] Dywhat vs Dyw     abs=1.181e-11
-                [cmp]  Czhat vs Cz      rel=3.214e-06
-                [cmp] Dzuhat vs Dzu     rel=3.071e-08
-                [cmp] Dzwhat vs Dzw     abs=1.496e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.10096265794854022, 'traj_rel_error': 0.14807958837622764, 'rho_true': 0.9998750394917907, 'rho_hat': 0.9995914289145464}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-            ones
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=4.281e-02
-                [cmp]  Buhat vs Bu      rel=4.345e-04
-                C:\Users\g7fie\OneDrive\Documenti\GitHub\DR-LDC\utils___simulate.py:641: RuntimeWarning: invalid value encountered in sqrt
-                return float(np.sqrt(1.0 - np.min(s)**2))
-                [cmp]  Bwhat vs Bw      subspace_gap=nan  rel=6.894e-03
-                [cmp]  Cyhat vs Cy      rel=1.184e-08
-                [cmp] Dywhat vs Dyw     abs=1.222e-11
-                [cmp]  Czhat vs Cz      rel=3.397e-06
-                [cmp] Dzuhat vs Dzu     rel=3.073e-08
-                [cmp] Dzwhat vs Dzw     abs=1.580e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.04281034514578502, 'traj_rel_error': 0.07339410225924949, 'rho_true': 0.9998750394917907, 'rho_hat': 0.999662667483667}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-            random
-                [CMP] Comparison of estimates vs ground-truth:
-                [cmp]   Ahat vs A       rel=2.327e-02
-                [cmp]  Buhat vs Bu      rel=1.088e-02
-                [cmp]  Bwhat vs Bw      subspace_gap=2.107e-08  rel=1.537e-02        
-                [cmp]  Cyhat vs Cy      rel=7.769e-09
-                [cmp] Dywhat vs Dyw     abs=1.046e-11
-                [cmp]  Czhat vs Cz      rel=3.210e-06
-                [cmp] Dzuhat vs Dzu     rel=3.069e-08
-                [cmp] Dzwhat vs Dzw     abs=1.495e-08
-                [PLT] Plotting completed. Metrics: {'metrics': {'fro_rel_error': 0.02327116400551359, 'traj_rel_error': 0.07182629545805232, 'rho_true': 0.9998750394917907, 'rho_hat': 1.0001053771032629}, 'dimension_checks': {('A', 'Ahat'): {'true_shape': (7, 7), 'est_shape': (7, 7), 'match': True}, ('Bu', 'Buhat'): {'true_shape': (7, 1), 'est_shape': (7, 1), 'match': True}, ('Bw', 'Bwhat'): {'true_shape': (7, 2), 'est_shape': (7, 1), 'match': False}, ('Cy', 'Cyhat'): {'true_shape': (3, 7), 'est_shape': (3, 7), 'match': True}, ('Dyw', 'Dywhat'): {'true_shape': (3, 2), 'est_shape': (3, 1), 'match': False}, ('Cz', 'Czhat'): {'true_shape': (8, 7), 'est_shape': (8, 7), 'match': True}, ('Dzu', 'Dzuhat'): {'true_shape': (8, 1), 'est_shape': (8, 1), 'match': True}, ('Dzw', 'Dzwhat'): {'true_shape': (8, 2), 'est_shape': (8, 1), 'match': False}}}
-    """
-

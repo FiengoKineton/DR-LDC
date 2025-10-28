@@ -15,7 +15,7 @@ from utils___SolutionComparison import ResultsComparator
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, FROM_DATA: bool = None):
+    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, save: bool = False, FROM_DATA: bool = None):
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
@@ -46,8 +46,8 @@ class baseline_optim_problem():
         print(f"[saved] {out_composite}")
 
         if plot: 
-            cl.plot_timeseries(sim)
-            cl.plot_composite(sim_composite)
+            cl.plot_timeseries(sim=sim, save=save, out=out)
+            cl.plot_composite(sim=sim_composite, save=save, out=out)
 
     def plant_to_dict(self, P: Plant):
         return {
@@ -119,7 +119,7 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, gamma: float, Sigma_nom: np.ndarray, plot: bool = False, FROM_DATA: bool = False):
+    def __init__(self, params: dict, out: Path, gamma: float, Sigma_nom: np.ndarray, plot: bool = False, save: bool = False, FROM_DATA: bool = False):
 
         recover = Recover()
         api = MatricesAPI()
@@ -163,6 +163,15 @@ class lmi_pipeline_optim_problem():
         eig = np.linalg.eigvals(Acl)
         rho = float(np.max(np.abs(eig)))
 
+        eig_cart = [
+            {"re": float(ev.real), "im": float(ev.imag), "abs": float(np.abs(ev))}
+            for ev in eig
+        ]
+        eig_polar = [
+            {"abs": float(np.abs(ev)), "ang_rad": float(np.angle(ev))}
+            for ev in eig
+        ]
+
         warn_margin = 1.0 - 1e-6     # warn if too close to 1 from below
         hard_fail   = 1.0 + 1e-9     # fail if ≥ 1 within numerical wiggle
 
@@ -193,12 +202,16 @@ class lmi_pipeline_optim_problem():
                 "lambda_opt": res.lambda_opt,
                 "spectral_radius_Acl": rho,
             },
-            "disturbance": {
-                "Sigma_nom": Sigma_nom.tolist(),
-            },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
             "composite_closed_loop": self.plant_cl_to_dict(plant_cl),
+            "Acl_eigenvals": {
+                "cartesian": eig_cart,
+                "polar": eig_polar
+            },            
+            "disturbance": {
+                "Sigma_nom": Sigma_nom.tolist(),
+            },
             "dro_variables": {
                 "Q": None if res.Q is None else res.Q.tolist(),
                 "X": None if res.X is None else res.X.tolist(),
@@ -235,8 +248,16 @@ class lmi_pipeline_optim_problem():
 
         # 7) Plot results
         if plot: 
-            cl.plot_timeseries(sim)
-            cl.plot_composite(sim_composite)
+            cl.plot_timeseries(sim=sim, save=save, out=out)
+            cl.plot_composite(sim=sim_composite, save=save, out=out)
+
+        Data = {
+            'gamma': res.gamma, 'lambda': res.lambda_opt, 'Sigma_nom': Sigma_nom,
+            'A_c': Ac, 'B_c':Bc, 'C_c': Cc, 'D_c': Dc, 'A_cl': Acl, 'rho': rho,
+        }
+        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho']:
+            print(f"\n{key} =")
+            print(Data[key])
 
 
     def plant_to_dict(self, P: Plant):
@@ -285,14 +306,16 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     p = cfg.get("params", {})
     out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
     m = p.get("ambiguity", {}).get("model", "W2")
+    FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
+
     _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent") if m == "W2" else m
     _method = p.get("method", "lmi")
-    FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
-    plot = bool(p.get("plot", False)) if plot is None else plot
+    _plot = bool(p.get("plot", False)) if plot is None else plot
     _data = "DDD" if FROM_DATA else "MBD"
-    comp = args.comp if comp is None else comp
+    _save = p.get("save", False)
+    _comp = args.comp if comp is None else comp
 
     #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     if gamma is None or m != "W2":
@@ -304,9 +327,9 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
     path_name = f"{_type}_{_model}_{_data}"
 
-    if comp:
-        cmp = ResultsComparator(out_root=out, save=p.get("save", False))
-        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=plot)
+    if _comp:
+        cmp = ResultsComparator(out_root=out, save=_save)
+        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
         out = out / f"{_method}" / f"run_{_runID}"
@@ -316,10 +339,10 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
         if _method == "base":
             print("\nRunning baseline optimization...")
-            baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot, FROM_DATA=FROM_DATA)
+            baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
         else:
             print("\nRunning LMI pipeline optimization...")
-            lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=plot, FROM_DATA=FROM_DATA)
+            lmi_pipeline_optim_problem(params=p, out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot, save=_save, FROM_DATA=FROM_DATA)
 
 
 
@@ -330,22 +353,24 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
-
-    if p.get("method", "lmi") == "lmi":                         # set method: "lmi"
-        if p.get("model", "correlated") == "correlated":        # ------| set model: "correlated"
-            if bool(p.get("ident", {}).get("stabilise", True)): # ------|-------| set stabilise: true
-                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats&Stabilise
-                    gamma = 0.41640786499873816
-                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: Opt&Stabilise
-                    gamma = 0.6180339887498949
-            else:                                               # ------|-------| set stabilise: false
-                if bool(p.get("use_set_out_mats", False)):      # ------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats
-                    gamma = 0.06888370749726605
-                else:                                           # ------|-------|-------| set use_set_out_mats: false           | runID: Opt
-                    gamma = 0.9016994374947425
-        else:                                                   # ------| set model: "independent"
+    if not bool(p.get("ambiguity", {}).get("fixGamma", False)):     # set fixGamma: 0
+        if p.get("method", "lmi") == "lmi":                         # ------|set method: "lmi"
+            if p.get("model", "correlated") == "correlated":        # ------|------| set model: "correlated"
+                if bool(p.get("ident", {}).get("stabilise", True)): # ------|------|-------| set stabilise: true
+                    if bool(p.get("use_set_out_mats", False)):      # ------|------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats&Stabilise
+                        gamma = 0.41640786499873816
+                    else:                                           # ------|------|-------|-------| set use_set_out_mats: false           | runID: Opt&Stabilise
+                        gamma = 0.6180339887498949
+                else:                                               # ------|------|-------| set stabilise: false
+                    if bool(p.get("use_set_out_mats", False)):      # ------|------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats
+                        gamma = 0.06888370749726605
+                    else:                                           # ------|------|-------|-------| set use_set_out_mats: false           | runID: Opt
+                        gamma = 0.9016994374947425
+            else:                                                   # ------|------| set model: "independent"
+                gamma = p.get("ambiguity", {}).get("gamma", 0.5)
+        else:
             gamma = p.get("ambiguity", {}).get("gamma", 0.5)
-    else:
+    else:                                                           # set fixGamma: 1
         gamma = p.get("ambiguity", {}).get("gamma", 0.5)
 
 

@@ -255,6 +255,7 @@ if any(abs(eigvals_cl) >= 1 - 1e-6):
 else:
     print("Closed-loop system is stable")
     print(abs(eigvals_cl))
+    print(f"spectral radius: {float(np.max(np.abs(eigvals_cl)))}")
 
 # Save data
 controller_data = {
@@ -264,11 +265,11 @@ controller_data = {
     'C_v': C_v, 'D_vu': D_vu, 'D_vw': D_vw,
     'C_y': C_y, 'D_yw': D_yw,
     'Q': Q, 'R': R, 'gamma': gamma, 'Sigma_nom': Sigma_nom,
-     'dt': dt
+    'dt': dt, 'lambda': lambda_.value,
 }
 
 print("\nController matrices:")
-for key in ['A_c', 'B_c', 'C_c', 'D_c']:
+for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl']:
     print(f"\n{key} =")
     print(controller_data[key])
 
