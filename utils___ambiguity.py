@@ -215,7 +215,7 @@ class WassersteinAmbiguitySet:
         
         if self.ellipse: 
             #self.plot_samples_with_wasserstein_bounds(s, S)
-            self.plot_all_pairs(s, S)
+            self.plot_all_pairs(s, S) #self.Sigma_nom)
             plt.show()
         return s
 
@@ -383,7 +383,7 @@ class Disturbances:
 
 if __name__ == "__main__":
     # simple test
-    wass = Disturbances(model="W2", gamma=0.5, n=2, var=0.7, ellipse=True)
+    wass = Disturbances(model="Gaussian", gamma=0.5, n=2, var=1, ellipse=True)
     print("Nominal Sigma:\n", wass.Sigma_nom)
     print("Gamma:", wass.gamma)
     print("Mode:", wass.mode)

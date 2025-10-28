@@ -38,7 +38,7 @@ def make_data_openloop(gamma: float) -> None:
     # Example placeholder:
     Open_Loop(MAKE_DATA=True, EVAL_FROM_PATH=False, PLOT=False, gamma=gamma)
 
-# ----------------------------- objective construction -----------------------------
+# ----------------------------- objective construction ------------------------------
 
 def _safe_get(d: Dict, path: List[str], default=None):
     cur = d
@@ -196,8 +196,7 @@ def _build_scalar_objective(report: dict,
         "use_nrmse": bool(use_nrmse),
     }
 
-
-# ----------------------------- evaluation wrapper -----------------------------
+# ----------------------------- evaluation wrapper ----------------------------------
 
 def _evaluate_gamma_once(gamma: float,
                          *,
@@ -240,7 +239,7 @@ def _evaluate_gamma_once(gamma: float,
     cache[gamma] = rec
     return obj["total"], rec
 
-# ----------------------------- bounded 1-D search -----------------------------
+# ----------------------------- bounded 1-D search ----------------------------------
 
 def _golden_section_minimize(f: Callable[[float], Tuple[float, Dict[str, Any]]],
                              a: float, b: float,
@@ -288,7 +287,7 @@ def _golden_section_minimize(f: Callable[[float], Tuple[float, Dict[str, Any]]],
         "history": history,
     }
 
-# ----------------------------- public API -----------------------------
+# ----------------------------- public API ------------------------------------------
 
 def optimize_gamma(
     *,
@@ -349,32 +348,19 @@ def optimize_gamma(
     ))
     return res
 
+# ----------------------------- save res --------------------------------------------
 
-
-
-# ==========================================================================================================================================================
-
-if __name__ == "__main__":
-    gamma_bounds = (0.0, 1.0)
-    signals = ["y", "z", "x", "u"]
-    signal_mix_weights = {"y": 0.3, "z": 0.4, "x": 0.2, "u": 0.1}
-    use_nrmse = True
-    weights = {"traj": 1.0, "mats": 0.1, "stab": 20.0}
-    delta_weights = {"ctrl": 1.0, "plant": 0.7, "comp": 0.3}
-    tol = 5e-3
-    max_iter = 30
-
-    res = optimize_gamma(
-        gamma_bounds=gamma_bounds,
-        signals=signals,
-        signal_mix_weights=signal_mix_weights,
-        use_nrmse=use_nrmse,
-        weights=weights,
-        delta_weights=delta_weights,
-        tol=tol, max_iter=max_iter,
-    )
-
-
+def save(res, 
+        gamma_bounds: Tuple[float, float],
+        signal: str = "y",         # choose among {"x","u","y","z","xc"}
+        signals: list[str] | None = None,  # NEW: to combine multiple
+        signal_mix_weights: dict[str,float] | None = None,  # NEW: weights among signals
+        use_nrmse: bool = True,    # True -> use NRMSE, False -> RMSE
+        weights: Dict[str, float] = None,      # {"traj":1.0, "mats":0.1, "stab":10.0}
+        delta_weights: Dict[str, float] = None,# {"ctrl":1.0,"plant":1.0,"comp":0.5}
+        tol: float = 1e-3,
+        max_iter: int = 40,):
+    
     if yaml is None:
         raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
     with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
@@ -468,3 +454,35 @@ if __name__ == "__main__":
             "tol": tol, "max_iter": max_iter,
         })
 
+
+# ==========================================================================================================================================================
+
+if __name__ == "__main__":
+    gamma_bounds = (0.0, 1.0)
+    signals = ["y", "z", "x", "u"]
+    signal_mix_weights = {"y": 0.3, "z": 0.4, "x": 0.2, "u": 0.1}
+    use_nrmse = True
+    weights = {"traj": 1.0, "mats": 0.1, "stab": 20.0}
+    delta_weights = {"ctrl": 1.0, "plant": 0.7, "comp": 0.3}
+    tol = 5e-3
+    max_iter = 30
+
+    res = optimize_gamma(
+        gamma_bounds=gamma_bounds,
+        signals=signals,
+        signal_mix_weights=signal_mix_weights,
+        use_nrmse=use_nrmse,
+        weights=weights,
+        delta_weights=delta_weights,
+        tol=tol, max_iter=max_iter,
+    )
+
+    save(res, 
+        gamma_bounds=gamma_bounds,
+        signals=signals,
+        signal_mix_weights=signal_mix_weights,
+        use_nrmse=use_nrmse,
+        weights=weights,
+        delta_weights=delta_weights,
+        tol=tol, max_iter=max_iter,
+    )

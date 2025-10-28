@@ -117,7 +117,7 @@ class Closed_Loop():
         U  = np.zeros((T, nu))
         Z  = np.zeros((T, nz))
 
-        wass = Disturbances(gamma=gamma)
+        wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
         W = wass.sample(T=T, Sigma=Sigma_w)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -279,7 +279,7 @@ class Closed_Loop():
         x = np.zeros((nX, 1))
 
         # Disturbance generation
-        wass = Disturbances(gamma=gamma)
+        wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
         W = wass.sample(T=T, Sigma=Sigma_w)
         if W.ndim == 1:
             W = W.reshape(T, 1)
@@ -491,7 +491,7 @@ class Open_Loop():
         T = args.T
         rng = np.random.default_rng(args.seed)
 
-        wass = Disturbances(gamma=gamma)
+        wass = Disturbances(gamma=gamma, n=Sigma[0].size, var=1)
         W = wass.sample(T=T, Sigma=Sigma).T
         #api = MatricesAPI()
         #plant, _ = api.get_system(Generating_data=True)
@@ -857,7 +857,7 @@ class Open_Loop():
         Xtru = sim(Atru, x0, nsteps)
         Xhat = sim(Ahat, x0, nsteps)
         Tlen = min(Xtru.shape[1], Xhat.shape[1])
-        t = np.arange(Tlen)
+        t = np.arange(Tlen)*self.ts
 
         # Metrics
         fro_A = float(np.linalg.norm(Atru, "fro"))
@@ -891,15 +891,16 @@ class Open_Loop():
                 if rho_true >= 1 or rho_hat >= 1:
                     ttl += "  [unstable eigenvalues detected]"
                 axs[i].set_title(ttl)
-        axs[-1].set_xlabel("k (steps)")
+        axs[-1].set_xlabel("time") #k (steps)")
         axs[0].legend()
 
         # 2) Error norm over time
         err = np.linalg.norm(Xhat[:, :Tlen] - Xtru[:, :Tlen], axis=0)
         plt.figure(figsize=(8, 4))
-        plt.plot(np.arange(Tlen), err, marker="o")
+        plt.plot(np.arange(Tlen)*self.ts, err, marker="o")
         plt.title("State error norm over time  ||x̂_k − x_k||₂")
-        plt.xlabel("k (steps)"); plt.ylabel("error norm"); plt.grid(alpha=0.3)
+        plt.xlabel("time") #k (steps)")
+        plt.ylabel("error norm"); plt.grid(alpha=0.3)
 
         # 3) Eigenvalues on unit circle (DT)
         evals_true = np.linalg.eigvals(Atru)
@@ -981,4 +982,4 @@ if __name__ == "__main__":
 
     m = ["e1", "ones", "random"]
     if CL: Closed_Loop(TEST=False)
-    if OL: Open_Loop(MAKE_DATA=1, EVAL_FROM_PATH=1, p=True, x0_mode=m[0], s=False)
+    if OL: Open_Loop(MAKE_DATA=1, EVAL_FROM_PATH=1, p=True, x0_mode=m[0], s=True)

@@ -315,6 +315,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _data = "DDD" if FROM_DATA else "MBD"
     _save = p.get("save", False)
     _comp = args.comp if comp is None else comp
+    _ts = p.get("simulation", {}).get("ts", 0.5)
 
     #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     if gamma is None or m != "W2":
@@ -331,7 +332,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     path_name = f"{_type}_{_model}_{_data}"
 
     if _comp:
-        cmp = ResultsComparator(out_root=out, save=_save)
+        cmp = ResultsComparator(out_root=out, save=_save, ts=_ts)
         return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:

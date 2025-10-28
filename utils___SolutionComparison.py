@@ -12,13 +12,14 @@ from utils___matrices import MatricesAPI
 
 
 class ResultsComparator:
-    def __init__(self, out_root: str, save: bool = True):
+    def __init__(self, out_root: str, save: bool = True, ts: float = 0.05):
         """
         out_root: artifacts root, e.g. "./out/artifacts/"
         """
         self.out_root = Path(out_root).with_suffix("")
         self.save = save
-
+        self.ts = ts
+    
     # ------------------------ helpers: i/o & reconstruction ------------------------
 
     @staticmethod
@@ -200,12 +201,12 @@ class ResultsComparator:
         return t, X, Y, Z, U, Xc
 
     @staticmethod
-    def _plot_overlay_states(t, XM, XD, l, title: str, save: bool, save_path: str):
+    def _plot_overlay_states(t, XM, XD, l, ts: float, title: str, save: bool, save_path: str):
         XM = np.atleast_2d(XM)
         XD = np.atleast_2d(XD)
         T = min(XM.shape[0], XD.shape[0])
         XM, XD = XM[:T], XD[:T]
-        t = np.arange(T) if len(t) != T else t[:T]
+        t = (np.arange(T) if len(t) != T else t[:T]) * ts
         nx = XM.shape[1] if XM.ndim == 2 else 1
         if XM.ndim == 1:
             XM = XM.reshape(-1, 1)
@@ -639,19 +640,19 @@ class ResultsComparator:
 
             title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_sys_states.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title, save=self.save, save_path=save_path)            
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", self.ts, title, save=self.save, save_path=save_path)            
             title = f"{method.upper()} closed-loop: cntrl states (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_ctrl_states.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", title, save=self.save, save_path=save_path)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", self.ts, title, save=self.save, save_path=save_path)
             title = f"{method.upper()} closed-loop: inputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_ctrl_inputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", title, save=self.save, save_path=save_path)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", self.ts, title, save=self.save, save_path=save_path)
             title = f"{method.upper()} closed-loop: outputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_sys_outputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", title, save=self.save, save_path=save_path)            
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", self.ts, title, save=self.save, save_path=save_path)            
             title = f"{method.upper()} closed-loop: perf. outputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_perf_outputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title, save=self.save, save_path=save_path)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
             if plot: plt.show()
 
             if re_evaluate:
@@ -678,10 +679,10 @@ class ResultsComparator:
 
             title = f"{method.upper()} composite closed-loop: states (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_CL_sys_states.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", title, save=self.save, save_path=save_path)            
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", self.ts, title, save=self.save, save_path=save_path)            
             title = f"{method.upper()} composite closed-loop: perf. outputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_CL_perf_outputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", title, save=self.save, save_path=save_path)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
             if plot: plt.show()
 
             if re_evaluate:
