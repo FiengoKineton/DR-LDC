@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 
 from problem___baseline import run_once
-from problem___dro_lmi import build_and_solve_dro_lmi
+from problem___dro_lmi import build_and_solve_dro_lmi, build_and_solve_dro_lmi_upd
 
 from utils___systems import Plant, Controller, Plant_cl, Noise
 from utils___simulate import Closed_Loop 
@@ -126,40 +126,57 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, noise: Noise, plot: bool = False, save: bool = False, FROM_DATA: bool = False):
+    def __init__(self, params: dict, out: Path, noise: Noise, upd: bool = False, plot: bool = False, save: bool = False, FROM_DATA: bool = False):
 
         recover = Recover()
         api = MatricesAPI()
         cl = Closed_Loop() 
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma)
-        api.print_plant(plant)
+        if not upd:
+            plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
+            api.print_plant(plant)
 
-        # 2) Solve DRO-LMI (choose "correlated" or "independent")
-        model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
-        res = build_and_solve_dro_lmi(
-            plant=plant,
-            api=api,
-            noise=noise,
-            model=model,
-        )
+            # 2) Solve DRO-LMI (choose "correlated" or "independent")
+            model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
+            res = build_and_solve_dro_lmi(
+                plant=plant,
+                api=api,
+                noise=noise,
+                model=model,
+            )
 
+            Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
+            A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
+            Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
+            Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc))
+
+        else:
+            data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
+
+            # 2) Solve DRO-LMI (choose "correlated" or "independent")
+            model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
+            res = build_and_solve_dro_lmi_upd(
+                data=data,
+                api=api,
+                noise=noise,
+                model=model,
+            )
+
+            Ac, Bc, Cc, Dc = res._get_cntrl()
+            A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = res._get_plant()
+            Acl, Bcl, Ccl, Dcl = res._get_cl()
+            Sigma_nom = res.Sigma
+        
         if res.status not in ("optimal", "optimal_inaccurate"):
             raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
 
-        # Debug prints (one time)
-        print("Abar", np.shape(res.Abar), "Bbar", np.shape(res.Bbar), 
-            "Cbar", np.shape(res.Cbar), "Dbar", np.shape(res.Dbar), "Pbar", np.shape(res.Pbar))
 
         # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
-        Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
-        A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
-        Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
+
 
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
         ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
-        Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl)
         plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
 
         # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
@@ -196,8 +213,9 @@ class lmi_pipeline_optim_problem():
         else:
             print("Closed-loop system is stable")
             print(abs(eig))
+        
 
-        # 5) Persist everything meaningful into a single JSON
+        # JSON
         payload = {
             "meta": {
                 "model": model,
@@ -207,6 +225,9 @@ class lmi_pipeline_optim_problem():
                 "gamma": res.gamma,
                 "lambda_opt": res.lambda_opt,
                 "spectral_radius_Acl": rho,
+                "rx": None if res.rx is None else res.rx,
+                "ry": None if res.ry is None else res.ry,
+                "rz": None if res.rz is None else res.rz,
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
@@ -233,6 +254,14 @@ class lmi_pipeline_optim_problem():
                 "Dbar": None if res.Dbar is None else res.Dbar.tolist(),
                 "Tp": None if res.Tp is None else res.Tp.tolist(),
                 "P": None if res.P is None else res.P.tolist(),
+                "A1": None if res.A1 is None else res.A1.tolist(),
+                "B1": None if res.B1 is None else res.B1.tolist(),
+                "C1": None if res.C1 is None else res.C1.tolist(),
+                "D1": None if res.D1 is None else res.D1.tolist(),
+                "A2": None if res.A2 is None else res.A2.tolist(),
+                "B2": None if res.B2 is None else res.B2.tolist(),
+                "C2": None if res.C2 is None else res.C2.tolist(),
+                "D2": None if res.D2 is None else res.D2.tolist(),
             },
         }
 
@@ -260,8 +289,9 @@ class lmi_pipeline_optim_problem():
         Data = {
             'gamma': res.gamma, 'lambda': res.lambda_opt, 'Sigma_nom': Sigma_nom,
             'A_c': Ac, 'B_c':Bc, 'C_c': Cc, 'D_c': Dc, 'A_cl': Acl, 'rho': rho, 'var' : noise.var,
+            'rx': None if res.rx is None else res.rx, 'ry': None if res.ry is None else res.ry, 'rz': None if res.rz is None else res.rz
         }
-        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho', 'var']:
+        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho', 'var', 'rx', 'ry', 'rz']:
             print(f"\n{key} =")
             print(Data[key])
         
@@ -322,6 +352,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent") if m == "W2" else m
+    _upd = bool(p.get("upd", 0))
     _method = p.get("method", "lmi")
     _plot = bool(p.get("plot", False)) if plot is None else plot
     _data = "DDD" if FROM_DATA else "MBD"
@@ -334,6 +365,8 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         gamma = p.get("ambiguity", {}).get("gamma", 0.5)
     else:
         gamma = gamma
+    
+    if _method=="lmi" and _upd: _method = "lmi-upd"
 
     var = float(p.get("ambiguity", {})["var"])
     n = p.get("dimensions", {}).get("nw", 2)
@@ -358,7 +391,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             opt = baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
         else:
             print("\nRunning LMI pipeline optimization...")
-            opt = lmi_pipeline_optim_problem(params=p, out=out, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
+            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
 
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
@@ -381,7 +414,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         print("Z worst/best:", an.worst_best_snr("z"))
 
         # 3) Sweep Σ orientation in a 2D subspace and plot
-        thetas, traces = an.plot_snr_rotation_sweep(Sigma0=Sigma_nom, dims=(0,1), n_angles=181)
+        thetas, traces = an.plot_snr_rotation_sweep(dims=(0,1), n_angles=181)
 
         # 4) Plot worst/best SNR bands
         an.plot_worst_best_lines()

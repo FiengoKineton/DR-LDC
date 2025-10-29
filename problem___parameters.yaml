@@ -1,8 +1,9 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
+  upd: 1                                                                        # set
   model: "correlated"                                                           # set | may be var ("correlated" or "independent")
-  FROM_DATA: 0                                                                  # VAR ------------------------------ true or false
+  FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
 
   save: 0                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false

@@ -465,7 +465,7 @@ class Open_Loop():
         api = MatricesAPI()
         plant, _ = api.get_system(FROM_DATA=False, gamma=gamma)
 
-        if MAKE_DATA: self.make_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
+        if MAKE_DATA: self.data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
         if EVAL_FROM_PATH: self.evaluate_from_path()
         if PLOT: 
             metrics = self.plot_est_vs_truth(x0_mode="e1" if x0_mode is None else x0_mode, show=True if s is None else s)
@@ -598,6 +598,30 @@ class Open_Loop():
         cond, svals = pe_check(X_reg, U[:, :-1])
         print(f"[PE] cond( D D^T ) = {cond:.2e}   rank={np.sum(svals>1e-10)}/{nx+nu}")
 
+        # ----------------------- build dataset dict -----------------------
+        # Align Y,Z to length T by repeating the last column (keeps your current semantics)
+        Y_aligned = Y if Y.shape[1] == T else np.hstack([Y, Y[:, [-1]]])
+        Z_aligned = Z if Z.shape[1] == T else np.hstack([Z, Z[:, [-1]]])
+
+        t = np.arange(T, dtype=float)
+
+        data = {
+            "X": X,                     # shape (nx, T)
+            "U": U,                     # shape (nu, T)
+            "Y": Y_aligned,             # shape (ny, T)
+            "Z": Z_aligned,             # shape (nz, T)
+            "X_reg": X_reg,             # shape (nx, T-1)
+            "X_next": X_next,           # shape (nx, T-1)
+            "W": W,                     # shape (nw, T)
+            "R": R,                     # residual proxy, shape (nx, T-1)
+            "t": t,                     # time index
+            "meta": {
+                "nx": nx, "nu": nu, "nw": nw, "ny": ny, "nz": nz, "T": T,
+                "seed": args.seed, "input": args.input, "amp": args.amp, "w_std": args.w_std,
+                "csv_path": self.out, "truth_path": self.truth_path,
+            }
+        }
+
         # Save CSV
 
         headers = []
@@ -638,6 +662,11 @@ class Open_Loop():
             seed=args.seed, input=args.input, amp=args.amp, w_std=args.w_std
         )
         print(f"[OK] Saved ground-truth matrices to {self.truth_path}")
+
+        data["headers"] = headers
+        data["rows"] = np.asarray(rows)
+        return data
+
 
     def evaluate_from_path(
         self, 
@@ -710,6 +739,7 @@ class Open_Loop():
         plant_est, _ = api.make_matrices_from_data(
             delimiter=delimiter,
             ridge=ridge,
+            eval=True,
         )
 
         Ahat, Buhat, Bwhat = plant_est.A, plant_est.Bu, plant_est.Bw

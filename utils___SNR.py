@@ -162,7 +162,7 @@ class SNRAnalyzer:
         for k,(lab,vec) in enumerate(zip(labels, chans)):
             pad = np.pad(vec, (0, L - vec.size), constant_values=np.nan)
             axes[1].bar(x + (k-1)*w, self._todB(pad), width=w, label=lab)
-        axes[1].set_xticks(x); axes[1].set_xlabel("channel idx"); axes[1].set_ylabel("dB")
+        axes[1].set_xticks(x); axes[1].set_xlabel("channel idx")#; axes[1].set_ylabel("dB")
         axes[1].legend()
         fig.tight_layout()
         if show: plt.show()
@@ -299,9 +299,9 @@ class SNRAnalyzer:
 
     # ----------------------- plotting: SNR vs Σ direction ---------------------------
 
-    def plot_snr_rotation_sweep(self, Sigma0: np.ndarray, dims=(0,1), n_angles: int = 181,
+    def plot_snr_rotation_sweep(self, dims=(0,1), n_angles: int = 181,
                                 ports=("y","u","z"), show=True):
-        Sigma0 = self._sym(np.array(Sigma0, float))
+        Sigma0 = self.Sigma
         nw = Sigma0.shape[0]
         i, j = dims
         if i == j or i >= nw or j >= nw:

@@ -1,10 +1,10 @@
 import __main__
 import re, json, yaml, sys
 import numpy as np
-from scipy.linalg import sqrtm, expm
-from utils___systems import Plant, Controller, Plant_cl
-from typing import Tuple, Optional, List
-from numpy.linalg import eigvals, norm
+from scipy.linalg import expm
+from utils___systems import Plant, Controller, Plant_cl, Data
+from typing import Tuple, List
+from numpy.linalg import norm
 from utils___simulate import Open_Loop
 from pathlib import Path
 
@@ -173,7 +173,7 @@ class MatricesAPI():
         self.use_set_out_mats = bool(self.p.get("use_set_out_mats", False))
 
 
-    def get_system(self, FROM_DATA: bool = None, Generating_data: bool = False, gamma: float = None, **kwargs):
+    def get_system(self, FROM_DATA: bool = None, Generating_data: bool = False, gamma: float = None, upd: bool = False, **kwargs):
         """
         If FROM_DATA=True, pass data_csv="path/to/file.csv" (and optional settings).
         Example:
@@ -187,7 +187,7 @@ class MatricesAPI():
         
         if FROM_DATA and not Generating_data:                    
             print("\nBuilding system from data...\n\n")
-            return self.make_matrices_from_data(gamma=gamma, **kwargs)
+            return self.make_matrices_from_data(gamma=gamma, upd=upd, **kwargs)
         else:
             if self.p.get("plant", {}).get("type", None) == "PaperLike":
                 print("\nBuilding paper-like system...\n\n")
@@ -459,6 +459,8 @@ class MatricesAPI():
         gamma: bool = None,
         delimiter: str = ",",
         ridge: float = 1e-6,
+        eval: bool = False,
+        upd: bool = False
     ):
         """
         Data-driven DT identification with optional Bias-Correction (BC) or Instrumental Variables (IV).
@@ -478,8 +480,10 @@ class MatricesAPI():
         Returns (plant, ctrl0); prints diagnostics.
         """
 
-        if not Path(self.csv_path).exists(): 
-            Open_Loop(gamma=gamma)
+        if not eval:
+            if not Path(self.csv_path).exists(): 
+                Open_Loop(gamma=gamma)
+
 
         data_csv = str(self.csv_path)
         if not data_csv:
@@ -571,6 +575,15 @@ class MatricesAPI():
         X_iv_path      = ident.get("X_iv_path", None)
 
         blocks = _build_blocks_from_csv(data_csv, delimiter=delimiter)
+
+        if upd: 
+            X = blocks["X"]
+            X_next = blocks["X_next"]
+            U = blocks["U"]
+            Y = blocks["Y"]
+            Z = blocks["Z"]
+            return Data(X=X, X_next=X_next, U=U, Y=Y, Z=Z, W=None, rx=None, ry=None, rz=None)
+        
         X_raw, U_raw, X1_raw = blocks["X"], blocks["U"], blocks["X_next"]
         if zero_mean:
             X, U, X_next = demean(X_raw), demean(U_raw), demean(X1_raw)
@@ -676,34 +689,6 @@ class MatricesAPI():
                     Cz  = np.vstack([Cz,  np.zeros((pad, nx))])
                     Dzu = np.vstack([Dzu, np.zeros((pad, nu))])
                     Dzw = np.vstack([Dzw, np.zeros((pad, Dzw.shape[1]))])
-
-        # ------------------------- Bias-Correction (optional) and IV (optional) diagnostics -------------------------
-
-        # Build projected “moments” for diagnostics and optional BC/IV replacement of A,Bu
-        T       = X.shape[1]
-        Phi     = np.vstack([U, X])                    # (nu+nx) x T
-        Xbar0   = (X @ Phi.T) / T                      # nx x (nu+nx)
-        Xbar1   = (X_next @ Phi.T) / T
-
-        method_note = "Naive (biased)"
-
-        if use_iv:
-            X_iv = None
-            Phi_iv  = np.vstack([U, X_iv])             # instruments
-            if np.linalg.matrix_rank(Phi_iv) < (nx + nu):
-                raise RuntimeError("[IV] rank(Phi_iv) deficient; collect a better second run.")
-            Xbar0_iv = (X @ Phi_iv.T) / T
-            Xbar1_iv = (X_next @ Phi_iv.T) / T
-            # Replace A,Bu by ridge on time-domain is usually numerically safer; keep IV for reporting
-            method_note = "IV (used for moment diagnostics; A,Bu from ridge time-domain)"
-
-        elif use_bc:
-            if sigma_v2 is None:
-                sigma_v2, _ = _estimate_sigma_v2_diff(X_raw)  # estimate from raw (un-centered) states
-            Psi = np.hstack([np.zeros((nx, nu)), (T * sigma_v2) * np.eye(nx)])
-            Xbar0_bc = Xbar0 - Psi / T
-            Xbar1_bc = Xbar1
-            method_note = f"BC(sigma_v2={sigma_v2:.3e}) (A,Bu from ridge time-domain)"
 
         # ---------- Diagnostics ----------
         rho_A = float(np.max(np.abs(np.linalg.eigvals(A))))
