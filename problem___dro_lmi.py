@@ -251,6 +251,9 @@ def build_and_solve_dro_lmi_upd(
     alpha_cap: float = 1e2,  # keep X, Y from exploding
     fro_cap: float = 1e2,  # keep K, L, M, N from exploding
     additional_constraints: bool = False,
+    mhu_x: float = 1.0,
+    mhu_y: float = 0.5,
+    mhu_z: float = 0.5,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -259,16 +262,19 @@ def build_and_solve_dro_lmi_upd(
     """
 
     x, x_next, u, y, z = data.get_data()
-    (nx, T), (nu, _), (ny, _), (nz, _) = data.dims()
+    T, nx, nu, ny, nz = x.shape[1], x.shape[0], u.shape[0], y.shape[0], z.shape[0]
 
-    Sigma_nom, gamma, var = noise.Sigma_nom, noise.gamma, noise.var
+    gamma, var = noise.gamma, noise.var
     nw = 1
+    Sigma_nom = var * np.eye(nw)
     d = Disturbances(n=nw)
     w = d.sample(T=T, Sigma=Sigma_nom).T
 
-    rx = cp.Variable(nonneg=True, name="ridge_x")
-    ry = cp.Variable(nonneg=True, name="ridge_y")
-    rz = cp.Variable(nonneg=True, name="ridge_z")
+
+    Dx = np.vstack([x, u, w])
+    Dy = np.vstack([x, w])
+    Dz = np.vstack([x, u, w])
+
 
     def _pseudo_inv(D, r):
         return D.T @ np.linalg.inv(D @ D.T + r * np.eye(D.shape[0]))
@@ -293,17 +299,45 @@ def build_and_solve_dro_lmi_upd(
         return float(x) if np.isscalar(x) else x
     
 
-    Dx = np.vstack([x, u, w])
-    Dy = np.vstack([x, w])
-    Dz = np.vstack([x, u, w])
+    #rx = cp.Variable(nonneg=True, name="ridge_x")
+    #ry = cp.Variable(nonneg=True, name="ridge_y")
+    #rz = cp.Variable(nonneg=True, name="ridge_z")
 
-    Dx_inv = _pseudo_inv(Dx, rx)
-    Dy_inv = _pseudo_inv(Dy, ry)
-    Dz_inv = _pseudo_inv(Dz, rz)
+    rx = cp.Parameter(nonneg=True, value=1e-6)
+    ry = cp.Parameter(nonneg=True, value=1e-6)
+    rz = cp.Parameter(nonneg=True, value=1e-6)
 
-    OX = x_next @ Dx_inv
-    OY = y @ Dy_inv
-    OZ = z @ Dz_inv
+    Gx = cp.Variable((Dx.shape[0], Dx.shape[0]), PSD=True, name='Gx')
+    Gy = cp.Variable((Dy.shape[0], Dy.shape[0]), PSD=True, name='Gy')
+    Gz = cp.Variable((Dz.shape[0], Dz.shape[0]), PSD=True, name='Gz')
+
+    Ac = cp.Variable((nx, nx), name='Ac')
+    Bc = cp.Variable((nx, ny), name='Bc')
+    Cc = cp.Variable((nu, nx), name='Cc')
+    Dc = cp.Variable((nu, ny), name='Dc')
+
+    lam = cp.Variable(nonneg=True, name="lambda")
+    Q = cp.Variable((nw, nw), PSD=True, name="Q")
+
+    X = cp.Variable((nx, nx), symmetric=True, name="X")
+    Y = cp.Variable((nx, nx), symmetric=True, name="Y")
+    K = cp.Variable((nx, nx), name="K")
+    L = cp.Variable((nx, ny), name="L")
+    M = cp.Variable((nu, nx), name="M")
+    N = cp.Variable((nu, ny), name="N")
+
+    Ix = I(nx)
+    Iw = I(nw)
+    Iz = I(nz)
+
+    #Dx_inv = _pseudo_inv(Dx, rx)
+    #Dy_inv = _pseudo_inv(Dy, ry)
+    #Dz_inv = _pseudo_inv(Dz, rz)
+
+    # Matrices approximation ----------
+    OX = x_next @ Dx.T @ Gx
+    OY = y @ Dy.T @ Gy
+    OZ = z @ Dz.T @ Gz
 
     Ax = OX[:, :nx]
     Bu = OX[:, nx:nx+nu]
@@ -313,15 +347,9 @@ def build_and_solve_dro_lmi_upd(
     Cz = OZ[:, :nx]
     Dzu = OZ[:, nx:nx+nu]
     Dzw = OZ[:, nx+nu:nx+nu+nw]
-
-    Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, var)
     
 
-    Ac = cp.Variable((2*nx, 2*nx), name='Ac')
-    Bc = cp.Variable((2*nx, nw), name='Bc')
-    Cc = cp.Variable((nz, 2*nx), name='Cc')
-    Dc = cp.Variable((nz, nw), name='Dc')
-
+    # Closed Loop sys -----------------
     Acl = cp.bmat([
         [Ax + Bu @ Dc @ Cy,     Bu @ Cc], 
         [Bc @ Cy,               Ac]
@@ -338,21 +366,8 @@ def build_and_solve_dro_lmi_upd(
 
     Dcl = Dzw + Dzu @ Dc @ Dyw
 
-    # Decision variables
-    lam = cp.Variable(nonneg=True, name="lambda")
-    Q = cp.Variable((nw, nw), symmetric=True, name="Q")     # PSD=True
 
-    X = cp.Variable((nx, nx), symmetric=True, name="X")
-    Y = cp.Variable((nx, nx), symmetric=True, name="Y")
-    K = cp.Variable((nx, nx), name="K")
-    L = cp.Variable((nx, ny), name="L")
-    M = cp.Variable((nu, nx), name="M")
-    N = cp.Variable((nu, ny), name="N")
-
-    Ix = I(nx)
-    Iw = I(nw)
-    Iz = I(nz)
-
+    # DRO matrices --------------------
     P = cp.bmat([
         [Y,     Ix], 
         [Ix,    X]
@@ -377,17 +392,18 @@ def build_and_solve_dro_lmi_upd(
     ])
     D2 = Dzw + Dzu @ N @ Dyw
 
+    A, B, C, D = A1, B1, C1, D1
 
-    # Constraints
+
+    # Constraints ---------------------
     cons = []
     cons += [lam >= 0]
-    #cons += [Q >> 0]
     cons += [P >> 0]
     cons += [A1 == A2]
     cons += [B1 == B2]
     cons += [C1 == C2]
     cons += [D1 == D2]
-    cons += [_is_stable(Acl)]
+    #cons += [_is_stable(Acl)]
 
     if additional_constraints:
         # Avoid explosions
@@ -411,7 +427,6 @@ def build_and_solve_dro_lmi_upd(
     else:
         reg = 0.0
 
-    A, B, C, D = A1, B1, C1, D1
 
     if model.lower() in ["correlated", "corr", "1"]:
         big_corr = cp.bmat([
@@ -443,11 +458,16 @@ def build_and_solve_dro_lmi_upd(
         raise ValueError("model must be 'correlated' or 'independent'.")
 
 
-    # Optimisation Problem
-    obj = cp.Minimize(cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2) + reg)
+    # Optimisation Problem ------------
+    obj_dro = cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2)
+    obj_est = mhu_x * (cp.trace((Dx @ Dx.T + rx * I(Dx.shape[0])) @ Gx) - cp.log_det(Gx)) + \
+                mhu_y * (cp.trace((Dy @ Dy.T + ry * I(Dy.shape[0])) @ Gy) - cp.log_det(Gy)) + \
+                mhu_z * (cp.trace((Dz @ Dz.T + rz * I(Dz.shape[0])) @ Gz) - cp.log_det(Gz))
+
+    obj = cp.Minimize(obj_dro + obj_est + reg)
     prob = cp.Problem(obj, cons)
 
-    # Solve
+    # Solve ---------------------------
     success_MOSEK = success_CVXOPT = success_SCS = False
     solver = "MOSEK"
     print("\n===================================================\nAttempting to solve with MOSEK...")
