@@ -4,12 +4,13 @@ params:
   upd: 1                                                                        # set
   model: "correlated"                                                           # set | may be var ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
-
-  save: 0                                                                       # VAR ------------------------------ true or false
+  approach: "Young"                                                             # VAR ------------------------------ "Young" or "Vertices"
+  comp: 1                                                                       # set
+  save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
-  ALL: 0                                                                        # VAR ------------------------------ true or false
+  ALL: 1                                                                        # VAR ------------------------------ true or false
   use_set_out_mats: 0                                                           # set | may be var (true or false)
-  SNR: 1                                                                        # set
+  SNR: 0                                                                        # set
 
 
   simulation:
@@ -26,7 +27,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "temp"                                                               # VAR ------------------------------ look for the names in main.py
+    runID: "Young"                                                               # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
@@ -39,7 +40,7 @@ params:
 
 
   ambiguity:
-    model: "Gaussian"                                                           # VAR ------------------------------ [W2, zero, Gaussian]
+    model: "W2"                                                                 # VAR ------------------------------ [W2, zero, Gaussian]
     gamma: 0.5                                                                  # set
     fixGamma: 1                                                                 # set | may be var (true or false)
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set

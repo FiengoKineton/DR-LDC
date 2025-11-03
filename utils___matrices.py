@@ -79,7 +79,7 @@ class Recover():
         N_val = res.N
 
         A, Bu, Cy = plant.A, plant.Bu, plant.Cy
-        nx, *_ = plant.dims()
+        nx = X_val[0].size
 
         try:
             U, S, Vt = np.linalg.svd(np.eye(nx) - X_val @ Y_val)

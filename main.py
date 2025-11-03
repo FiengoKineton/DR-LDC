@@ -133,7 +133,7 @@ class lmi_pipeline_optim_problem():
         cl = Closed_Loop() 
 
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        if not upd:
+        if not upd or not FROM_DATA:
             plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
             api.print_plant(plant)
 
@@ -146,27 +146,27 @@ class lmi_pipeline_optim_problem():
                 model=model,
             )
 
-            Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
             A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
             Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
-            Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc))
+            plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+
 
         else:
             data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
+            approach = params.get("approach", "Young")
 
             # 2) Solve DRO-LMI (choose "correlated" or "independent")
             model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
-            res = build_and_solve_dro_lmi_upd(
+            res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
                 data=data,
-                api=api,
                 noise=noise,
                 model=model,
+                approach=approach,
             )
 
-            Ac, Bc, Cc, Dc = res._get_cntrl()
-            A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = res._get_plant()
-            Acl, Bcl, Ccl, Dcl = res._get_cl()
-            Sigma_nom = res.Sigma
+            A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
+            plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+            Delta, beta = other
         
         if res.status not in ("optimal", "optimal_inaccurate"):
             raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
@@ -174,9 +174,9 @@ class lmi_pipeline_optim_problem():
 
         # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
 
-
-        plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+        Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
         ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
+        Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl)
         plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
 
         # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
@@ -225,9 +225,9 @@ class lmi_pipeline_optim_problem():
                 "gamma": res.gamma,
                 "lambda_opt": res.lambda_opt,
                 "spectral_radius_Acl": rho,
-                "rx": None if res.rx is None else res.rx,
-                "ry": None if res.ry is None else res.ry,
-                "rz": None if res.rz is None else res.rz,
+                #"rx": None if res.rx is None else res.rx,
+                #"ry": None if res.ry is None else res.ry,
+                #"rz": None if res.rz is None else res.rz,
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
@@ -253,15 +253,6 @@ class lmi_pipeline_optim_problem():
                 "Cbar": None if res.Cbar is None else res.Cbar.tolist(),
                 "Dbar": None if res.Dbar is None else res.Dbar.tolist(),
                 "Tp": None if res.Tp is None else res.Tp.tolist(),
-                "P": None if res.P is None else res.P.tolist(),
-                "A1": None if res.A1 is None else res.A1.tolist(),
-                "B1": None if res.B1 is None else res.B1.tolist(),
-                "C1": None if res.C1 is None else res.C1.tolist(),
-                "D1": None if res.D1 is None else res.D1.tolist(),
-                "A2": None if res.A2 is None else res.A2.tolist(),
-                "B2": None if res.B2 is None else res.B2.tolist(),
-                "C2": None if res.C2 is None else res.C2.tolist(),
-                "D2": None if res.D2 is None else res.D2.tolist(),
             },
         }
 
@@ -289,9 +280,9 @@ class lmi_pipeline_optim_problem():
         Data = {
             'gamma': res.gamma, 'lambda': res.lambda_opt, 'Sigma_nom': Sigma_nom,
             'A_c': Ac, 'B_c':Bc, 'C_c': Cc, 'D_c': Dc, 'A_cl': Acl, 'rho': rho, 'var' : noise.var,
-            'rx': None if res.rx is None else res.rx, 'ry': None if res.ry is None else res.ry, 'rz': None if res.rz is None else res.rz
+            #'rx': None if res.rx is None else res.rx, 'ry': None if res.ry is None else res.ry, 'rz': None if res.rz is None else res.rz
         }
-        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl', 'rho', 'var', 'rx', 'ry', 'rz']:
+        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl']:#, 'rho', 'var', 'rx', 'ry', 'rz']:
             print(f"\n{key} =")
             print(Data[key])
         
@@ -333,7 +324,7 @@ class lmi_pipeline_optim_problem():
 
 def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False):
     parser = argparse.ArgumentParser(description="DRO LMI Optimization")
-    parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
+    #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
     #parser.add_argument("--p", action="store_true", help="Force Plot")
     #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
@@ -357,7 +348,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _plot = bool(p.get("plot", False)) if plot is None else plot
     _data = "DDD" if FROM_DATA else "MBD"
     _save = p.get("save", False)
-    _comp = args.comp if comp is None else comp
+    _comp = bool(p.get("comp", 0)) if comp is None else comp
     _ts = p.get("simulation", {}).get("ts", 0.5)
 
     #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
@@ -400,7 +391,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         print({k: v for k, v in res.items()}) # if k.endswith("_dB") or k=="spectral_radius_Acl"})
         an.plot_bars(title="SNR for my controller")
 
-        if _plot:
+        if 1:
             an.plot_output_psd(sim["X"], "x", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
             an.plot_output_psd(sim["Y"], "y", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
             an.plot_output_psd(sim["Z"], "z", fs=1.0/p.get("simulation", {}).get("ts", 0.05), nfft=4096)
@@ -452,8 +443,8 @@ if __name__ == "__main__":
 
     ALL = bool(p.get("ALL", False))
     if ALL:
-        main(FROM_DATA=False, gamma=gamma, ALL=ALL)
-        main(FROM_DATA=True, gamma=gamma, ALL=ALL)
+        main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL)
+        main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL)
         main(comp=True, gamma=gamma, ALL=ALL)
     else:
         main(gamma=gamma)
