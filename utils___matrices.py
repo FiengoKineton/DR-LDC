@@ -77,7 +77,7 @@ def _solve_sylvester_safe(A, B, C, rcond=1e-12):
             raise ValueError(f"Sylvester dims incompatible: A{A.shape}, B{B.shape}, C{C.shape}") from e
         K = np.kron(np.eye(m), A) + np.kron(B.T, np.eye(n))
         rhs = C.reshape(-1,  order='F')
-        X_vec, *_ = lstsq(K, rhs, rcond=rcond)
+        X_vec, *_ = np.linalg.lstsq(K, rhs, rcond=rcond)
         X = X_vec.reshape(n, m, order='F')
         X = np.real_if_close(X)
         return X
