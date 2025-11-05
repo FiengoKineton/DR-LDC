@@ -7,6 +7,7 @@ from typing import Tuple, List
 from numpy.linalg import norm
 from utils___simulate import Open_Loop
 from pathlib import Path
+from scipy.linalg import solve_sylvester
 
 
 yaml_path="problem___parameters.yaml"
@@ -52,6 +53,120 @@ def compose_closed_loop(plant: Plant, ctrl: Controller):
 
     return A_cl, B_cl, C_cl, D_cl
 
+
+# ------------------------- RECOVER ERR MAT (YOUNG) --------------------------
+
+def _as2d_float(a):
+    a = np.asarray(a)
+    if a.ndim != 2:
+        raise ValueError(f"Expected 2D array, got shape {a.shape}")
+    return np.asarray(a, dtype=float, order='C')
+
+def _solve_sylvester_safe(A, B, C, rcond=1e-12):
+    """Try scipy sylvester; on failure, fall back to Kronecker least-squares."""
+    A = _as2d_float(A); B = _as2d_float(B); C = _as2d_float(C)
+    # Try standard solver first
+    try:
+        X = solve_sylvester(A, B, C)
+        X = np.real_if_close(X)
+        return X
+    except Exception as e:
+        # Kronecker fallback: (I ⊗ A + B^T ⊗ I) vec(X) = vec(C)
+        n, n2 = A.shape; m, m2 = B.shape
+        if n != n2 or m != m2 or C.shape != (n, m):
+            raise ValueError(f"Sylvester dims incompatible: A{A.shape}, B{B.shape}, C{C.shape}") from e
+        K = np.kron(np.eye(m), A) + np.kron(B.T, np.eye(n))
+        rhs = C.reshape(-1,  order='F')
+        X_vec, *_ = lstsq(K, rhs, rcond=rcond)
+        X = X_vec.reshape(n, m, order='F')
+        X = np.real_if_close(X)
+        return X
+
+def build_A_lift(Ax, Bu, Cy, X, Y, K, L, M, N):
+    n = Ax.shape[0]
+    # coerce to float arrays to avoid object dtypes from cvxpy
+    Ax = _as2d_float(Ax); Bu=_as2d_float(Bu); Cy=_as2d_float(Cy)
+    X=_as2d_float(X); Y=_as2d_float(Y); M=_as2d_float(M); N=_as2d_float(N)
+    K=_as2d_float(K); L=_as2d_float(L)
+    A11 = Ax @ Y + Bu @ M
+    A12 = Ax + Bu @ (N @ Cy)
+    A21 = K
+    A22 = X @ Ax + L @ Cy
+    return np.block([[A11, A12],
+                     [A21, A22]])
+
+def EAA_of(DeltaA, X, Y):
+    n = DeltaA.shape[0]
+    return np.block([[DeltaA @ Y, DeltaA],
+                     [np.zeros((n,n)), X @ DeltaA]])
+def EAB_of(DeltaB, M, N, Cy):
+    n = DeltaB.shape[0]
+    return np.block([[DeltaB @ M, DeltaB @ (N @ Cy)],
+                     [np.zeros((n,n)), np.zeros((n,n))]])
+
+def recover_deltas(P, X, Y, M, N, Cy, 
+                   Ahat, Buhat,
+                   beta_AA, beta_AB,
+                   eps=1e-12, rcond=1e-10):
+    n, m = Buhat.shape
+    # Coerce everything to plain float arrays early
+    P=_as2d_float(P); X=_as2d_float(X); Y=_as2d_float(Y)
+    M=_as2d_float(M); N=_as2d_float(N); Cy=_as2d_float(Cy)
+    Ahat=_as2d_float(Ahat); Buhat=_as2d_float(Buhat)
+
+    # Use zeros for K,L if you didn’t store the optimal ones; else pass the real K*,L*
+    K0 = np.zeros((n, n), dtype=float)
+    L0 = np.zeros((n, Cy.shape[0]), dtype=float)
+
+    A_lift = build_A_lift(Ahat, Buhat, Cy, X, Y, K0, L0, M, N)
+    Z = P @ A_lift
+    Z = _as2d_float(Z)
+    Z_norm = float(np.linalg.norm(Z, 'fro'))
+
+    if not np.isfinite(Z_norm) or Z_norm < eps:
+        # Degenerate: return zeros
+        return (np.zeros_like(Ahat),
+                np.zeros_like(Buhat))
+
+    # Young-saturating directions
+    E_AA_star = (float(beta_AA) / Z_norm) * Z
+    E_AB_star = (float(beta_AB) / Z_norm) * Z
+
+    # Blocks for ΔA
+    A1 = E_AA_star[0:n,    0:n   ]
+    A2 = E_AA_star[0:n,    n:2*n ]
+    A3 = E_AA_star[n:2*n,  n:2*n ]
+
+    LHS_left  = X.T @ X
+    LHS_right = Y @ Y.T + np.eye(n)
+    RHS = A2 + A1 @ Y.T + X.T @ A3
+
+    # Defensive coercions
+    LHS_left  = _as2d_float(LHS_left)
+    LHS_right = _as2d_float(LHS_right)
+    RHS       = _as2d_float(RHS)
+
+    DeltaA = _solve_sylvester_safe(LHS_left, LHS_right, RHS, rcond=rcond)
+
+    # Blocks for ΔB
+    # Top row of E_AB_star: [ ΔB M | ΔB N Cy ]
+    T1 = E_AB_star[0:n, 0:n]
+    T2 = E_AB_star[0:n, n:2*n]
+
+    NCy = N @ Cy
+    GB  = (M @ M.T) + (NCy @ NCy.T)           # (m x m)
+    RHS_B = T1 @ M.T + T2 @ (Cy.T @ N.T)      # (n x m)
+
+    # Pseudoinverse with SVD
+    U, s, Vt = np.linalg.svd(_as2d_float(GB), full_matrices=False)
+    s_inv = np.where(s > rcond, 1.0/s, 0.0)
+    GB_pinv = (Vt.T * s_inv) @ U.T
+    DeltaB = _as2d_float(RHS_B) @ GB_pinv
+
+    # Clean tiny imaginary residues if any
+    DeltaA = np.real_if_close(DeltaA)
+    DeltaB = np.real_if_close(DeltaB)
+    return DeltaA, DeltaB, EAB_of(DeltaB, M, N, Cy), EAA_of(DeltaA, X, Y)
 
 # ------------------------- RECOVER MATRICES FROM CLOSED-LOOP ------------------
 

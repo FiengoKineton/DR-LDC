@@ -163,6 +163,89 @@ class Closed_Loop():
             "X": X, "Xc": Xc, "Y": Y, "U": U, "Z": Z, "W": W,
             "T": T, "nx": nx, "nxc": nxc, "ny": ny, "nu": nu, "nz": nz, "nw": nw
         }
+    
+
+
+    def simulate_Z_cost(self, Z: np.ndarray, Q: np.ndarray = None, plot: bool = True):
+        """
+        Compute quadratic cost from performance output time series Z and (optionally) plot it.
+
+        Z: array with shape (nz, T), (T, nz), or (T, nz, N) for N trajectories.
+        If batched, E[·] is taken as the empirical mean over N.
+        Q: optional (nz, nz) PSD weighting; defaults to identity → ||z||_2^2.
+        plot: whether to plot instantaneous cost and running average.
+
+        Returns:
+            dict with:
+                'inst'      : (T,) instantaneous costs c_t
+                'running'   : (T,) running average J_t
+                'J'         : float, final time-average cost J_T
+                'T'         : int, number of timesteps
+        """
+        Z = np.asarray(Z)
+
+        # Normalize to shape (T, nz) or (T, nz, N)
+        if Z.ndim == 1:
+            Z = Z.reshape(1, -1)  # (nz=1, T)
+        if Z.ndim == 2:
+            # Guess orientation: if first dim matches self.T, keep; otherwise transpose.
+            T_guess = int(round(self.Tf / self.ts))
+            Z = Z if Z.shape[0] == T_guess or Z.shape[0] > Z.shape[1] else Z.T
+        elif Z.ndim == 3:
+            # Expect (T, nz, N). If it looks like (nz, T, N), swap first two axes.
+            if Z.shape[0] < Z.shape[1]:
+                Z = np.swapaxes(Z, 0, 1)
+        else:
+            raise ValueError("Z must be 1D, 2D, or 3D.")
+
+        T = Z.shape[0]
+        nz = Z.shape[1]
+        t = np.arange(T) * self.ts
+
+        # Weighting
+        if Q is None:
+            # c_t = ||z(t)||^2
+            if Z.ndim == 2:
+                inst = np.sum(Z**2, axis=1)
+            else:  # (T, nz, N) → average over N
+                inst = np.mean(np.sum(Z**2, axis=1), axis=1)
+        else:
+            Q = np.asarray(Q)
+            if Q.shape != (nz, nz):
+                raise ValueError(f"Q must have shape ({nz},{nz}), got {Q.shape}.")
+            # c_t = z(t)^T Q z(t); handle batch by averaging over N
+            if Z.ndim == 2:
+                # einsum: (T,nz),(nz,nz),(T,nz) → (T,)
+                inst = np.einsum("ti,ij,tj->t", Z, Q, Z)
+            else:
+                # (T,nz,N) → average over N
+                inst = np.mean(np.einsum("tin,ij,tjn->t n", Z, Q, Z), axis=1)
+
+        # Running average
+        running = np.cumsum(inst) / np.arange(1, T + 1)
+        J = float(running[-1])
+
+        if plot:
+            # Instantaneous cost
+            plt.figure(figsize=(8, 3.2))
+            plt.plot(t, inst, linewidth=1.5)
+            plt.xlabel("t")
+            plt.ylabel(r"$\|z(t)\|^2$" if Q is None else r"$z(t)^\top Q z(t)$")
+            plt.title("Instantaneous quadratic cost")
+            plt.grid(True, alpha=0.3)
+
+            # Running average
+            plt.figure(figsize=(8, 3.2))
+            plt.plot(t, running, linewidth=1.5)
+            plt.xlabel("t")
+            plt.ylabel(r"$\frac{1}{t}\sum_{k=0}^{t-1}\|z(k)\|^2$")
+            plt.title("Running time-average cost")
+            plt.grid(True, alpha=0.3)
+            plt.show()
+
+        return {"inst": inst, "running": running, "J": J, "T": T}
+
+            
 
     def plot_timeseries(self, sim, save: bool = False, out: str = None, fmt: str = "pdf", dpi: int = 300, tight: bool = True):
         T = sim["T"]

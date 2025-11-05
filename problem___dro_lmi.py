@@ -1,8 +1,8 @@
 # dro_lmi.py
 import numpy as np
 import cvxpy as cp
-from utils___systems import Plant, DROLMIResult, DROLMIResultUpd, Noise, Data
-from utils___matrices import MatricesAPI
+from utils___systems import Plant, DROLMIResult, Noise, Data
+from utils___matrices import MatricesAPI, recover_deltas
 from utils___ambiguity import Disturbances
 import sys
 
@@ -245,7 +245,7 @@ def build_and_solve_dro_lmi_upd(
     data: Data,
     noise: Noise,
     model: str = "correlated",  # or "independent"
-    eps_def: float = 1e-5,
+    eps: float = 1e-5,
     alpha_cap: float = 1e2,  # keep X, Y from exploding
     fro_cap: float = 1e2,  # keep K, L, M, N from exploding
     mhu_x: float = 1.0,
@@ -279,12 +279,113 @@ def build_and_solve_dro_lmi_upd(
         return np.zeros((r, c)) 
 
     def negdef(M): 
-        return (M << -eps_def * np.eye(M.shape[0]))
+        return (M << -eps * np.eye(M.shape[0]))
 
     def _val(x):
         if x is None:
             return None
         return float(x) if np.isscalar(x) else x
+
+
+
+    def estimate_Bw_from_residuals(
+        Ax_hat, Bu_hat,
+        eta=0.95,
+        eps=1e-12,
+        mode="default",          # "white" | "factor" | "known_cov"
+        Sigma_w_known=None     # only used if mode == "known_cov"
+    ):
+        """
+        Returns:
+            Bw_hat, Sigma_w_hat, info
+        where:
+            - mode == "white":   Sigma_w_hat = I, Bw_hat absorbs the scaling
+            - mode == "factor":  Bw_hat @ sqrtm(Sigma_w_hat) equals the principal factor of S_R
+            - mode == "known_cov": Sigma_w_hat = Sigma_w_known, Bw_hat rescales accordingly
+        """
+
+        # Residuals R = x_{k+1} - Ax x_k - Bu u_k
+        R = x_next - (Ax_hat @ x + Bu_hat @ u)              # (nx, T)
+        nx, T = R.shape
+
+        # Empirical residual covariance S_R = (1/(T)) R R^T
+        # Use T > 0 guard, SPD symmetrization, and tiny ridge for numerics
+        denom = max(T, 1)
+        S = (R @ R.T) / denom
+        S = 0.5 * (S + S.T) + eps * np.eye(nx)
+
+        # Spectral decomposition
+        # (S is SPD-ish; SVD is fine, eigh is a hair faster and numerically cleaner)
+        s_vals, U = np.linalg.eigh(S)                       # s_vals ascending
+        s_vals = np.clip(s_vals, 0.0, None)
+        order = np.argsort(s_vals)[::-1]                    # descending
+        s = s_vals[order]
+        U = U[:, order]
+
+        # Rank selection by cumulative energy
+        total = max(float(np.sum(s)), 1e-18)
+        cum = np.cumsum(s) / total
+        nw = int(np.clip(np.searchsorted(cum, eta) + 1, 1, nx))
+
+        # Principal block
+        Up = U[:, :nw]
+        sp = s[:nw]
+        sp_sqrt = np.sqrt(sp)
+
+        if mode == "default":
+            R = x_next - (Ax_hat @ x + Bu_hat @ u)
+            S = (R @ R.T) / max(T, 1)
+            S = 0.5 * (S + S.T) + 1e-12 * np.eye(nx)
+            U_s, s_s, _ = np.linalg.svd(S, full_matrices=False)
+            cum = np.cumsum(s_s) / max(np.sum(s_s), 1e-18)
+            nw = int(np.clip(np.searchsorted(cum, 0.95) + 1, 1, nx))
+            Bw = U_s[:, :nw] @ np.diag(np.sqrt(s_s[:nw]))  
+            return Bw, R, None, {"nw": nw, "energy": float(np.sum(s_s[:nw])) / float(np.sum(s_s)), "s_vals": s_s}
+            
+        elif mode == "white":
+            # White-normalized convention: Sigma_w_hat = I, Bw absorbs scaling
+            Bw_hat = Up @ np.diag(sp_sqrt)                  # (nx, nw)
+            Sigma_w_hat = np.eye(nw)
+
+        elif mode == "factor":
+            # Keep factorization as Bw * Sigma_w^{1/2} := Up diag(sp^{1/2})
+            # Choose a convenient split; by default put all scaling in Sigma_w^{1/2}
+            Bw_hat = Up                                     # (nx, nw), orthonormal columns
+            Sigma_w_hat = np.diag(sp)                       # so Bw_hat @ Sigma_w_hat @ Bw_hat.T = S (rank-nw approx)
+
+            # If you prefer the literal half-split, uncomment:
+            # Bw_hat = Up @ np.diag(sp_sqrt)
+            # Sigma_w_hat = np.eye(nw)
+
+        elif mode == "known_cov":
+            if Sigma_w_known is None:
+                raise ValueError("mode='known_cov' requires Sigma_w_known.")
+            Sigma_w_known = np.atleast_2d(Sigma_w_known)
+            if Sigma_w_known.shape != (nw, nw):
+                # If user supplied full-size Sigma_w over-estimate, reduce to nw via top eigenspace
+                # or complain. Here we try to be helpful: project to top-nw block.
+                # Safer alternative: raise an error instead of silently projecting.
+                raise ValueError(f"Sigma_w_known must be shape ({nw},{nw}).")
+
+            # We want Bw_hat Sigma_w_known Bw_hat.T ≈ Up diag(sp) Up.T.
+            # Set Bw_hat = Up diag(sp^{1/2}) Sigma_w_known^{-1/2}.
+            # Compute Sigma_w_known^{-1/2} stably via eigendecomposition.
+            lam, Q = np.linalg.eigh(Sigma_w_known)
+            lam = np.clip(lam, eps, None)
+            Sigma_w_mhalf = Q @ np.diag(lam**-0.5) @ Q.T
+
+            Bw_hat = Up @ np.diag(sp_sqrt) @ Sigma_w_mhalf
+            Sigma_w_hat = Sigma_w_known
+
+        else:
+            raise ValueError("mode must be one of {'white','factor','known_cov'}.")
+
+        info = {
+            "nw": nw,
+            "energy": float(np.sum(sp)) / total if total > 0 else 0.0,
+            "s_vals": s,
+        }
+        return Bw_hat, R, Sigma_w_hat, info
 
 
     if approach == "DeePC":
@@ -323,24 +424,21 @@ def build_and_solve_dro_lmi_upd(
     elif approach == "Young":
         Dx = np.vstack([x, u])
         Ox = x_next @ _pseudo_inv(Dx)
-        Ax, Bu = Ax_hat, Bu_hat = Ox[:, :nx], Ox[:, nx:nx+nu]
+        Ax, Bu = Ox[:, :nx], Ox[:, nx:nx+nu]
+   
 
-        R = x_next - (Ax_hat @ x + Bu_hat @ u)
-        S = (R @ R.T) / max(T, 1)
-        S = 0.5 * (S + S.T) + 1e-12 * np.eye(nx)
-        U_s, s_s, _ = np.linalg.svd(S, full_matrices=False)
-        cum = np.cumsum(s_s) / max(np.sum(s_s), 1e-18)
-        nw = int(np.clip(np.searchsorted(cum, 0.95) + 1, 1, nx))
-        Bw = U_s[:, :nw] @ np.diag(np.sqrt(s_s[:nw]))     
+        Bw, R, *_ = estimate_Bw_from_residuals(Ax_hat=Ax, Bu_hat=Bu, mode="factor")
+        nw = Bw.shape[1]
         w = _pseudo_inv(Bw) @ R
-        Sigma_nom = 0.5*((w @ w.T)/max(T-1,1) + ((w @ w.T)/max(T-1,1)).T) + 1e-9*np.eye(nw)
+        Sigma_nom = 0.5*((w @ w.T)/max(T,1) + ((w @ w.T)/max(T,1)).T) + 1e-9*np.eye(nw)
 
-        Delta = cp.Variable((Ox.shape[0], Ox.shape[1]), name='Delta')
+        #Delta = cp.Variable((Ox.shape[0], Ox.shape[1]), name='Delta')
         #Ax, Bu = Ax_hat + Delta[:, :nx], Bu_hat + Delta[:, nx:nx+nu]
 
-        ss = np.linalg.svd(Dx, compute_uv=False)
+        ss = np.linalg.svd(Dx, compute_uv=False)    # Singular Value Decomposition
         smin = float(ss[-1]) if ss.size else 0.0
-        beta_data = np.linalg.norm(R, 'fro') / max(smin, 1e-12)
+        beta = np.linalg.norm(R, 'fro') / max(smin, 1e-12)
+
 
         Dy = np.vstack([x, w])
         Dz = np.vstack([x, u, w])
@@ -395,7 +493,7 @@ def build_and_solve_dro_lmi_upd(
     # Constraints ---------------------
     cons = []
     cons += [lam >= 0]
-    cons += [P >> 0]
+    cons += [P >> eps * I(2*nx)]
 
     obj_dro = cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2)
 
@@ -408,15 +506,28 @@ def build_and_solve_dro_lmi_upd(
 
         obj = obj_dro + obj_est + reg
     elif approach == "Young":
-        beta = cp.Parameter(nonneg=True, value=float(np.clip(beta_data, 0.0, 1e3)))
-        tau = cp.Variable(nonneg=True, name="tau")
-        s = cp.Variable(nonneg=True, name="s") 
-        S = np.hstack([Ix, Z(nx, nx)]).T
+        Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
+        beta_a, beta_b = beta * np.sqrt(nx/(nx+nu)), beta * np.sqrt(nu/(nx+nu))
+        beta_aa, beta_ab = np.sqrt(1 + X_norm**2 + Y_norm**2) * beta_a, np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
+        print(f"Beta: {beta}\nComputed beta_a: {beta_a}, beta_b: {beta_b} \nComputed beta_aa: {beta_aa}, beta_ab: {beta_ab}")
 
-        #cons += [cp.norm(Delta, 'fro') <= beta]
+        beta_AA = cp.Parameter(nonneg=True, value=float(np.clip(beta_aa, 0.0, 1e3)))
+        beta_AB = cp.Parameter(nonneg=True, value=float(np.clip(beta_ab, 0.0, 1e3)))
+
+        tau_AA = cp.Variable(nonneg=True, name="tau_aa")
+        s_AA = cp.Variable(nonneg=True, name="s_aa") 
+        S_AA = np.hstack([Ix, Z(nx, nx)]).T
+        tau_AB = cp.Variable(nonneg=True, name="tau_ab")
+        s_AB = cp.Variable(nonneg=True, name="s_ab") 
+        S_AB = np.hstack([Ix, Z(nx, nx)]).T
+
         reg = 0.0
 
-        cons += [cp.bmat([[s, beta], [beta, tau]]) >> 0]
+        cons += [s_AA >= 1e-9, s_AB >= 1e-9]
+        cons += [tau_AA <= 1e3, tau_AB <= 1e3]
+        cons += [cp.bmat([[s_AA, beta_AA], [beta_AA, tau_AA]]) >> 0]
+        cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
+        state_blk = -P + (tau_AA + tau_AB) * I(2*nx)
 
         obj = obj_dro + reg
     else:
@@ -436,12 +547,13 @@ def build_and_solve_dro_lmi_upd(
             ])  # Tot size: (4nx + 2nw + nz) x (4nx + 2nw + nz)
         elif approach == "Young":
             big_corr = cp.bmat([
-                [ -P,            Z(2*nx, nw),  Z(2*nx, nw),  A.T,          C.T,         Z(2*nx, nx)     ],
-                [ Z(nw,2*nx),   -lam*Iw,       lam*Iw,       B.T,          D.T,         Z(nw,   nx)     ],
-                [ Z(nw,2*nx),    lam*Iw,      -Q - lam*Iw,   Z(nw,2*nx),   Z(nw,  nz),  Z(nw,   nx)     ],
-                [  A,            B,            Z(2*nx, nw), -P,            Z(2*nx,nz),  S               ],
-                [  C,            D,            Z(nz,  nw),   Z(nz, 2*nx), -Iz,          Z(nz,   nx)     ],
-                [  Z(nx,2*nx),   Z(nx,  nw),   Z(nx,  nw),   S.T,          Z(nx,  nz), -s * Ix          ],
+                [ -P,            Z(2*nx, nw),  Z(2*nx, nw),  A.T,          C.T,         Z(2*nx, nx),    Z(2*nx, nx)     ],
+                [ Z(nw,2*nx),   -lam*Iw,       lam*Iw,       B.T,          D.T,         Z(nw,   nx),    Z(nw,   nx)     ],
+                [ Z(nw,2*nx),    lam*Iw,      -Q - lam*Iw,   Z(nw,2*nx),   Z(nw,  nz),  Z(nw,   nx),    Z(nw,   nx)     ],
+                [ A,             B,            Z(2*nx, nw),  state_blk,    Z(2*nx,nz),  S_AA,           S_AB            ],
+                [ C,             D,            Z(nz,  nw),   Z(nz, 2*nx), -Iz,          Z(nz,   nx),    Z(nz,   nx)     ],
+                [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz), -s_AA * Ix,      Z(nx,   nx)     ],
+                [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AB.T,       Z(nx,  nz),  Z(nx, nx),     -s_AB * Ix       ],
             ])
 
         cons += [negdef(big_corr)]
@@ -455,10 +567,11 @@ def build_and_solve_dro_lmi_upd(
             ])  # Tot size: (4nx + nz) x (4nx + nz)
         elif approach == "Young":
             blk1 = cp.bmat([
-                [ -P,           A.T,          C.T,          np.zeros((2*nx, nx))],
-                [  A,          -P,            Z(2*nx, nz),  S                   ],
-                [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx)           ],
-                [  Z(nx,2*nx),  S.T,          Z(nx, nz),   -s * Ix              ],
+                [ -P,           A.T,          C.T,          Z(2*nx, nx),    Z(2*nx, nx)     ],
+                [  A,           state_blk,    Z(2*nx, nz),  S_AA,           S_AB            ],
+                [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
+                [  Z(nx,2*nx),  S_AA.T,       Z(nx, nz),   -s_AA * Ix,      Z(nx,   nx)     ],
+                [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx,   nx),   -s_AB * Ix      ],
             ])        
 
         blk2 = cp.bmat([
@@ -486,7 +599,8 @@ def build_and_solve_dro_lmi_upd(
             'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-8,
             'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-8,
             'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-8,
-            'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6
+            #'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6,
+            'MSK_IPAR_INTPNT_SCALING': 1, # 0: no scaling, 1: geometric mean, 2: equilibrate
         })
         print(f"MOSEK status: {prob.status}")
         if prob.status == cp.OPTIMAL:
@@ -548,6 +662,16 @@ def build_and_solve_dro_lmi_upd(
         Tp=None, P=None,
     )
 
+    if approach == 'Young':
+        DeltaA, DeltaB, EAA, EAB = recover_deltas(
+            P=P_val, X=X_val, Y=Y_val, M=M_val, N=N_val, Cy=Cy,
+            Ahat=Ax, Buhat=Bu,
+            beta_AA=beta_AA.value, beta_AB=beta_AB.value,
+        )
+
+        Ax = Ax + DeltaA
+        Bu = Bu + DeltaB
+
     P = (Ax, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu)
 
     if approach == 'DeePC':
@@ -555,7 +679,7 @@ def build_and_solve_dro_lmi_upd(
             = _val(rx.value), _val(ry.value), _val(rz.value)
         other = (rx_val, ry_val, rz_val)
     elif approach == 'Young':
-        other = (_val(Delta.value), _val(beta.value))
+        other = (DeltaA, DeltaB, EAA, EAB)
 
     return dro, P, Sigma_nom, other
 

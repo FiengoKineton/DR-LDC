@@ -46,6 +46,12 @@ class baseline_optim_problem():
         if save: cl.save_npz(sim_composite, str(out_composite))
         print(f"[saved] {out_composite}")
 
+        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
+        out_cost = out + f"___closed_loop_run_cost.npz"
+        if save: cl.save_npz(sim_cost, str(out_cost))   
+        print(f"[saved] {out_cost}")
+
+
         if plot: 
             cl.plot_timeseries(sim=sim, save=save, out=out)
             cl.plot_composite(sim=sim_composite, save=save, out=out)
@@ -166,7 +172,7 @@ class lmi_pipeline_optim_problem():
 
             A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
             plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-            Delta, beta = other
+            #Delta, beta = other
         
         if res.status not in ("optimal", "optimal_inaccurate"):
             raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
@@ -271,6 +277,11 @@ class lmi_pipeline_optim_problem():
         out_composite = out + f"___closed_loop_composite.npz"
         if save: cl.save_npz(sim_composite, str(out_composite))
         print(f"[saved] {out_composite}")
+
+        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
+        out_cost = out + f"___closed_loop_run_cost.npz"
+        if save: cl.save_npz(sim_cost, str(out_cost))   
+        print(f"[saved] {out_cost}")
 
         # 7) Plot results
         if plot: 

@@ -409,6 +409,44 @@ class ResultsComparator:
         overall["rmse_overall"] = overall["rmse_mean"]
         overall["nrmse_overall"] = overall["nrmse_mean"]
         return overall
+    
+
+    def _load_cost_npz(self, path):
+        """Robustly load {inst, running, J, T} from an .npz created via np.savez."""
+        d = np.load(path, allow_pickle=True)
+        # If saved correctly, d is an NpzFile with keys.
+        keys = set(d.files)
+        need = {"inst", "running"}
+        if not need.issubset(keys):
+            # Fallback: maybe someone saved a single object array with a dict
+            obj = d[d.files[0]].item()
+            inst = np.asarray(obj["inst"])
+            running = np.asarray(obj["running"])
+            J = float(obj.get("J", running[-1]))
+            T = int(obj.get("T", inst.shape[0]))
+            return {"inst": inst, "running": running, "J": J, "T": T}
+        inst = np.asarray(d["inst"])
+        running = np.asarray(d["running"])
+        J = float(d["J"]) if "J" in keys else float(running[-1])
+        T = int(d["T"]) if "T" in keys else int(inst.shape[0])
+        return {"inst": inst, "running": running, "J": J, "T": T}
+
+    def _plot_overlay_costs(self, t, M, D, title_inst, title_avg, save_inst, save_avg, save: bool = True):
+        """Overlay instantaneous and running average cost from two runs."""
+        # Instantaneous
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(8, 3.2))
+        plt.plot(t, M["inst"], label="MBD", linewidth=1.6)
+        plt.plot(t, D["inst"], label="DDD", linewidth=1.6, linestyle="--")
+        plt.xlabel("t"); plt.ylabel(r"$\|z(t)\|^2$"); plt.title(title_inst); plt.grid(True, alpha=0.3); plt.legend()
+        if save: plt.savefig(save_inst, bbox_inches="tight")
+        # Running average
+        plt.figure(figsize=(8, 3.2))
+        plt.plot(t, M["running"], label="MBD", linewidth=1.6)
+        plt.plot(t, D["running"], label="DDD", linewidth=1.6, linestyle="--")
+        plt.xlabel("t"); plt.ylabel(r"$\frac{1}{t}\sum_{k=0}^{t-1}\|z(k)\|^2$"); plt.title(title_avg); plt.grid(True, alpha=0.3); plt.legend()
+        if save: plt.savefig(save_avg, bbox_inches="tight")
+
 
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
@@ -436,7 +474,9 @@ class ResultsComparator:
         j_mbd = run_dir / f"{base}_MBD___results_run.json"
         j_ddd = run_dir / f"{base}_DDD___results_run.json"
         z_mbd = run_dir / f"{base}_MBD___closed_loop_run.npz"
-        z_ddd = run_dir / f"{base}_DDD___closed_loop_run.npz"        
+        z_ddd = run_dir / f"{base}_DDD___closed_loop_run.npz"  
+        k_mbd = run_dir / f"{base}_MBD___closed_loop_run_cost.npz"
+        k_ddd = run_dir / f"{base}_DDD___closed_loop_run_cost.npz"
         c_mbd = run_dir / f"{base}_MBD___closed_loop_composite.npz"
         c_ddd = run_dir / f"{base}_DDD___closed_loop_composite.npz"
 
@@ -535,7 +575,7 @@ class ResultsComparator:
         kpis_M, kpis_D = {}, {}
         if z_mbd.exists():
             dataM = np.load(z_mbd, allow_pickle=True)
-            tM, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
+            _, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
             kpis_M = {
                 "x":  self._stream_stats(XM, "x"),
                 "xc": self._stream_stats(XcM, "xc"),
@@ -545,7 +585,7 @@ class ResultsComparator:
             }
         if z_ddd.exists():
             dataD = np.load(z_ddd, allow_pickle=True)
-            tD, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
+            _, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
             kpis_D = {
                 "x":  self._stream_stats(XD, "x"),
                 "xc": self._stream_stats(XcD, "xc"),
@@ -564,6 +604,27 @@ class ResultsComparator:
             cD = np.load(c_ddd, allow_pickle=True)
             t, X, _, Z, *_ = self._npz_extract_states(cD)
             comp_kpis_D = {"x": self._stream_stats(X, "x"), "z": self._stream_stats(Z, "z")}
+
+        # ---- Overlay cost curves from precomputed NPZs (if present) ----
+        if k_mbd.exists() and k_ddd.exists() and self.save:
+            KM = self._load_cost_npz(k_mbd)
+            KD = self._load_cost_npz(k_ddd)
+            T_cost = min(KM["T"], KD["T"])
+            t_cost = np.arange(T_cost) * self.ts
+
+            title_i = f"{method.upper()} cost: instantaneous (MBD vs DDD)"
+            title_a = f"{method.upper()} cost: running average (MBD vs DDD)"
+            save_i  = run_dir / f"{base}_overlay_cost_instantaneous.pdf"
+            save_a  = run_dir / f"{base}_overlay_cost_running_avg.pdf"
+            self._plot_overlay_costs(
+                t_cost,
+                {"inst": KM["inst"][:T_cost], "running": KM["running"][:T_cost]},
+                {"inst": KD["inst"][:T_cost], "running": KD["running"][:T_cost]},
+                title_i, title_a, save_i, save_a, save=self.save
+            )
+            if plot: plt.show()
+        else:
+            print("\n[warn] Missing cost NPZ for one/both runs; skipping cost overlays.")
 
 
         print("\n=== Plant matrix deltas_plnt (DDD minus MBD) ===")
@@ -750,6 +811,17 @@ class ResultsComparator:
                 "aggregate": aggregate,
             },
         }
+
+        # Append scalar cost summary if available
+        if k_mbd.exists() and k_ddd.exists():
+            KM = KM if 'KM' in locals() else self._load_cost_npz(k_mbd)
+            KD = KD if 'KD' in locals() else self._load_cost_npz(k_ddd)
+            report["time_average_cost"] = {
+                "MBD": KM["J"],
+                "DDD": KD["J"],
+                "gap_DDD_minus_MBD": float(KD["J"] - KM["J"])
+            }
+
         # Save side-by-side comparison JSON next to the MBD run
         if self.save:
             out_comp = (self.out_root / method / f"run_{ID}" / f"{base}___comparison_MBD_vs_DDD.json")
