@@ -138,13 +138,14 @@ class lmi_pipeline_optim_problem():
         api = MatricesAPI()
         cl = Closed_Loop() 
 
+        model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
+
         # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
         if not upd or not FROM_DATA:
             plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
             api.print_plant(plant)
 
             # 2) Solve DRO-LMI (choose "correlated" or "independent")
-            model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
             res = build_and_solve_dro_lmi(
                 plant=plant,
                 api=api,
@@ -155,24 +156,24 @@ class lmi_pipeline_optim_problem():
             A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
             Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
             plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-
+            ADD = False
 
         else:
             data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
             approach = params.get("approach", "Young")
 
             # 2) Solve DRO-LMI (choose "correlated" or "independent")
-            model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
             res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
                 data=data,
                 noise=noise,
                 model=model,
                 approach=approach,
+                d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
             )
 
             A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
             plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-            #Delta, beta = other
+            ADD = True
         
         if res.status not in ("optimal", "optimal_inaccurate"):
             raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
@@ -261,6 +262,15 @@ class lmi_pipeline_optim_problem():
                 "Tp": None if res.Tp is None else res.Tp.tolist(),
             },
         }
+
+        if ADD: 
+            if approach == 'Young':
+                D, E, B = other
+                payload["Young_approach"] = {
+                    "D": [d.tolist() for d in D],
+                    "E": [e.tolist() for e in E],
+                    "B": [b for b in B],
+                }
 
         out_json = out + f"___results_run.json"
         if save: self.save_json(out_json, payload)

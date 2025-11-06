@@ -252,6 +252,7 @@ def build_and_solve_dro_lmi_upd(
     mhu_y: float = 0.5,
     mhu_z: float = 0.5,
     approach: str = "DeePC",
+    d: bool = False,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -557,6 +558,7 @@ def build_and_solve_dro_lmi_upd(
             ])
 
         cons += [negdef(big_corr)]
+        cons += [negdef(state_blk)]
 
     elif model.lower() in ["independent", "indep", "2"]:
         if approach == "DeePC":
@@ -583,6 +585,7 @@ def build_and_solve_dro_lmi_upd(
 
         cons += [negdef(blk1)]
         cons += [negdef(blk2)]
+        if d: cons += [negdef(state_blk)]
     else:
         raise ValueError("model must be 'correlated' or 'independent'.")
 
@@ -679,7 +682,7 @@ def build_and_solve_dro_lmi_upd(
             = _val(rx.value), _val(ry.value), _val(rz.value)
         other = (rx_val, ry_val, rz_val)
     elif approach == 'Young':
-        other = (DeltaA, DeltaB, EAA, EAB)
+        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_AA.value, beta_AB.value)
 
     return dro, P, Sigma_nom, other
 
