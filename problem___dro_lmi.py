@@ -325,6 +325,7 @@ def build_and_solve_dro_lmi_upd(
 
         # Rank selection by cumulative energy
         total = max(float(np.sum(s)), 1e-18)
+        print(f"Total residual energy: {total}")
         cum = np.cumsum(s) / total
         nw = int(np.clip(np.searchsorted(cum, eta) + 1, 1, nx))
 

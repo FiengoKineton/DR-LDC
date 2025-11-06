@@ -56,58 +56,61 @@ def compose_closed_loop(plant: Plant, ctrl: Controller):
 
 # ------------------------- RECOVER ERR MAT (YOUNG) --------------------------
 
-def _as2d_float(a):
-    a = np.asarray(a)
-    if a.ndim != 2:
-        raise ValueError(f"Expected 2D array, got shape {a.shape}")
-    return np.asarray(a, dtype=float, order='C')
-
-def _solve_sylvester_safe(A, B, C, rcond=1e-12):
-    """Try scipy sylvester; on failure, fall back to Kronecker least-squares."""
-    A = _as2d_float(A); B = _as2d_float(B); C = _as2d_float(C)
-    # Try standard solver first
-    try:
-        X = solve_sylvester(A, B, C)
-        X = np.real_if_close(X)
-        return X
-    except Exception as e:
-        # Kronecker fallback: (I ⊗ A + B^T ⊗ I) vec(X) = vec(C)
-        n, n2 = A.shape; m, m2 = B.shape
-        if n != n2 or m != m2 or C.shape != (n, m):
-            raise ValueError(f"Sylvester dims incompatible: A{A.shape}, B{B.shape}, C{C.shape}") from e
-        K = np.kron(np.eye(m), A) + np.kron(B.T, np.eye(n))
-        rhs = C.reshape(-1,  order='F')
-        X_vec, *_ = np.linalg.lstsq(K, rhs, rcond=rcond)
-        X = X_vec.reshape(n, m, order='F')
-        X = np.real_if_close(X)
-        return X
-
-def build_A_lift(Ax, Bu, Cy, X, Y, K, L, M, N):
-    n = Ax.shape[0]
-    # coerce to float arrays to avoid object dtypes from cvxpy
-    Ax = _as2d_float(Ax); Bu=_as2d_float(Bu); Cy=_as2d_float(Cy)
-    X=_as2d_float(X); Y=_as2d_float(Y); M=_as2d_float(M); N=_as2d_float(N)
-    K=_as2d_float(K); L=_as2d_float(L)
-    A11 = Ax @ Y + Bu @ M
-    A12 = Ax + Bu @ (N @ Cy)
-    A21 = K
-    A22 = X @ Ax + L @ Cy
-    return np.block([[A11, A12],
-                     [A21, A22]])
-
-def EAA_of(DeltaA, X, Y):
-    n = DeltaA.shape[0]
-    return np.block([[DeltaA @ Y, DeltaA],
-                     [np.zeros((n,n)), X @ DeltaA]])
-def EAB_of(DeltaB, M, N, Cy):
-    n = DeltaB.shape[0]
-    return np.block([[DeltaB @ M, DeltaB @ (N @ Cy)],
-                     [np.zeros((n,n)), np.zeros((n,n))]])
-
 def recover_deltas(P, X, Y, M, N, Cy, 
                    Ahat, Buhat,
                    beta_AA, beta_AB,
                    eps=1e-12, rcond=1e-10):
+    
+    def _as2d_float(a):
+        a = np.asarray(a)
+        if a.ndim != 2:
+            raise ValueError(f"Expected 2D array, got shape {a.shape}")
+        return np.asarray(a, dtype=float, order='C')
+
+    def _solve_sylvester_safe(A, B, C, rcond=1e-12):
+        """Try scipy sylvester; on failure, fall back to Kronecker least-squares."""
+        A = _as2d_float(A); B = _as2d_float(B); C = _as2d_float(C)
+        # Try standard solver first
+        try:
+            X = solve_sylvester(A, B, C)
+            X = np.real_if_close(X)
+            return X
+        except Exception as e:
+            # Kronecker fallback: (I ⊗ A + B^T ⊗ I) vec(X) = vec(C)
+            n, n2 = A.shape; m, m2 = B.shape
+            if n != n2 or m != m2 or C.shape != (n, m):
+                raise ValueError(f"Sylvester dims incompatible: A{A.shape}, B{B.shape}, C{C.shape}") from e
+            K = np.kron(np.eye(m), A) + np.kron(B.T, np.eye(n))
+            rhs = C.reshape(-1,  order='F')
+            X_vec, *_ = np.linalg.lstsq(K, rhs, rcond=rcond)
+            X = X_vec.reshape(n, m, order='F')
+            X = np.real_if_close(X)
+            return X
+
+    def build_A_lift(Ax, Bu, Cy, X, Y, K, L, M, N):
+        n = Ax.shape[0]
+        # coerce to float arrays to avoid object dtypes from cvxpy
+        Ax = _as2d_float(Ax); Bu=_as2d_float(Bu); Cy=_as2d_float(Cy)
+        X=_as2d_float(X); Y=_as2d_float(Y); M=_as2d_float(M); N=_as2d_float(N)
+        K=_as2d_float(K); L=_as2d_float(L)
+        A11 = Ax @ Y + Bu @ M
+        A12 = Ax + Bu @ (N @ Cy)
+        A21 = K
+        A22 = X @ Ax + L @ Cy
+        return np.block([[A11, A12],
+                        [A21, A22]])
+
+    def EAA_of(DeltaA, X, Y):
+        n = DeltaA.shape[0]
+        return np.block([[DeltaA @ Y, DeltaA],
+                        [np.zeros((n,n)), X @ DeltaA]])
+
+    def EAB_of(DeltaB, M, N, Cy):
+        n = DeltaB.shape[0]
+        return np.block([[DeltaB @ M, DeltaB @ (N @ Cy)],
+                        [np.zeros((n,n)), np.zeros((n,n))]])
+
+
     n, m = Buhat.shape
     # Coerce everything to plain float arrays early
     P=_as2d_float(P); X=_as2d_float(X); Y=_as2d_float(Y)
