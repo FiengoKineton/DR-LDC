@@ -1,0 +1,106 @@
+Ho individuato alcuni punti critici e aree da approfondire:
+  - CHANGE: Alcune condizioni LMI non risultano completamente motivate o spiegate, per cui mi viene difficile verificarne la correttezza. 
+            Assicurati di precisare tutti i passaggi, specialmente per il caso data-driven. Verifica anche la dimensione delle matrici.
+
+  - FIXED:  La soluzione DDD ottimizzata presenta un raggio spettrale del sistema in anello chiuso leggermente superiore a 1 (ρ ≈ 1.00014),
+            indicando una violazione della stabilità in tempo discreto. Ciò significa che, pur avendo soddisfatto formalmente le LMI di 
+            stabilità (probabilmente entro la tolleranza del solver), il controllore DDD ottenuto non garantisce rigorosamente la stabilità
+            asintotica del sistema chiuso. Questo evidenzia che il rilassamento utilizzato può spingere la soluzione sul bordo del dominio 
+            ammissibile, dove piccole imprecisioni numeriche compromettono i vincoli di stabilità...
+
+  - DONE:   In Eq. (3.5) (e seguenti), c’è un piccolo refuso nelle matrici LMI aggiunte per i termini di Young. Vengono introdotte 
+            variabili ausiliarie $s_{AA}, s_{AB}$ con i rispettivi vincoli semidefiniti $[s_{AA};; \beta_{AA};; \beta_{AA};; \tau_{AA}] 
+            \succeq 0$ e $[s_{AB};; \beta_{AB};; \beta_{AB};; \tau_{BB}] \succeq 0$. Qui probabilmente $\tau_{BB}$ è un errore di 
+            notazione e dovrebbe essere $\tau_{AB}$ (in analogia con $\tau_{AA}$ per il blocco A). 
+
+  - EXPLAIN:La procedura di identificazione one-shot descritta (stimando $(\hat A,\hat B_u)$ da un singolo esperimento con input 
+            persistente) adotta un criterio specifico per limitare l’errore: il bound sul modello è ricavato dal rapporto tra la norma 
+            del residuo $|R|_F$ e la minima singolarità del dato $D_x$. In formula, $\beta = \frac{|R|F}{\max(\sigma{\min}(D_x),\varepsilon)}$, 
+            da cui si derivano i limiti $|\Delta A|_F\le \beta_A$ e $|\Delta B|_F\le \beta_B$. Questa scelta, pur essendo conservativa 
+            ma computabile direttamente dai dati, potrebbe introdurre approssimazioni imprecise: se il rumore sperimentale non è 
+            perfettamente i.i.d. o se $D_x$ è vicino a essere mal condizionato, $\beta$ potrebbe sottostimare o sovrastimare 
+            l’effettivo errore modellistico. In particolare, assumere un singolo bound Frobenius su $\Delta A$ e $\Delta B$ ignora 
+            l’eventuale struttura stocastica dell’errore di identificazione (distribuzione, correlazioni). Ciò rappresenta un limite 
+            concettuale: l’approccio tratta l’errore come incognito deterministico limitato in norma, mentre si sarebbe potuto sfruttare 
+            di più l’informazione statistica dal dataset (ad es. intervalli di confidenza). Questo trade-off semplicità/accuratezza è 
+            menzionato nella bozza, che ammette la natura conservativa ma pratica di tale bound. Non è un vero “errore”, ma una 
+            scelta metodologica discutibile che potrebbe incidere sulla performance: un bound troppo largo porta a eccessiva 
+            conservatività (come si vede nel caso DD), mentre un bound troppo ottimistico rischia di violare i requisiti robusti.
+
+  - CHANGE: Vedo un forte divario nei costi e nelle energie tra le varie progettazioni. Ad esempio, per un raggio d’ambiguità $\gamma=0.5$,
+            il controllore data-driven in due fasi (DD) ottiene un valore di costo obiettivo estremamente alto ($J_{DD}\approx 951$) 
+            rispetto al controllore diretto (DDD) che raggiunge $J_{DDD}\approx 0.53$. Una differenza di tre ordini di grandezza è 
+            sorprendente e può indicare che il controllore DD ha adottato un comportamento quasi disabilitato 
+            (ad es. controllore molto conservativo che lascia degradare le prestazioni $z$ pur di garantire robustezza), 
+            mentre DDD ha sfruttato aggressivamente il rilassamento per ridurre il costo. Questo esito estremo potrebbe essere 
+            indice di un problema numerico o di impostazione: forse il modello identificato induce vincoli così restrittivi da far 
+            crescere enormemente $\lambda$ (il moltiplicatore nel costo robusto $J = \mathrm{tr}(Q\Sigma_{nom}) + \lambda \gamma^2$), 
+            gonfiando $J_{DD}$. Oppure il controllore DD è H2-robusto a tal punto da quasi non opporre controllo 
+            (da qui l’$z$ alto e $u$ elevato). In ogni caso, andrebbe verificato se questo divario è reale o frutto di parametri non 
+            uniformi nel confronto. Nella bozza non è chiarito se il baseline model-based (MBD) con modello esatto usi lo stesso 
+            $\gamma=0.5$; tuttavia viene riportato un $J_{MBD}\approx 14.3861$. Se queste cifre sono corrette, significa che: 
+                (a) il modello esatto + progetto distributionally robust produce un costo moderato ($\sim14$); 
+                (b) usare un modello identificato peggiora drasticamente il costo robusto (fino a $951$); 
+                (c) l’approccio diretto recupera performance incredibilmente, scendendo a $0.53$. 
+            Un simile outlier suggerisce di controllare possibili errori nelle simulazioni o nelle metriche...
+
+
+Per procedere, propongo di concentrarci sulle seguenti attività:
+  - DONE:   Per evitare che il solver “abusi” delle variabili $s_{A,i}$ portandole a valori estremi, si potrebbe aggiungere un vincolo 
+            esplicito o implicito su di esse. Ad esempio, imporre $s_{A,i}$ entro un range ragionevole (es. $[\underline{s}, \bar{s}]$)     
+            o penalizzare nel costo valori troppo piccoli/grandi di $s$. In termini pratici, una regolarizzazione sui termini di Young 
+            potrebbe mantenere un po’ di conservatività e garantire margini. Ad esempio, aggiungere $\mu \sum_i (s_{A,i} + 1/s_{A,i})$ 
+            nell’obiettivo (con $\mu$ piccolo) incoraggerebbe $s_{A,i}$ a non divergere.
+
+  - REVIEW: Nella bozza, i termini di ordine $O(|E|^2)$ (dovuti all’incertezza al quadrato) sono completamente trascurati. Si potrebbe 
+            esplorare un rilassamento più raffinato che includa parzialmente questi effetti senza perdere convessità. Ad esempio, 
+            utilizzare un bound più stretto del semplice drop: tu stesso suggerisci che si potrebbe maggiorare il termine di secondo 
+            ordine con $|P|,(\beta_A^2+\beta_B^2) I$. Implementare questo vincolo aggiuntivo renderebbe l’LMI leggermente più restrittiva, 
+            ma potrebbe migliorare la robustezza senza eccessivo costo computazionale (si introduce un termine noto in più).
+
+  - Formulazione di beta:
+    (a) Se possibile, si potrebbero condurre più sessioni di identificazione con condizioni iniziali o rumore diversi, ottenendo più 
+        realizzazioni di residui. Invece di fissare $\beta$ sul singolo peggiore residuo, si potrebbe fare una media o un valore più 
+        robusto. Ad esempio, scegliere $\beta$ come media dei $|R|/\sigma_{\min}$ su diversi dataset fornirebbe un criterio dei 
+        residui più robusto e meno sensibile a un singolo esperimento sfortunato. Questa idea non richiede per forza di estendere 
+        la formulazione LMI a gestire più modelli nominali...si può calcolare un $\beta$ unico ma più piccolo di quello worst-case 
+        singolo, confidando che i casi estremi vengono attenuati dalla media di più dati.
+    (b) L’attuale scelta di $\beta$ considera la minima singolar globale, implicando un’incertezza isotropa in tutte le direzioni 
+        degli spazi di stato. In realtà, i residui di identificazione spesso mostrano che l’errore è maggiore su certe combinazioni 
+        lineari di stati e minore su altre. Una direzione promettente sarebbe calcolare diversi bound per diverse direzioni 
+        (ad es. tramite analisi delle singolar values non minime). Ad esempio, invece di $|\Delta A|_F \le \beta$, si potrebbero 
+        trovare matrici di peso $W_A$ tali che $|W_A \Delta A|_F \le 1$ meglio normalizzi gli errori. Questi pesi potrebbero derivare 
+        proprio dall’SVD dei residui (e.g. $W_A$ prende in considerazione le singolar values maggiori, così che l’ellissoide d’errore 
+        sia allineato alle incertezze reali). Integrare $W_A$ nelle LMI (cosa fattibile inserendo $W_A \Delta A = \Delta A’$ come 
+        nuova variabile e adattando i termini di Young) permetterebbe di ridurre la conservatività dove l’identificazione è più sicura 
+        e aumentarla dove è meno. In altre parole, un criterio di selezione residui direzionale renderebbe l’approccio più efficiente.
+
+  - SOLVED: Si potrebbe integrare nella LMI un vincolo che garantisca margine di stabilità. Ad esempio, richiedere che $A_{cl}$ abbia 
+            raggio spettrale $\le \alpha < 1$, o equivalentemente esista $P$ tale che $A_{cl}^T P A_{cl} \preceq \alpha^2 P$. Quest’ultimo 
+            è un vincolo bilineare (coinvolge $P$ e i guadagni del controller insieme), ma si può rilassare linearmente fissando $\alpha$ 
+            e iterando come detto. In alternativa, imporre $P \succ I\epsilon$ per qualche $\epsilon$ e sostituire $-P$ con $-\epsilon I$ 
+            in alcuni blocchi potrebbe forzare un damping minimo. Anche un vincolo su poli dominanti (ad es. separare la parte reale) 
+            in LMI è noto in letteratura e potrebbe essere incorporato. Questi vincoli ridurrebbero un po’ lo spazio delle soluzioni, 
+            ma impedirebbero quelle palesemente instabili o troppo al limite, come quella ottenuta da SCS.
+
+  - REVIEW: Come hai accennato anche tu, un modo efficace per evitare controllori “iperattivi” è aggiungere nel costo una penalità sulla 
+            norma del controllore. Per esempio, se $K,L,M,N$ sono le matrici di guadagno (o $A_c,B_c$ la dinamica del controller), 
+            si potrebbe aggiungere un termine $\rho(|K|_F^2 + |L|_F^2 + ...)$ all’obbiettivo. Questo costringe l’ottimizzatore a non 
+            esasperare i guadagni per guadagnare marginalmente in $z$. Occorre scegliere $\rho$ opportunamente per non penalizzare troppo 
+            la prestazione; tecniche come la continuation possono aiutare (iniziare con $\rho=0$, ottenere una soluzione, poi aumentare 
+            $\rho$ gradualmente). In letteratura questo approccio è analogo alla loop-shaping integrato nell’SDP: si sta dicendo al solver 
+            di privilegiare controlli più “calmi” e robusti anche a costo di un piccolo aumento di $z$. I risultati attesi sarebbero poli 
+            più smorzati e condizionamenti migliori (meno picchi di alto guadagno).
+  
+  - Un aspetto da approfondire è la scelta di $\gamma$ (raggio dell’ambiguità). Nella bozza pare fissato a 0.5 in base a 
+    considerazioni esterne. Tuttavia, $\gamma$ influisce sul compromesso robustezza/performance (γ grande = più incertezza 
+    disturbo = controllore più cauto). Integrare la scelta ottima di $\gamma$ all’interno dell’ottimizzazione (magari come 
+    variabile con penalità) potrebbe automatizzare anche quel trade-off. Ad esempio, minimizzare $J + \nu \gamma^2$ con $\nu$ 
+    piccola, oppure cercare il più grande $\gamma$ per cui esiste un controllore con $J$ sotto una soglia. Ciò renderebbe il 
+    controllo robusto ancora più adattativo alle necessità effettive.
+
+  - Analogamente, l’idea di distributionally robust si potrebbe estendere non solo ai disturbi, ma anche ai parametri di modello 
+    (es. considerare che $\Delta A$ non è solo incognito entro un bound, ma segue una certa distribuzione indotta dai dati). 
+    Questo porterebbe verso una sorta di distributionally robust system identification, ancora da esplorare a fondo. Se si 
+    riuscisse a formulare un problema convesso che tenesse conto anche di quello, avremmo controllori robusti sia a incertezza 
+    di modello che di disturbo in senso distribuzionale...

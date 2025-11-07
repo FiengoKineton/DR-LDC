@@ -17,6 +17,7 @@ def build_and_solve_dro_lmi(
     alpha_cap: float = 1e2,  # keep X, Y from exploding
     fro_cap: float = 1e2,  # keep K, L, M, N from exploding
     additional_constraints: bool = False,
+    SOLVER: str = None,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -160,22 +161,23 @@ def build_and_solve_dro_lmi(
 
     # Solve
     success_MOSEK = success_CVXOPT = success_SCS = False
-    solver = "MOSEK"
-    print("\n===================================================\nAttempting to solve with MOSEK...")
-    try:
-        prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-8,
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-8,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-8,
-            'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6
-        })
-        print(f"MOSEK status: {prob.status}")
-        if prob.status == cp.OPTIMAL:
-            success_MOSEK = True
-    except Exception as mosek_e:
-        print(f"MOSEK error: {mosek_e}")
+    if SOLVER == "MOSEK":
+        solver = "MOSEK"
+        print("\n===================================================\nAttempting to solve with MOSEK...")
+        try:
+            prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={
+                'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-8,
+                'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-8,
+                'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-8,
+                'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6
+            })
+            print(f"MOSEK status: {prob.status}")
+            if prob.status == cp.OPTIMAL:
+                success_MOSEK = True
+        except Exception as mosek_e:
+            print(f"MOSEK error: {mosek_e}")
 
-    if not success_MOSEK:
+    if not success_MOSEK or SOLVER == "CVXOPT":
         solver = "CVXOPT"
         print("\n===================================================\nMOSEK failed, trying CVXOPT...")
         try:
@@ -190,7 +192,7 @@ def build_and_solve_dro_lmi(
         except Exception as e:
             print(f"CVXOPT error: {e}")
 
-    if not (success_MOSEK or success_CVXOPT):
+    if not (success_MOSEK or success_CVXOPT) or SOLVER == "SCS":
         solver = "SCS"
         print("\n===================================================\nCVXOPT failed, trying SCS...")
         try:
@@ -287,6 +289,8 @@ def build_and_solve_dro_lmi_upd(
             return None
         return float(x) if np.isscalar(x) else x
 
+    def _fro(M):
+        return cp.norm(M, 'fro')
 
 
     def estimate_Bw_from_residuals(
@@ -388,6 +392,20 @@ def build_and_solve_dro_lmi_upd(
             "s_vals": s,
         }
         return Bw_hat, R, Sigma_w_hat, info
+
+    def spectral_norm_epigraph(A: cp.Expression, name: str):
+        """
+        Impone ||A||_2 <= t_name con un'epigrafe LMI:
+            [[t I_m, A],
+            [A.T,   t I_n]] >> 0
+        Ritorna la variabile scalare t e la lista dei vincoli.
+        """
+        m, n = A.shape
+        t = cp.Variable(nonneg=True, name=f"t_{name}")
+        blk = cp.bmat([ [t * I(m),  A       ],
+                        [A.T,       t * I(n)]])
+        return t, [blk >> 0]
+    
 
 
     if approach == "DeePC":
@@ -522,15 +540,31 @@ def build_and_solve_dro_lmi_upd(
         tau_AB = cp.Variable(nonneg=True, name="tau_ab")
         s_AB = cp.Variable(nonneg=True, name="s_ab") 
         S_AB = np.hstack([Ix, Z(nx, nx)]).T
+        
+        tK, consK = spectral_norm_epigraph(K, "K")   # usa I_nx e I_nx
+        tL, consL = spectral_norm_epigraph(L, "L")   # usa I_nx e I_ny
+        tM, consM = spectral_norm_epigraph(M, "M")   # usa I_nu e I_nx
+        tN, consN = spectral_norm_epigraph(N, "N")   # usa I_nu e I_ny
+        #tP, consP = spectral_norm_epigraph(P, "P") 
 
-        reg = 0.0
+        # Reg
+        mhu_AA, mhu_AB = 1e-3, 1e-3
+        rhoK, rhoL, rhoM, rhoN = 1e-3, 1e-3, 1e-3, 1e-3
+        rhoP = 1e-7
+        reg = mhu_AA * (s_AA + tau_AA / beta_aa**2) + mhu_AB * (s_AB + tau_AB / beta_ab**2)
+        reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN
+        #reg += rhoP * tP * (beta_aa + beta_ab)**2
 
+        # Cons
         cons += [s_AA >= 1e-9, s_AB >= 1e-9]
         cons += [tau_AA <= 1e3, tau_AB <= 1e3]
         cons += [cp.bmat([[s_AA, beta_AA], [beta_AA, tau_AA]]) >> 0]
         cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
-        state_blk = -P + (tau_AA + tau_AB) * I(2*nx)
+        cons += consK + consL + consM + consN
+        #cons += consP
 
+        # Final
+        state_blk = -P + (tau_AA + tau_AB) * I(2*nx)
         obj = obj_dro + reg
     else:
         reg = 0.0
@@ -612,7 +646,7 @@ def build_and_solve_dro_lmi_upd(
     except Exception as mosek_e:
         print(f"MOSEK error: {mosek_e}")
 
-    if not success_MOSEK:
+    if not success_MOSEK and 0:
         solver = "CVXOPT"
         print("\n===================================================\nMOSEK failed, trying CVXOPT...")
         try:
@@ -683,7 +717,7 @@ def build_and_solve_dro_lmi_upd(
             = _val(rx.value), _val(ry.value), _val(rz.value)
         other = (rx_val, ry_val, rz_val)
     elif approach == 'Young':
-        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_AA.value, beta_AB.value)
+        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_aa, beta_ab), (s_AA.value, s_AB.value), (tau_AA.value, tau_AB.value)
 
     return dro, P, Sigma_nom, other
 

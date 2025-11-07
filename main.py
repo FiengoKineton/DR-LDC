@@ -151,6 +151,7 @@ class lmi_pipeline_optim_problem():
                 api=api,
                 noise=noise,
                 model=model,
+                SOLVER=params.get("solver", "MOSEK"),
             )
 
             A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
@@ -265,11 +266,13 @@ class lmi_pipeline_optim_problem():
 
         if ADD: 
             if approach == 'Young':
-                D, E, B = other
+                D, E, B, S, T = other
                 payload["Young_approach"] = {
                     "D": [d.tolist() for d in D],
                     "E": [e.tolist() for e in E],
                     "B": [b for b in B],
+                    "S": [s for s in S], 
+                    "T": [t for t in T],
                 }
 
         out_json = out + f"___results_run.json"

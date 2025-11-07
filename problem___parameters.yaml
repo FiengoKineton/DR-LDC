@@ -2,7 +2,7 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
   upd: 1                                                                        # set
-  model: "correlated"                                                           # set | may be var ("correlated" or "independent")
+  model: "independent"                                                          # set | may be var ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   approach: "Young"                                                             # VAR ------------------------------ "Young" or "Vertices"
   comp: 0                                                                       # VAR ------------------------------ true or false
@@ -11,7 +11,7 @@ params:
   ALL: 1                                                                        # VAR ------------------------------ true or false
   use_set_out_mats: 0                                                           # set | may be var (true or false)
   SNR: 0                                                                        # set
-
+  solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")
 
   simulation:
     ts: 0.05                                                                    # set
@@ -27,7 +27,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "Young3"                                                             # VAR ------------------------------ look for the names in main.py
+    runID: "temp"                                                             # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
