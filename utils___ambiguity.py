@@ -301,6 +301,10 @@ class WassersteinAmbiguitySet:
         w2_cov = WassersteinAmbiguitySet.w2_gaussian(S1, S2)
         return float(np.sqrt(d_mu2 + w2_cov**2))
 
+    def estm_Sigma_nom(self, s):
+        n, T = s.shape
+        return 0.5 * ((s @ s.T)/max(T,1) + ((s @ s.T)/max(T,1)).T) + 1e-9*np.eye(n)
+
     def empirical_mean_and_cov(self, w: np.ndarray, unbiased_cov: bool = True):
         """
         Empirical mean and covariance of samples w shape (T,n).
@@ -310,7 +314,7 @@ class WassersteinAmbiguitySet:
         mu = w.mean(axis=0)
         z = w - mu
         denom = max(1, (w.shape[0] - 1) if unbiased_cov else w.shape[0])
-        S = self._sym(z.T @ z / denom)
+        S = self._sym(z @ z.T / denom)
         return mu, S
 
     def estimate_gamma_from_samples(self, w: np.ndarray, include_mean: bool = True):
@@ -321,14 +325,14 @@ class WassersteinAmbiguitySet:
         """
         mu_hat, S_hat = self.empirical_mean_and_cov(w, unbiased_cov=True)
         if include_mean:
-            gamma_hat = self.w2_gaussian_full(mu_hat, S_hat, np.zeros_like(mu_hat), self.Sigma_nom)
+            gamma_hat = self.w2_gaussian_full(mu_hat, S_hat, np.zeros_like(mu_hat), self.estm_Sigma_nom(w))
         else:
             gamma_hat = self.w2_gaussian(S_hat, self.Sigma_nom)
         diag = {"mu_hat": mu_hat, "Sigma_hat": S_hat, "include_mean": include_mean}
         return float(gamma_hat), diag
 
     def estimate_gamma_with_ci(self, w: np.ndarray, include_mean: bool = True,
-                            correlated: bool = False, B: int = 300, alpha: float = 0.10,
+                            correlated: bool = True, B: int = 300, alpha: float = 0.10,
                             block_len: int | None = None, rng: np.random.Generator | None = None):
         """
         Bootstrap CI for gamma. Uses ordinary bootstrap if iid; moving block bootstrap if correlated.
@@ -458,10 +462,6 @@ class Disturbances:
 
     def __repr__(self):
         return f"Disturbances(mode={self.mode!r}, gamma={self.gamma!r})"
-
-    def estm_Sigma_nom(self, s):
-        n, T = s.shape
-        return 0.5 * ((s @ s.T)/max(T,1) + ((s @ s.T)/max(T,1)).T) + 1e-9*np.eye(n)
 
     def plot_disturbance_distribution(self, w, *, bins=40, max_dims_hist=8, plot_pairs=True,
                                     ellipse_levels=(1.0, 2.0, 3.0), save_path=None):

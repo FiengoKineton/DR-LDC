@@ -520,7 +520,7 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, gamma: float = None, p: bool = None, x0_mode: str = None, s: bool = None):
+    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, DATASETS=False, gamma: float = None, p: bool = False, x0_mode: str = None, s: bool = None):
         p = cfg.get("params", {})
         self.p = p
         out = self.p.get("directories", {}).get("data", "./out/data/session_")
@@ -528,7 +528,7 @@ class Open_Loop():
         runID = self.p.get("directories", {}).get("runID", ".temp")
         _type = self.p.get("plant", {}).get("type", "explicit")
         _model = self.p.get("model", "independent") if m == "W2" else m
-        PLOT = bool(self.p.get("plot", "false")) if p is None else p
+        PLOT = bool(self.p.get("plot", "false")) if not p else p
         
         var = float(p.get("ambiguity", {})["var"])
         n = p.get("dimensions", {}).get("nw", 2)
@@ -548,19 +548,28 @@ class Open_Loop():
         api = MatricesAPI()
         plant, _ = api.get_system(FROM_DATA=False, gamma=gamma)
 
-        if MAKE_DATA: self.data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
-        if EVAL_FROM_PATH: self.evaluate_from_path()
-        if PLOT: 
-            metrics = self.plot_est_vs_truth(x0_mode="e1" if x0_mode is None else x0_mode, show=True if s is None else s)
-            print("\n[PLT] Plotting completed. Metrics:", metrics)
 
+        if DATASETS:
+            self.datasets = self.make_multiple_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
+        else: 
+            if MAKE_DATA: self.data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
+            if EVAL_FROM_PATH: self.evaluate_from_path()
+            if PLOT: 
+                metrics = self.plot_est_vs_truth(x0_mode="e1" if x0_mode is None else x0_mode, show=True if s is None else s)
+                print("\n[PLT] Plotting completed. Metrics:", metrics)
     
-    """
-    python simulate_pe_openloop.py --T 3000 --nx 4 --nu 2 --nw 2 --ny 2 --nz 3 --input multisine --amp 1.0 --w_std 0.1 --seed 42 --out out/data/session01.csv
-    """
 
+    def make_multiple_data(self, plant: Plant, N: int = 5, gamma: float = None, Sigma: np.ndarray = None):
+        datasets = []
+        init = ["zeros", "rand"]
+        input = ["multisine", "prbs"]
+        for i in range(N):
+            print(f"[DATA] Generating dataset {i+1}/{N}...")
+            data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma, multiple_datasets=True, init=init[i % len(init)], input=input[i % len(input)])
+            datasets.append(data)
+        return datasets
 
-    def make_data(self, plant: Plant, gamma: float = None, Sigma: np.ndarray = None):
+    def make_data(self, plant: Plant, gamma: float = None, Sigma: np.ndarray = None, multiple_datasets: bool = False, init: str = "zeros", input: str = "multisine"):
         ap = argparse.ArgumentParser(description="Simulate open-loop with persistently exciting input and save CSV.")
         ap.add_argument("--T", type=int, default=3000, help="number of time steps")
         ap.add_argument("--seed", type=int, default=0)
@@ -637,7 +646,10 @@ class Open_Loop():
         def simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=0.1, seed=0):
             # rng = np.random.default_rng(seed); W = rng.normal(0.0, 1.0, size=(nw, T)) * w_std
 
-            X = np.zeros((nx, T))
+            if init == "zeros":     X = np.zeros((nx, T))
+            elif init == "rand":    X = rng.normal(0, 1.0, size=(nx, T))
+            else:                   raise ValueError(f"Unknown init mode '{init}'.")
+
             X[:, 0] = x0
             for t in range(T - 1):
                 X[:, t + 1] = (A @ X[:, t] + Bu @ U[:, t] + Bw @ W[:, t])
@@ -660,7 +672,8 @@ class Open_Loop():
 
 
         # Persistently exciting input
-        if args.input == "prbs":
+        input_mode = args.input if not multiple_datasets else input
+        if input_mode == "prbs":
             U = prbs(nu, T, shift=11, seed=args.seed + 17, amp=args.amp)
         else:
             U = multisine(nu, T, ntones=12, seed=args.seed + 23, amp=args.amp)
@@ -700,8 +713,8 @@ class Open_Loop():
             "t": t,                     # time index
             "meta": {
                 "nx": nx, "nu": nu, "nw": nw, "ny": ny, "nz": nz, "T": T,
-                "seed": args.seed, "input": args.input, "amp": args.amp, "w_std": args.w_std,
-                "csv_path": self.out, "truth_path": self.truth_path,
+                "seed": args.seed, "input": input_mode, "amp": args.amp, "w_std": args.w_std,
+                "csv_path": self.out, "truth_path": self.truth_path, "init": init,
             }
         }
 
@@ -726,25 +739,27 @@ class Open_Loop():
                 row.extend(Z[:, -1].tolist())
             rows.append(row)
 
-        with open(self.out, "w", newline="", encoding="utf-8") as f:
-            wr = csv.writer(f, delimiter=args.delimiter)
-            wr.writerow(headers)
-            wr.writerows(rows)
 
-        print(f"[OK] Saved {self.out} with shape ({len(rows)} rows, {len(headers)} cols).")
+        if not multiple_datasets:
+            with open(self.out, "w", newline="", encoding="utf-8") as f:
+                wr = csv.writer(f, delimiter=args.delimiter)
+                wr.writerow(headers)
+                wr.writerows(rows)
 
-        # >>> NEW: save ground-truth matrices and minimal metadata <<<
-        np.savez_compressed(
-            self.truth_path,
-            # true plant
-            A=A, Bu=Bu, Bw=Bw,
-            # true output/performance blocks used to synthesize Y,Z
-            Cy=Cy, Dyw=Dyw, Cz=Cz, Dzu=Dzu, Dzw=Dzw,
-            # optional metadata for reproducibility
-            nx=nx, nu=nu, nw=nw, ny=ny, nz=nz, T=T,
-            seed=args.seed, input=args.input, amp=args.amp, w_std=args.w_std
-        )
-        print(f"[OK] Saved ground-truth matrices to {self.truth_path}")
+            print(f"[OK] Saved {self.out} with shape ({len(rows)} rows, {len(headers)} cols).")
+
+            # >>> NEW: save ground-truth matrices and minimal metadata <<<
+            np.savez_compressed(
+                self.truth_path,
+                # true plant
+                A=A, Bu=Bu, Bw=Bw,
+                # true output/performance blocks used to synthesize Y,Z
+                Cy=Cy, Dyw=Dyw, Cz=Cz, Dzu=Dzu, Dzw=Dzw,
+                # optional metadata for reproducibility
+                nx=nx, nu=nu, nw=nw, ny=ny, nz=nz, T=T,
+                seed=args.seed, input=input_mode, amp=args.amp, w_std=args.w_std
+            )
+            print(f"[OK] Saved ground-truth matrices to {self.truth_path}")
 
         data["headers"] = headers
         data["rows"] = np.asarray(rows)

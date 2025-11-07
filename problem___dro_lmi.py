@@ -4,6 +4,7 @@ import cvxpy as cp
 from utils___systems import Plant, DROLMIResult, Noise, Data
 from utils___matrices import MatricesAPI, recover_deltas
 from utils___ambiguity import Disturbances
+from utils___simulate import Open_Loop
 import sys
 
 # ================================================================================================
@@ -266,6 +267,8 @@ def build_and_solve_dro_lmi_upd(
     T, nx, nu, ny, nz = x.shape[1], x.shape[0], u.shape[0], y.shape[0], z.shape[0]
     gamma, var = noise.gamma, noise.var
 
+    #op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True)
+    #o = op.datasets
 
     def _pseudo_inv(D, r=1e-6):
         return D.T @ np.linalg.inv(D @ D.T + r * np.eye(D.shape[0]))
@@ -292,6 +295,28 @@ def build_and_solve_dro_lmi_upd(
     def _fro(M):
         return cp.norm(M, 'fro')
 
+    def _residual_anisotropy_weights(R, *, floor=1e-12, mode="sqrt"):
+        """
+        From residuals R (nx x T), return (U, s, w) where:
+        - S = (R R^T)/T = U diag(s) U^T, s sorted desc
+        - w_i are directional weights (proportional to sqrt(s_i) by default)
+        """
+        nx, T = R.shape
+        S = (R @ R.T) / max(T, 1)
+        S = 0.5 * (S + S.T) + floor * np.eye(nx)
+        s_vals, U = np.linalg.eigh(S)          # ascending
+        idx = np.argsort(s_vals)[::-1]         # descending
+        s = np.clip(s_vals[idx], 0.0, None)
+        U = U[:, idx]
+        if mode == "sqrt":
+            w = np.sqrt(s)
+        elif mode == "linear":
+            w = s
+        else:
+            raise ValueError("mode must be 'sqrt' or 'linear'")
+        # Normalize so max weight is 1 (keeps scales comparable to scalar β logic)
+        w = w / max(np.max(w), 1e-18)
+        return U, s, w
 
     def estimate_Bw_from_residuals(
         Ax_hat, Bu_hat,
@@ -441,7 +466,7 @@ def build_and_solve_dro_lmi_upd(
         Dzu = OZ[:, nx:nx+nu]
         Dzw = OZ[:, nx+nu:nx+nu+nw]
     
-    elif approach == "Young":
+    elif approach == "Young" or approach == "Mats":
         Dx = np.vstack([x, u])
         Ox = x_next @ _pseudo_inv(Dx)
         Ax, Bu = Ox[:, :nx], Ox[:, nx:nx+nu]
@@ -452,7 +477,9 @@ def build_and_solve_dro_lmi_upd(
         w = _pseudo_inv(Bw) @ R
         d = Disturbances(n=nw)
         Sigma_nom = d.estm_Sigma_nom(w)
-        #gamma, *_ = d.estimate_gamma_with_ci(w)
+        print(f"Estimated Sigma_nom:\n{Sigma_nom}")
+        gamma, *_ = d.estimate_gamma_with_ci(w)
+        print(f"Estimated disturbance dimension nw: {nw}, gamma: {gamma}")
 
         #Delta = cp.Variable((Ox.shape[0], Ox.shape[1]), name='Delta')
         #Ax, Bu = Ax_hat + Delta[:, :nx], Bu_hat + Delta[:, nx:nx+nu]
@@ -469,12 +496,8 @@ def build_and_solve_dro_lmi_upd(
         Cy, Dyw = Oy[:, :nx], Oy[:, nx:nx+nw]
         Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
 
-
-    elif approach == "Vertices":
-        pass 
-
     else:
-        raise ValueError("approach must be 'DeePC', 'Young' or 'Vertices'")
+        raise ValueError("approach must be 'DeePC', 'Young' or 'Mats'")
 
 
     lam = cp.Variable(nonneg=True, name="lambda")
@@ -566,6 +589,68 @@ def build_and_solve_dro_lmi_upd(
 
         # Final
         state_blk = -P + (tau_AA + tau_AB) * I(2*nx)
+    
+    elif approach == "Mats":
+        # 1) residual anisotropy (directions and weights)
+        U_A, s_A, w_A = _residual_anisotropy_weights(R, floor=1e-12, mode="sqrt")
+        # Optional: cap tiny directions to avoid numerical issues
+        w_A = np.maximum(w_A, 1e-6)
+
+        # ... your existing code that computes beta, beta_a, beta_b ...
+        beta_a, beta_b = beta * np.sqrt(nx/(nx+nu)), beta * np.sqrt(nu/(nx+nu))
+
+        # 2) per-direction β for the A-part: scale β_a with weights
+        beta_AA_dir_np = np.asarray(beta_a * w_A, dtype=float)  # shape (nx,)
+
+        # 3) rotate the selector S_AA into U_A basis so each slack acts along an eigendirection
+        #    Original S_AA had shape (2nx x nx) with block [I; 0]. Keep the same but rotate columns.
+        S_AA_base = np.hstack([Ix, Z(nx, nx)]).T               # (2nx x nx)
+        S_AA  = S_AA_base @ U_A                            # (2nx x nx)
+
+        # 4) replace scalar slacks by per-direction vectors
+        tau_AA = cp.Variable(nx, nonneg=True, name="tau_aa_vec")
+        s_AA   = cp.Variable(nx, nonneg=True, name="s_aa_vec")
+
+        # parameters for β per direction
+        beta_AA = cp.Parameter(nx, nonneg=True, value=beta_AA_dir_np)
+
+
+        Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
+        beta_ab = np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
+        beta_AB = cp.Parameter(nonneg=True, value=float(np.clip(beta_ab, 0.0, 1e3)))
+
+        # 5) epigraphs for each direction:
+        #    For every i, [[s_i, β_i],[β_i, τ_i]] >= 0
+        for i in range(nx):
+            cons += [cp.bmat([[s_AA[i],      beta_AA[i]],
+                            [beta_AA[i],   tau_AA[i]]]) >> 0]
+
+        # 6) keep AB part as-is for now (still isotropic), or do the same for AB if you want
+        tau_AB = cp.Variable(nonneg=True, name="tau_ab")  # unchanged
+        s_AB   = cp.Variable(nonneg=True, name="s_ab")
+        S_AB   = S_AA_base                                # you can also rotate with a basis for AB if desired
+
+        # Existing spectral norm epigraphs
+        tK, consK = spectral_norm_epigraph(K, "K")
+        tL, consL = spectral_norm_epigraph(L, "L")
+        tM, consM = spectral_norm_epigraph(M, "M")
+        tN, consN = spectral_norm_epigraph(N, "N")
+        tP, consP = spectral_norm_epigraph(P, "P")
+
+        # 7) update regularization terms (small nudges to keep slacks bounded)
+        mhu_AA, mhu_AB = 1e-3, 1e-3
+        rhoK, rhoL, rhoM, rhoN, rhoP = 1e-3, 1e-3, 1e-3, 1e-3, 0.0
+        # Sum of vector slacks replaces scalar s_AA and τ_AA
+        reg += mhu_AA * (cp.sum(s_AA) + cp.sum(tau_AA / (beta_AA**2 + 1e-18)))
+        reg += mhu_AB * (s_AB + tau_AB / (beta_ab**2 + 1e-18))
+        reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN + rhoP * tP * (cp.sum(beta_AA) + beta_ab)**2
+
+        # 8) state block: minimally invasive variant (keeps your scalar-identity structure)
+        state_blk = -P + (cp.sum(tau_AA) + tau_AB) * I(2*nx)
+
+        # 9) use the rotated selector in the big LMI wherever S_AA appears
+        #    Replace S_AA with S_AA_rot, and the -s_AA*I block with -diag(s_AA_vec)
+
     else:
         pass
 
@@ -591,6 +676,16 @@ def build_and_solve_dro_lmi_upd(
                 [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz), -s_AA * Ix,      Z(nx,   nx)     ],
                 [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AB.T,       Z(nx,  nz),  Z(nx, nx),     -s_AB * Ix       ],
             ])
+        elif approach == "Mats":
+            big_corr = cp.bmat([
+                [ -P,            Z(2*nx, nw),  Z(2*nx, nw),  A.T,          C.T,          S_AA,           S_AB            ],
+                [ Z(nw,2*nx),   -lam*Iw,       lam*Iw,       B.T,          D.T,          Z(nw,   nx),    Z(nw,   nx)     ],
+                [ Z(nw,2*nx),    lam*Iw,      -Q - lam*Iw,   Z(nw,2*nx),   Z(nw,  nz),   Z(nw,   nx),    Z(nw,   nx)     ],
+                [ A,             B,            Z(2*nx, nw),  state_blk,    Z(2*nx,nz),   S_AA,           S_AB            ],
+                [ C,             D,            Z(nz,  nw),   Z(nz, 2*nx), -Iz,           Z(nz,   nx),    Z(nz,   nx)     ],
+                [ S_AA.T,        Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz),  -cp.diag(s_AA),  Z(nx, nx)       ],
+                [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AB.T,       Z(nx,  nz),   Z(nx, nx),     -s_AB * Ix       ],
+            ])
 
         cons += [negdef(big_corr)]
         cons += [negdef(state_blk)]
@@ -609,8 +704,16 @@ def build_and_solve_dro_lmi_upd(
                 [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
                 [  Z(nx,2*nx),  S_AA.T,       Z(nx, nz),   -s_AA * Ix,      Z(nx,   nx)     ],
                 [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx,   nx),   -s_AB * Ix       ],
-            ])        
-
+            ])   
+        elif approach == "Mats":
+            blk1 = cp.bmat([
+                [ -P,           A.T,          C.T,          S_AA,           S_AB            ],
+                [  A,           state_blk,    Z(2*nx, nz),  S_AA,           S_AB            ],
+                [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
+                [ S_AA.T,       S_AA.T,       Z(nx, nz),   -cp.diag(s_AA),  Z(nx, nx)       ],
+                [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx, nx),     -s_AB * Ix       ],
+            ])
+        
         blk2 = cp.bmat([
             [-lam*Iw,   lam*Iw,         B.T,            D.T         ],
             [ lam*Iw,  -Q - lam*Iw,     Z(nw, 2*nx),    Z(nw, nz)   ],
@@ -700,11 +803,11 @@ def build_and_solve_dro_lmi_upd(
         Tp=None, P=None,
     )
 
-    if approach == 'Young':
+    if approach == 'Young' or approach == "Mats":
         DeltaA, DeltaB, EAA, EAB = recover_deltas(
             P=P_val, X=X_val, Y=Y_val, M=M_val, N=N_val, Cy=Cy,
             Ahat=Ax, Buhat=Bu,
-            beta_AA=beta_AA.value, beta_AB=beta_AB.value,
+            beta_AA=np.mean(beta_AA.value), beta_AB=beta_AB.value,
         )
 
         Ax = Ax + DeltaA
@@ -716,8 +819,8 @@ def build_and_solve_dro_lmi_upd(
         rx_val, ry_val, rz_val \
             = _val(rx.value), _val(ry.value), _val(rz.value)
         other = (rx_val, ry_val, rz_val)
-    elif approach == 'Young':
-        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_aa, beta_ab), (s_AA.value, s_AB.value), (tau_AA.value, tau_AB.value)
+    elif approach == 'Young' or approach == "Mats":
+        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_AA.value, beta_ab), (s_AA.value, s_AB.value), (tau_AA.value, tau_AB.value)
 
     return dro, P, Sigma_nom, other
 

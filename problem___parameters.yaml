@@ -4,7 +4,7 @@ params:
   upd: 1                                                                        # set
   model: "independent"                                                          # set | may be var ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
-  approach: "Young"                                                             # VAR ------------------------------ "Young" or "Vertices"
+  approach: "Mats"                                                             # VAR ------------------------------ ("DeePC", "Young", "Mats")
   comp: 0                                                                       # VAR ------------------------------ true or false
   save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false

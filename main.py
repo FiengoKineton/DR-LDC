@@ -265,14 +265,15 @@ class lmi_pipeline_optim_problem():
         }
 
         if ADD: 
-            if approach == 'Young':
+            if approach == 'Young' or approach == 'Mats':
                 D, E, B, S, T = other
                 payload["Young_approach"] = {
-                    "D": [d.tolist() for d in D],
-                    "E": [e.tolist() for e in E],
-                    "B": [b for b in B],
-                    "S": [s for s in S], 
-                    "T": [t for t in T],
+                    "approach": approach,
+                    "D": self._to_serializable(D),  # handles (DeltaA, DeltaB) as matrices/tuples
+                    "E": self._to_serializable(E),  # handles (EAA, EAB) as matrices/tuples
+                    "B": self._to_serializable(B),  # now OK if matrix, vector, or scalars tuple
+                    "S": self._to_serializable(S),  # now OK if matrix
+                    "T": self._to_serializable(T),  # now OK if matrix
                 }
 
         out_json = out + f"___results_run.json"
@@ -342,6 +343,49 @@ class lmi_pipeline_optim_problem():
 
     def get_snr_vars(self):
         return self.plant, self.ctrl, self.sim, self.Sigma_nom
+
+    def _to_serializable(self, x):
+        """
+        Convert scalars / arrays / nested tuples-lists of arrays into JSON-safe types.
+        - CVXPy expressions -> use .value first (caller’s job), otherwise we try best-effort.
+        - NumPy arrays -> .tolist()
+        - Scalars -> float/int/bool
+        - Lists/Tuples -> map recursively
+        """
+        import numpy as np
+
+        # cvxpy objects: try to unwrap gracefully if user forgot to pass .value
+        try:
+            import cvxpy as cp
+            if isinstance(x, (cp.Expression, cp.atoms.atom.Atom)):
+                x = x.value
+        except Exception:
+            pass
+
+        if x is None:
+            return None
+        if isinstance(x, (list, tuple)):
+            return [self._to_serializable(xx) for xx in x]
+        if hasattr(x, "toarray"):             # e.g., scipy.sparse
+            x = x.toarray()
+        if isinstance(x, np.ndarray):
+            return x.tolist()
+        # numpy scalar
+        if hasattr(x, "item") and callable(getattr(x, "item")):
+            try:
+                return x.item()
+            except Exception:
+                pass
+        # plain scalars
+        if isinstance(x, (int, float, bool, str)):
+            return x
+        # last resort: try numpy conversion
+        try:
+            import numpy as np
+            return np.asarray(x).tolist()
+        except Exception:
+            # give up: string-ify so JSON doesn't choke
+            return str(x)
 
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
