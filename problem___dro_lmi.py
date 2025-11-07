@@ -450,7 +450,9 @@ def build_and_solve_dro_lmi_upd(
         Bw, R, *_ = estimate_Bw_from_residuals(Ax_hat=Ax, Bu_hat=Bu, mode="factor")
         nw = Bw.shape[1]
         w = _pseudo_inv(Bw) @ R
-        Sigma_nom = 0.5*((w @ w.T)/max(T,1) + ((w @ w.T)/max(T,1)).T) + 1e-9*np.eye(nw)
+        d = Disturbances(n=nw)
+        Sigma_nom = d.estm_Sigma_nom(w)
+        #gamma, *_ = d.estimate_gamma_with_ci(w)
 
         #Delta = cp.Variable((Ox.shape[0], Ox.shape[1]), name='Delta')
         #Ax, Bu = Ax_hat + Delta[:, :nx], Bu_hat + Delta[:, nx:nx+nu]
@@ -516,15 +518,14 @@ def build_and_solve_dro_lmi_upd(
     cons += [P >> eps * I(2*nx)]
 
     obj_dro = cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2)
-
+    reg = 0.0
 
     if approach == 'DeePc':
         obj_est = mhu_x * (cp.trace((Dx @ Dx.T + rx * I(Dx.shape[0])) @ Gx) - cp.log_det(Gx)) + \
                     mhu_y * (cp.trace((Dy @ Dy.T + ry * I(Dy.shape[0])) @ Gy) - cp.log_det(Gy)) + \
                     mhu_z * (cp.trace((Dz @ Dz.T + rz * I(Dz.shape[0])) @ Gz) - cp.log_det(Gz))
-        reg = 0.0
 
-        obj = obj_dro + obj_est + reg
+        obj_dro += obj_est
     elif approach == "Young":
         Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
         beta_a, beta_b = beta * np.sqrt(nx/(nx+nu)), beta * np.sqrt(nu/(nx+nu))
@@ -545,15 +546,15 @@ def build_and_solve_dro_lmi_upd(
         tL, consL = spectral_norm_epigraph(L, "L")   # usa I_nx e I_ny
         tM, consM = spectral_norm_epigraph(M, "M")   # usa I_nu e I_nx
         tN, consN = spectral_norm_epigraph(N, "N")   # usa I_nu e I_ny
-        #tP, consP = spectral_norm_epigraph(P, "P") 
+        tP, consP = spectral_norm_epigraph(P, "P") 
 
         # Reg
         mhu_AA, mhu_AB = 1e-3, 1e-3
         rhoK, rhoL, rhoM, rhoN = 1e-3, 1e-3, 1e-3, 1e-3
-        rhoP = 1e-7
-        reg = mhu_AA * (s_AA + tau_AA / beta_aa**2) + mhu_AB * (s_AB + tau_AB / beta_ab**2)
+        rhoP = 0 #1e-7
+        reg += mhu_AA * (s_AA + tau_AA / beta_aa**2) + mhu_AB * (s_AB + tau_AB / beta_ab**2)
         reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN
-        #reg += rhoP * tP * (beta_aa + beta_ab)**2
+        reg += rhoP * tP * (beta_aa + beta_ab)**2
 
         # Cons
         cons += [s_AA >= 1e-9, s_AB >= 1e-9]
@@ -561,15 +562,14 @@ def build_and_solve_dro_lmi_upd(
         cons += [cp.bmat([[s_AA, beta_AA], [beta_AA, tau_AA]]) >> 0]
         cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
         cons += consK + consL + consM + consN
-        #cons += consP
+        cons += consP
 
         # Final
         state_blk = -P + (tau_AA + tau_AB) * I(2*nx)
-        obj = obj_dro + reg
     else:
-        reg = 0.0
+        pass
 
-        obj = obj_dro + reg
+    obj = obj_dro + reg
 
 
     if model.lower() in ["correlated", "corr", "1"]:
@@ -608,7 +608,7 @@ def build_and_solve_dro_lmi_upd(
                 [  A,           state_blk,    Z(2*nx, nz),  S_AA,           S_AB            ],
                 [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
                 [  Z(nx,2*nx),  S_AA.T,       Z(nx, nz),   -s_AA * Ix,      Z(nx,   nx)     ],
-                [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx,   nx),   -s_AB * Ix      ],
+                [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx,   nx),   -s_AB * Ix       ],
             ])        
 
         blk2 = cp.bmat([

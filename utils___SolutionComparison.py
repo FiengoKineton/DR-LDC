@@ -504,6 +504,16 @@ class ResultsComparator:
                 return self._plant_cl_from_dict(J["composite_closed_loop"])
             raise KeyError("No composite_closed_loop found in JSON payload.")
 
+        def _fro(M) -> float:
+            """Frobenius norm with basic guards."""
+            if M is None:
+                return float("nan")
+            M = np.asarray(M)
+            if M.size == 0:
+                return 0.0
+            # symmetric sanitize helps if you pass nearly-symmetric stuff
+            return float(np.linalg.norm(M, 'fro'))
+
         ctrlM = _ctrl_from_any(JM)
         plntM = _plnt_from_any(JM)
         plnt_clM = _plnt_cl_from_any(JM)
@@ -553,6 +563,47 @@ class ResultsComparator:
             #"Bcl": self._fro_stats(plnt_clD.Bcl, plnt_clM.Bcl),
             "Ccl": self._fro_stats(plnt_clD.Ccl, plnt_clM.Ccl),
             #"Dcl": self._fro_stats(plnt_clD.Dcl, plnt_clM.Dcl),
+        }
+
+        fro_norms = {
+            "Plant": {
+                "A_MBD": _fro(plntM.A),
+                "A_DDD": _fro(plntD.A),
+                "Bu_MBD": _fro(plntM.Bu),
+                "Bu_DDD": _fro(plntD.Bu),
+                "Bw_MBD": _fro(plntM.Bw),
+                "Bw_DDD": _fro(plntD.Bw),
+                "Cy_MBD": _fro(plntM.Cy),
+                "Cy_DDD": _fro(plntD.Cy),
+                "Dyw_MBD": _fro(plntM.Dyw),
+                "Dyw_DDD": _fro(plntD.Dyw),
+                "Cz_MBD": _fro(plntM.Cz),
+                "Cz_DDD": _fro(plntD.Cz),
+                "Dzu_MBD": _fro(plntM.Dzu),
+                "Dzu_DDD": _fro(plntD.Dzu),
+                "Dzw_MBD": _fro(plntM.Dzw),
+                "Dzw_DDD": _fro(plntD.Dzw),
+            },
+            "Controller": {
+                "Ac_MBD": _fro(ctrlM.Ac),
+                "Ac_DDD": _fro(ctrlD.Ac),
+                "Bc_MBD": _fro(ctrlM.Bc),
+                "Bc_DDD": _fro(ctrlD.Bc),
+                "Cc_MBD": _fro(ctrlM.Cc),
+                "Cc_DDD": _fro(ctrlD.Cc),
+                "Dc_MBD": _fro(ctrlM.Dc),
+                "Dc_DDD": _fro(ctrlD.Dc),
+            },
+            "Composite": {
+                "Acl_MBD": _fro(plnt_clM.Acl),
+                "Acl_DDD": _fro(plnt_clD.Acl),
+                "Bcl_MBD": _fro(plnt_clM.Bcl),
+                "Bcl_DDD": _fro(plnt_clD.Bcl),
+                "Ccl_MBD": _fro(plnt_clM.Ccl),
+                "Ccl_DDD": _fro(plnt_clD.Ccl),
+                "Dcl_MBD": _fro(plnt_clM.Dcl),
+                "Dcl_DDD": _fro(plnt_clD.Dcl),
+            }
         }
 
         # Spectral/stability stats on Acl
@@ -779,6 +830,7 @@ class ResultsComparator:
             },
             "controller_deltas": deltas_ctrl,
             "plant_deltas": deltas_plnt,
+            "fro_norms": fro_norms,
             "composite_deltas": deltas_composite,
             "shapes_ranks": shapes_ranks,
             "stability": {
