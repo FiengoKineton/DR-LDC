@@ -417,7 +417,7 @@ def build_and_solve_dro_lmi_upd(
         data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
         x, x_next, u, y, z = data.get_data()
     else: 
-        op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=100)
+        op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=50)
         datasets = op.datasets
 
 
@@ -785,6 +785,7 @@ def build_and_solve_dro_lmi_upd(
         # 5) epigraphs for each direction:
         #    For every i, [[s_i, β_i],[β_i, τ_i]] >= 0
         for i in range(nx):
+            cons += [s_AA[i] >= 1e-9, tau_AA[i] <= 1e3]
             cons += [cp.bmat([[s_AA[i],      beta_AA[i]],
                             [beta_AA[i],   tau_AA[i]]]) >> 0]
 
@@ -793,27 +794,22 @@ def build_and_solve_dro_lmi_upd(
         s_AB   = cp.Variable(nonneg=True, name="s_ab")
         S_AB   = S_AA_base                                # you can also rotate with a basis for AB if desired
 
-        # Existing spectral norm epigraphs
-        tK, consK = spectral_norm_epigraph(K, "K")
-        tL, consL = spectral_norm_epigraph(L, "L")
-        tM, consM = spectral_norm_epigraph(M, "M")
-        tN, consN = spectral_norm_epigraph(N, "N")
-        tP, consP = spectral_norm_epigraph(P, "P")
 
         # 7) update regularization terms (small nudges to keep slacks bounded)
-        mhu_AA, mhu_AB = 1e-3, 1e-3
-        rhoK, rhoL, rhoM, rhoN, rhoP = 1e-3, 1e-3, 1e-3, 1e-3, 0.0
-        # Sum of vector slacks replaces scalar s_AA and τ_AA
+        mhu_AA = mhu_AB = rhoK = rhoL = rhoM = rhoN = mu
+
         reg += mhu_AA * (cp.sum(s_AA) + cp.sum(tau_AA / (beta_AA**2 + 1e-18)))
         reg += mhu_AB * (s_AB + tau_AB / (beta_ab**2 + 1e-18))
-        reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN + rhoP * tP * (cp.sum(beta_AA) + beta_ab)**2
+        #reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN #+ rhoP * tP * (cp.sum(beta_AA) + beta_ab)**2
 
         # 8) state block: minimally invasive variant (keeps your scalar-identity structure)
         state_blk = -P + (cp.sum(tau_AA) + tau_AB) * I(2*nx)
 
         # 9) use the rotated selector in the big LMI wherever S_AA appears
-        #    Replace S_AA with S_AA_rot, and the -s_AA*I block with -diag(s_AA_vec)
-
+        cons += [s_AB >= 1e-9, tau_AB <= 1e3]
+        cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
+        #cons += consK + consL + consM + consN
+        #cons += consP
     else:
         pass
 
