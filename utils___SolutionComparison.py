@@ -828,9 +828,9 @@ class ResultsComparator:
                 "MBD": objM, "DDD": objD,
                 "gap_DDD_minus_MBD": obj_gap, "winner_lower_is_better": obj_winner,
             },
+            "fro_norms": fro_norms,
             "controller_deltas": deltas_ctrl,
             "plant_deltas": deltas_plnt,
-            "fro_norms": fro_norms,
             "composite_deltas": deltas_composite,
             "shapes_ranks": shapes_ranks,
             "stability": {

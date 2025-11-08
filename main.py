@@ -165,7 +165,7 @@ class lmi_pipeline_optim_problem():
             # 2) Solve DRO-LMI (choose "correlated" or "independent")
             res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
                 api=api,
-                vals=(upd, FROM_DATA),
+                vals=(upd, FROM_DATA, plot),
                 noise=noise,
                 model=model,
                 approach=approach,

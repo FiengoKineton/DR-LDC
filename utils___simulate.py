@@ -561,8 +561,8 @@ class Open_Loop():
 
     def make_multiple_data(self, plant: Plant, N: int = 5, gamma: float = None, Sigma: np.ndarray = None):
         datasets = []
-        init = ["zeros", "rand"]
-        input = ["multisine", "prbs"]
+        init = ["rand"]#, "zeros"]
+        input = ["multisine"]#, "prbs"]
         for i in range(N):
             print(f"[DATA] Generating dataset {i+1}/{N}...")
             data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma, multiple_datasets=True, init=init[i % len(init)], input=input[i % len(input)])
