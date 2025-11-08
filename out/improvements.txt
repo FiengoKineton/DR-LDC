@@ -92,12 +92,12 @@ Per procedere, propongo di concentrarci sulle seguenti attività:
             di privilegiare controlli più “calmi” e robusti anche a costo di un piccolo aumento di $z$. I risultati attesi sarebbero poli 
             più smorzati e condizionamenti migliori (meno picchi di alto guadagno).
   
-  - Un aspetto da approfondire è la scelta di $\gamma$ (raggio dell’ambiguità). Nella bozza pare fissato a 0.5 in base a 
-    considerazioni esterne. Tuttavia, $\gamma$ influisce sul compromesso robustezza/performance (γ grande = più incertezza 
-    disturbo = controllore più cauto). Integrare la scelta ottima di $\gamma$ all’interno dell’ottimizzazione (magari come 
-    variabile con penalità) potrebbe automatizzare anche quel trade-off. Ad esempio, minimizzare $J + \nu \gamma^2$ con $\nu$ 
-    piccola, oppure cercare il più grande $\gamma$ per cui esiste un controllore con $J$ sotto una soglia. Ciò renderebbe il 
-    controllo robusto ancora più adattativo alle necessità effettive.
+  - SOLVED: Un aspetto da approfondire è la scelta di $\gamma$ (raggio dell’ambiguità). Nella bozza pare fissato a 0.5 in base a 
+            considerazioni esterne. Tuttavia, $\gamma$ influisce sul compromesso robustezza/performance (γ grande = più incertezza 
+            disturbo = controllore più cauto). Integrare la scelta ottima di $\gamma$ all’interno dell’ottimizzazione (magari come 
+            variabile con penalità) potrebbe automatizzare anche quel trade-off. Ad esempio, minimizzare $J + \nu \gamma^2$ con $\nu$ 
+            piccola, oppure cercare il più grande $\gamma$ per cui esiste un controllore con $J$ sotto una soglia. Ciò renderebbe il 
+            controllo robusto ancora più adattativo alle necessità effettive.
 
   - Analogamente, l’idea di distributionally robust si potrebbe estendere non solo ai disturbi, ma anche ai parametri di modello 
     (es. considerare che $\Delta A$ non è solo incognito entro un bound, ma segue una certa distribuzione indotta dai dati). 

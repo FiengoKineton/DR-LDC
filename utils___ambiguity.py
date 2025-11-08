@@ -366,8 +366,8 @@ class WassersteinAmbiguitySet:
         lo, hi = np.quantile(boots, [alpha/2, 1 - alpha/2])
 
         diag = {"B": B, "alpha": alpha, "boot_samples": boots, "correlated": correlated}
+        self.gamma = gamma_hat
         return gamma_hat, (float(lo), float(hi)), diag
-
 
 # =====================================================================================
 

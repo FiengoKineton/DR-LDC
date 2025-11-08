@@ -398,8 +398,7 @@ def build_and_solve_dro_lmi_upd(
     noise: Noise,
     model: str = "correlated",  # or "independent"
     eps: float = 1e-5,
-    alpha_cap: float = 1e2,  # keep X, Y from exploding
-    fro_cap: float = 1e2,  # keep K, L, M, N from exploding
+    mu: float = 1e-3,  # keep K, L, M, N from exploding
     mhu_x: float = 1.0,
     mhu_y: float = 0.5,
     mhu_z: float = 0.5,
@@ -658,8 +657,8 @@ def build_and_solve_dro_lmi_upd(
         Oy = y @ _pseudo_inv(Dy)
         Oz = z @ _pseudo_inv(Dz)
         Cy, Dyw = Oy[:, :nx], Oy[:, nx:nx+nw]
-        #Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
-        Cz, Dzw, Dzu, *_ = api.build_out_matrices(nw=nw)
+        Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
+        #Cz, Dzw, Dzu, *_ = api.build_out_matrices(nw=nw)
 
     else:
         raise ValueError("approach must be 'DeePC', 'Young' or 'Mats'")
@@ -737,8 +736,7 @@ def build_and_solve_dro_lmi_upd(
         tP, consP = spectral_norm_epigraph(P, "P") 
 
         # Reg
-        mhu_AA, mhu_AB = 1e-3, 1e-3
-        rhoK, rhoL, rhoM, rhoN = 1e-3, 1e-3, 1e-3, 1e-3
+        mhu_AA = mhu_AB = rhoK = rhoL = rhoM = rhoN = mu
         rhoP = 0 #1e-7
         reg += mhu_AA * (s_AA + tau_AA / beta_aa**2) + mhu_AB * (s_AB + tau_AB / beta_ab**2)
         reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN

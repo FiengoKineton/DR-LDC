@@ -4,7 +4,7 @@ params:
   upd: 1                                                                        # set
   model: "independent"                                                          # set | may be var ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
-  approach: "Mats"                                                             # VAR ------------------------------ ("DeePC", "Young", "Mats")
+  approach: "Mats"                                                              # VAR ------------------------------ ("DeePC", "Young", "Mats")
   comp: 0                                                                       # VAR ------------------------------ true or false
   save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
@@ -27,7 +27,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "SampleAvargae"                                                             # VAR ------------------------------ look for the names in main.py
+    runID: "SampleAverage"                                                      # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
