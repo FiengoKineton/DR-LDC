@@ -160,12 +160,12 @@ class lmi_pipeline_optim_problem():
             ADD = False
 
         else:
-            data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
             approach = params.get("approach", "Young")
 
             # 2) Solve DRO-LMI (choose "correlated" or "independent")
             res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
-                data=data,
+                api=api,
+                vals=(upd, FROM_DATA),
                 noise=noise,
                 model=model,
                 approach=approach,

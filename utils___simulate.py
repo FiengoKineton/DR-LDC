@@ -520,7 +520,7 @@ class Closed_Loop():
 ## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
 
 class Open_Loop():
-    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, DATASETS=False, gamma: float = None, p: bool = False, x0_mode: str = None, s: bool = None):
+    def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, DATASETS=False, gamma: float = None, p: bool = False, x0_mode: str = None, s: bool = None, N: int = None):
         p = cfg.get("params", {})
         self.p = p
         out = self.p.get("directories", {}).get("data", "./out/data/session_")
@@ -550,7 +550,7 @@ class Open_Loop():
 
 
         if DATASETS:
-            self.datasets = self.make_multiple_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
+            self.datasets = self.make_multiple_data(plant=plant, gamma=gamma, Sigma=Sigma_nom, N=N if N is not None else 5)
         else: 
             if MAKE_DATA: self.data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma_nom)
             if EVAL_FROM_PATH: self.evaluate_from_path()
@@ -566,7 +566,11 @@ class Open_Loop():
         for i in range(N):
             print(f"[DATA] Generating dataset {i+1}/{N}...")
             data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma, multiple_datasets=True, init=init[i % len(init)], input=input[i % len(input)])
-            datasets.append(data)
+            if data["PE"]: 
+                datasets.append(data)
+            else: 
+                print(f"[DATA] Dataset {i+1} failed PE check. Regenerating...")
+                i -= 1
         return datasets
 
     def make_data(self, plant: Plant, gamma: float = None, Sigma: np.ndarray = None, multiple_datasets: bool = False, init: str = "zeros", input: str = "multisine"):
@@ -693,6 +697,11 @@ class Open_Loop():
         # PE sanity check
         cond, svals = pe_check(X_reg, U[:, :-1])
         print(f"[PE] cond( D D^T ) = {cond:.2e}   rank={np.sum(svals>1e-10)}/{nx+nu}")
+        if np.sum(svals>1e-10) == nx + nu:
+            PE = True
+        else:
+            PE = False
+            print("[PE] Warning: input is not persistently exciting of order nx+nu.")
 
         # ----------------------- build dataset dict -----------------------
         # Align Y,Z to length T by repeating the last column (keeps your current semantics)
@@ -715,7 +724,8 @@ class Open_Loop():
                 "nx": nx, "nu": nu, "nw": nw, "ny": ny, "nz": nz, "T": T,
                 "seed": args.seed, "input": input_mode, "amp": args.amp, "w_std": args.w_std,
                 "csv_path": self.out, "truth_path": self.truth_path, "init": init,
-            }
+            }, 
+            "PE": PE,
         }
 
         # Save CSV

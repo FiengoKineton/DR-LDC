@@ -245,7 +245,9 @@ def build_and_solve_dro_lmi(
 # ================================================================================================
 
 def build_and_solve_dro_lmi_upd(
-    data: Data,
+    api: MatricesAPI,
+    #data: Data,
+    vals: tuple,
     noise: Noise,
     model: str = "correlated",  # or "independent"
     eps: float = 1e-5,
@@ -262,13 +264,34 @@ def build_and_solve_dro_lmi_upd(
     model = "correlated"  implements (1)
     model = "independent" implements (2)
     """
-
-    x, x_next, u, y, z = data.get_data()
-    T, nx, nu, ny, nz = x.shape[1], x.shape[0], u.shape[0], y.shape[0], z.shape[0]
+    upd, FROM_DATA = vals
     gamma, var = noise.gamma, noise.var
 
-    #op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True)
-    #o = op.datasets
+    #data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
+    #x, x_next, u, y, z = data.get_data()
+
+    op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=50)
+    datasets = op.datasets
+
+    def mean_dict(datasets):
+        """Elementwise mean over a list of dataset dicts with identical shapes."""
+        out = {}
+        T = min(d["meta"]["T"] for d in datasets)
+        keys = ["X","U","Y","Z","X_next"]
+        for k in keys:
+            arrs = []
+            for d in datasets:
+                A = d[k]
+                arrs.append(A[..., :T-1] if k in {"X_reg","X_next"} else A[..., :T])
+            out[k] = np.stack(arrs, axis=0).mean(axis=0)
+        out["meta"] = {**datasets[0]["meta"], "T": T, "N": len(datasets)}
+        return out
+
+    avg = mean_dict(datasets)
+    x, u, y, z, x_next = avg["X"], avg["U"], avg["Y"], avg["Z"], avg["X_next"]
+    x_next = np.hstack([x_next, x_next[:, -1][:, None]])
+    T, nx, nu, ny, nz = x.shape[1], x.shape[0], u.shape[0], y.shape[0], z.shape[0]
+
 
     def _pseudo_inv(D, r=1e-6):
         return D.T @ np.linalg.inv(D @ D.T + r * np.eye(D.shape[0]))
@@ -494,7 +517,8 @@ def build_and_solve_dro_lmi_upd(
         Oy = y @ _pseudo_inv(Dy)
         Oz = z @ _pseudo_inv(Dz)
         Cy, Dyw = Oy[:, :nx], Oy[:, nx:nx+nw]
-        Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
+        #Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
+        Cz, Dzw, Dzu, *_ = api.build_out_matrices(nw=nw)
 
     else:
         raise ValueError("approach must be 'DeePC', 'Young' or 'Mats'")
