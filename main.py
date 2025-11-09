@@ -2,6 +2,7 @@
 import json, argparse, yaml, sys
 import numpy as np
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi, build_and_solve_dro_lmi_upd
@@ -293,6 +294,8 @@ class lmi_pipeline_optim_problem():
         print(f"[saved] {out_composite}")
 
         sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
+        self.final_cost = sim_cost["J"]
+        print("\nFinal closed-loop cost J =", self.final_cost)
         out_cost = out + f"___closed_loop_run_cost.npz"
         if save: cl.save_npz(sim_cost, str(out_cost))   
         print(f"[saved] {out_cost}")
@@ -313,6 +316,8 @@ class lmi_pipeline_optim_problem():
         
         self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl, sim, Sigma_nom
 
+    def _return_final_cost(self):
+        return self.final_cost
 
     def plant_to_dict(self, P: Plant):
         return {
@@ -390,7 +395,7 @@ class lmi_pipeline_optim_problem():
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
-def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False):
+def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False, COST: bool = False):
     parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
@@ -413,9 +418,9 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _model = p.get("model", "independent") if m == "W2" else m
     _upd = bool(p.get("upd", 0))
     _method = p.get("method", "lmi")
-    _plot = bool(p.get("plot", False)) if plot is None else plot
+    _plot = bool(p.get("plot", False)) if plot is None and not COST else plot
     _data = "DDD" if FROM_DATA else "MBD"
-    _save = p.get("save", False)
+    _save = p.get("save", False) if not COST else False
     _comp = bool(p.get("comp", 0)) if comp is None else comp
     _ts = p.get("simulation", {}).get("ts", 0.5)
 
@@ -452,6 +457,9 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             print("\nRunning LMI pipeline optimization...")
             opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
 
+        if COST:
+            return opt._return_final_cost()
+        
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
         an = SNRAnalyzer(plant=plant, ctrl=ctrl, Sigma=Sigma)
@@ -509,10 +517,80 @@ if __name__ == "__main__":
         gamma = p.get("ambiguity", {}).get("gamma", 0.5)
 
 
-    ALL = bool(p.get("ALL", False))
-    if ALL:
-        main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL)
-        main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL)
-        main(comp=True, gamma=gamma, ALL=ALL)
-    else:
-        main(gamma=gamma)
+    COST = bool(p.get("COST", 0))
+    if not COST:
+        ALL = bool(p.get("ALL", False))
+        if ALL:
+            main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL)
+            main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL)
+            main(comp=True, gamma=gamma, ALL=ALL)
+        else:
+            main(gamma=gamma)
+    else: 
+        N = 20
+        model = p.get("model", "independent")
+        c_MBD, c_DDD = [], []
+        for i in range(N):
+            print(f"\n\n----- RUN {i+1}/100 -----")
+            c_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
+            c_ddd = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
+            c_MBD.append(c_mbd)
+            c_DDD.append(c_ddd)
+
+        # After your loop:
+
+        print("\n\n===== COST STATISTICS OVER ALL RUNS =====")
+        c_MBD = np.array(c_MBD, dtype=float)
+        c_DDD = np.array(c_DDD, dtype=float)
+
+        # Stats
+        mu_mbd, sd_mbd = float(np.mean(c_MBD)), float(np.std(c_MBD, ddof=1))
+        mu_ddd, sd_ddd = float(np.mean(c_DDD)), float(np.std(c_DDD, ddof=1))
+        print(f"MBD: mean={mu_mbd:.6g}, std={sd_mbd:.6g}")
+        print(f"DDD: mean={mu_ddd:.6g}, std={sd_ddd:.6g}")
+
+        # 1) Bar-with-errorbars
+        labels = ["MBD", "DDD"]
+        means = [mu_mbd, mu_ddd]
+        stds  = [sd_mbd, sd_ddd]
+
+        fig1, ax1 = plt.subplots(figsize=(6,4))
+        x = np.arange(len(labels))
+        ax1.bar(x, means, yerr=stds, capsize=6)
+        ax1.set_xticks(x, labels)
+        ax1.set_ylabel("Cost")
+        ax1.set_title("Mean ± 1 SD over N runs")
+        ax1.grid(True, axis="y", alpha=0.3)
+        fig1.tight_layout()
+        fig1.savefig("cost_mean_std_bar.pdf")
+        #fig1.savefig("cost_mean_std_bar.png", dpi=200)
+
+        # 2) Scatter of all runs + mean lines
+        fig2, ax2 = plt.subplots(figsize=(7,4))
+        ax2.scatter(np.zeros_like(c_MBD), c_MBD, alpha=0.6, label="MBD")
+        ax2.scatter(np.ones_like(c_DDD),  c_DDD, alpha=0.6, label="DDD")
+        ax2.hlines(mu_mbd, -0.2, 0.2)
+        ax2.hlines(mu_ddd,  0.8, 1.2)
+        ax2.set_xticks([0,1], labels)
+        ax2.set_ylabel("Cost")
+        ax2.set_title(f"Per-run costs with mean lines ({model})")
+        ax2.grid(True, axis="y", alpha=0.3)
+        fig2.tight_layout()
+        fig2.savefig("cost_runs_scatter.pdf")
+        #fig2.savefig("cost_runs_scatter.png", dpi=200)
+
+        plt.show()
+
+        fig3, ax3 = plt.subplots(figsize=(6,4))
+        for i, (name, arr, mu, sd) in enumerate([("MBD", c_MBD, mu_mbd, sd_mbd),
+                                                ("DDD", c_DDD, mu_ddd, sd_ddd)]):
+            ax3.errorbar(i, mu, yerr=sd, fmt="o", capsize=6)
+            ax3.vlines(i, mu - sd, mu + sd)
+
+        ax3.set_xticks([0,1], ["MBD","DDD"])
+        ax3.set_ylabel("Cost")
+        ax3.set_title(f"Mean with ±1 SD whiskers ({model})")
+        ax3.grid(True, axis="y", alpha=0.3)
+        fig3.tight_layout()
+        fig3.savefig("cost_mean_whiskers.pdf")
+        plt.show()

@@ -752,10 +752,11 @@ def build_and_solve_dro_lmi_upd(
 
         # Final
         state_blk = -P + (tau_AA + tau_AB) * I(2*nx)
+        young_blk = -s_AA * Ix
     
     elif approach == "Mats":
         # 1) residual anisotropy (directions and weights)
-        U_A, s_A, w_A = _residual_anisotropy_weights(R, floor=1e-12, mode="sqrt")
+        U_A, _, w_A = _residual_anisotropy_weights(R, floor=1e-12, mode="sqrt")
         # Optional: cap tiny directions to avoid numerical issues
         w_A = np.maximum(w_A, 1e-6)
 
@@ -800,15 +801,26 @@ def build_and_solve_dro_lmi_upd(
 
         reg += mhu_AA * (cp.sum(s_AA) + cp.sum(tau_AA / (beta_AA**2 + 1e-18)))
         reg += mhu_AB * (s_AB + tau_AB / (beta_ab**2 + 1e-18))
-        #reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN #+ rhoP * tP * (cp.sum(beta_AA) + beta_ab)**2
 
         # 8) state block: minimally invasive variant (keeps your scalar-identity structure)
         state_blk = -P + (cp.sum(tau_AA) + tau_AB) * I(2*nx)
+        young_blk = -cp.diag(s_AA)
 
         # 9) use the rotated selector in the big LMI wherever S_AA appears
         cons += [s_AB >= 1e-9, tau_AB <= 1e3]
         cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
-        #cons += consK + consL + consM + consN
+
+
+        # 10) matrices
+        tK, consK = spectral_norm_epigraph(K, "K")   # usa I_nx e I_nx
+        tL, consL = spectral_norm_epigraph(L, "L")   # usa I_nx e I_ny
+        tM, consM = spectral_norm_epigraph(M, "M")   # usa I_nu e I_nx
+        tN, consN = spectral_norm_epigraph(N, "N")   # usa I_nu e I_ny
+        #tP, consP = spectral_norm_epigraph(P, "P")   # usa I_nu e I_ny
+
+        reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN #+ mu * tP * (cp.sum(beta_AA) + beta_AB)**2
+
+        cons += consK + consL + consM + consN
         #cons += consP
     else:
         pass
@@ -825,25 +837,15 @@ def build_and_solve_dro_lmi_upd(
                 [  A,           B,              Z(2*nx, nw),   -P,              Z(2*nx, nz) ],
                 [  C,           D,              Z(nz, nw),      Z(nz, 2*nx),   -Iz          ],
             ])  # Tot size: (4nx + 2nw + nz) x (4nx + 2nw + nz)
-        elif approach == "Young":
+        elif approach in ["Young" , "Mats"]:
             big_corr = cp.bmat([
                 [ -P,            Z(2*nx, nw),  Z(2*nx, nw),  A.T,          C.T,         Z(2*nx, nx),    Z(2*nx, nx)     ],
                 [ Z(nw,2*nx),   -lam*Iw,       lam*Iw,       B.T,          D.T,         Z(nw,   nx),    Z(nw,   nx)     ],
                 [ Z(nw,2*nx),    lam*Iw,      -Q - lam*Iw,   Z(nw,2*nx),   Z(nw,  nz),  Z(nw,   nx),    Z(nw,   nx)     ],
                 [ A,             B,            Z(2*nx, nw),  state_blk,    Z(2*nx,nz),  S_AA,           S_AB            ],
                 [ C,             D,            Z(nz,  nw),   Z(nz, 2*nx), -Iz,          Z(nz,   nx),    Z(nz,   nx)     ],
-                [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz), -s_AA * Ix,      Z(nx,   nx)     ],
+                [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz),  young_blk,      Z(nx,   nx)     ],
                 [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AB.T,       Z(nx,  nz),  Z(nx, nx),     -s_AB * Ix       ],
-            ])
-        elif approach == "Mats":
-            big_corr = cp.bmat([
-                [ -P,            Z(2*nx, nw),  Z(2*nx, nw),  A.T,          C.T,          S_AA,           S_AB            ],
-                [ Z(nw,2*nx),   -lam*Iw,       lam*Iw,       B.T,          D.T,          Z(nw,   nx),    Z(nw,   nx)     ],
-                [ Z(nw,2*nx),    lam*Iw,      -Q - lam*Iw,   Z(nw,2*nx),   Z(nw,  nz),   Z(nw,   nx),    Z(nw,   nx)     ],
-                [ A,             B,            Z(2*nx, nw),  state_blk,    Z(2*nx,nz),   S_AA,           S_AB            ],
-                [ C,             D,            Z(nz,  nw),   Z(nz, 2*nx), -Iz,           Z(nz,   nx),    Z(nz,   nx)     ],
-                [ S_AA.T,        Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz),  -cp.diag(s_AA),  Z(nx, nx)       ],
-                [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AB.T,       Z(nx,  nz),   Z(nx, nx),     -s_AB * Ix       ],
             ])
 
         cons += [negdef(big_corr)]
@@ -856,22 +858,14 @@ def build_and_solve_dro_lmi_upd(
                 [ A,   -P,              Z(2*nx, nz) ],
                 [ C,    Z(nz, 2*nx),   -Iz          ],
             ])  # Tot size: (4nx + nz) x (4nx + nz)
-        elif approach == "Young":
+        elif approach in ["Young", "Mats"]:
             blk1 = cp.bmat([
                 [ -P,           A.T,          C.T,          Z(2*nx, nx),    Z(2*nx, nx)     ],
                 [  A,           state_blk,    Z(2*nx, nz),  S_AA,           S_AB            ],
                 [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
-                [  Z(nx,2*nx),  S_AA.T,       Z(nx, nz),   -s_AA * Ix,      Z(nx,   nx)     ],
+                [  Z(nx,2*nx),  S_AA.T,       Z(nx, nz),    young_blk,      Z(nx,   nx)     ],
                 [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx,   nx),   -s_AB * Ix       ],
-            ])   
-        elif approach == "Mats":
-            blk1 = cp.bmat([
-                [ -P,           A.T,          C.T,          S_AA,           S_AB            ],
-                [  A,           state_blk,    Z(2*nx, nz),  S_AA,           S_AB            ],
-                [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
-                [ S_AA.T,       S_AA.T,       Z(nx, nz),   -cp.diag(s_AA),  Z(nx, nx)       ],
-                [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx, nx),     -s_AB * Ix       ],
-            ])
+            ])            
         
         blk2 = cp.bmat([
             [-lam*Iw,   lam*Iw,         B.T,            D.T         ],
