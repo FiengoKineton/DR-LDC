@@ -2,7 +2,7 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
   upd: 1                                                                        # set
-  model: "independent"                                                          # set | may be var ("correlated" or "independent")
+  model: "correlated"                                                          # set | may be var ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   approach: "Mats"                                                              # VAR ------------------------------ ("DeePC", "Young", "Mats")
   comp: 0                                                                       # VAR ------------------------------ true or false

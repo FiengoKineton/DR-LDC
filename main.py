@@ -531,17 +531,30 @@ if __name__ == "__main__":
         model = p.get("model", "independent")
         c_MBD, c_DDD = [], []
         for i in range(N):
-            print(f"\n\n----- RUN {i+1}/100 -----")
-            c_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
-            c_ddd = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
-            c_MBD.append(c_mbd)
-            c_DDD.append(c_ddd)
+            print(f"\n\n----- RUN {i+1}/{N} -----")
+            try:
+                c_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
+                c_MBD.append(c_mbd)
+            except Exception as e:
+                print(f"Error occurred in MBD run {i+1}: {e}")
 
-        # After your loop:
+            try:
+                c_ddd = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
+                c_DDD.append(c_ddd)
+            except Exception as e:
+                print(f"Error occurred in DDD run {i+1}: {e}")
 
         print("\n\n===== COST STATISTICS OVER ALL RUNS =====")
         c_MBD = np.array(c_MBD, dtype=float)
         c_DDD = np.array(c_DDD, dtype=float)
+
+        try:
+            base_dir = Path(__file__).resolve().parent
+        except NameError:
+            base_dir = Path.cwd()
+
+        out_dir = base_dir / "out/utils"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         # Stats
         mu_mbd, sd_mbd = float(np.mean(c_MBD)), float(np.std(c_MBD, ddof=1))
@@ -562,8 +575,7 @@ if __name__ == "__main__":
         ax1.set_title("Mean ± 1 SD over N runs")
         ax1.grid(True, axis="y", alpha=0.3)
         fig1.tight_layout()
-        fig1.savefig("cost_mean_std_bar.pdf")
-        #fig1.savefig("cost_mean_std_bar.png", dpi=200)
+        fig1.savefig(out_dir / f"{model}_cost_mean_std_bar.pdf")
 
         # 2) Scatter of all runs + mean lines
         fig2, ax2 = plt.subplots(figsize=(7,4))
@@ -576,11 +588,9 @@ if __name__ == "__main__":
         ax2.set_title(f"Per-run costs with mean lines ({model})")
         ax2.grid(True, axis="y", alpha=0.3)
         fig2.tight_layout()
-        fig2.savefig("cost_runs_scatter.pdf")
-        #fig2.savefig("cost_runs_scatter.png", dpi=200)
+        fig2.savefig(out_dir / f"{model}_cost_runs_scatter.pdf")
 
-        plt.show()
-
+        # 3) Mean with whiskers
         fig3, ax3 = plt.subplots(figsize=(6,4))
         for i, (name, arr, mu, sd) in enumerate([("MBD", c_MBD, mu_mbd, sd_mbd),
                                                 ("DDD", c_DDD, mu_ddd, sd_ddd)]):
@@ -592,5 +602,5 @@ if __name__ == "__main__":
         ax3.set_title(f"Mean with ±1 SD whiskers ({model})")
         ax3.grid(True, axis="y", alpha=0.3)
         fig3.tight_layout()
-        fig3.savefig("cost_mean_whiskers.pdf")
+        fig3.savefig(out_dir / f"{model}_cost_mean_whiskers.pdf")
         plt.show()
