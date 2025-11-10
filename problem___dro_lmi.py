@@ -131,9 +131,9 @@ def build_and_solve_dro_lmi(
             # row 3: size nw x (4nx + 2nw + nz)
             [ Z(nw, 2*nx),    lam*Iw,        -Q - lam*Iw,     Z(nw, 2*nx),      Z(nw, nz)       ],
             # row 4: size 2nx x (4nx + 2nw + nz)
-            [  Abar,           Bbar,           Z(2*nx, nw),   -Pbar,             Z(2*nx, nz)    ],
+            [  Abar,          Bbar,           Z(2*nx, nw),   -Pbar,             Z(2*nx, nz)     ],
             # row 5: size nz x (4nx + 2nw + nz)
-            [  Cbar,           Dbar,           Z(nz, nw),      Z(nz, 2*nx),     -Iz             ],
+            [  Cbar,          Dbar,           Z(nz, nw),      Z(nz, 2*nx),     -Iz              ],
         ])  # Tot size: (4nx + 2nw + nz) x (4nx + 2nw + nz)
         cons += [negdef(big_corr)]
 
