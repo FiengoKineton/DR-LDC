@@ -4,8 +4,10 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import pandas as pd
 
 
+from matplotlib.lines import Line2D
 from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi, build_and_solve_dro_lmi_upd
 
@@ -141,61 +143,66 @@ class lmi_pipeline_optim_problem():
         api = MatricesAPI()
         cl = Closed_Loop() 
 
+        STABLE, i = False, 0
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
 
-        # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-        if not upd or not FROM_DATA:
-            plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
-            api.print_plant(plant)
+        while not STABLE and i<=5:
+            # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
+            if not upd or not FROM_DATA:
+                plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
+                api.print_plant(plant)
 
-            # 2) Solve DRO-LMI (choose "correlated" or "independent")
-            res = build_and_solve_dro_lmi(
-                plant=plant,
-                api=api,
-                noise=noise,
-                model=model,
-                SOLVER=params.get("solver", "MOSEK"),
-            )
+                # 2) Solve DRO-LMI (choose "correlated" or "independent")
+                res = build_and_solve_dro_lmi(
+                    plant=plant,
+                    api=api,
+                    noise=noise,
+                    model=model,
+                    SOLVER=params.get("solver", "MOSEK"),
+                )
 
-            A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
-            Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
-            plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-            ADD = False
+                A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
+                Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
+                plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+                ADD = False
 
-        else:
-            approach = params.get("approach", "Young")
+            else:
+                approach = params.get("approach", "Young")
 
-            # 2) Solve DRO-LMI (choose "correlated" or "independent")
-            res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
-                api=api,
-                vals=(upd, FROM_DATA, plot),
-                noise=noise,
-                model=model,
-                approach=approach,
-                d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
-            )
+                # 2) Solve DRO-LMI (choose "correlated" or "independent")
+                res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
+                    api=api,
+                    vals=(upd, FROM_DATA, plot),
+                    noise=noise,
+                    model=model,
+                    approach=approach,
+                    d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
+                )
 
-            A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
-            plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-            ADD = True
-        
-        if res.status not in ("optimal", "optimal_inaccurate"):
-            raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
+                A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
+                plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+                ADD = True
+            
+            if res.status not in ("optimal", "optimal_inaccurate"):
+                raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
 
 
-        # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
+            # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
 
-        Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
-        ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
-        Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl)
-        plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
+            Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
+            ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
+            Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl)
+            plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
 
-        # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
-        # ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, api, (Acl, Bcl, Ccl, Dcl))
-        
-        
-        eig = np.linalg.eigvals(Acl)
-        rho = float(np.max(np.abs(eig)))
+            # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
+            # ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, api, (Acl, Bcl, Ccl, Dcl))
+            
+            
+            eig = np.linalg.eigvals(Acl)
+            rho = float(np.max(np.abs(eig)))
+            if rho < 1.05:
+                STABLE = True
+            i += 1
 
         eig_cart = [
             {"re": float(ev.real), "im": float(ev.imag), "abs": float(np.abs(ev))}
@@ -533,8 +540,13 @@ if __name__ == "__main__":
         model = p.get("model", "independent")
         save = p.get("save", False)
         c_MBD, c_DDD = [], []
+
         for i in range(N):
-            print(f"\n\n----- RUN {i+1}/{N} -----")
+            print("\n\n\n\n"
+                  "==============================\n"
+                  f"----- RUN {i+1}/{N} -----\n"
+                  "==============================\n"
+                  "\n\n\n\n")
             try:
                 c_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
                 c_MBD.append(c_mbd)
@@ -564,6 +576,8 @@ if __name__ == "__main__":
         mu_ddd, sd_ddd = float(np.mean(c_DDD)), float(np.std(c_DDD, ddof=1))
         print(f"MBD: mean={mu_mbd:.6g}, std={sd_mbd:.6g}")
         print(f"DDD: mean={mu_ddd:.6g}, std={sd_ddd:.6g}")
+        mbd_label = rf"MBD  ($\mu$={mu_mbd:.3g}, $\sigma$={sd_mbd:.3g})"
+        ddd_label = rf"DDD  ($\mu$={mu_ddd:.3g}, $\sigma$={sd_ddd:.3g})"
 
         # 1) Bar-with-errorbars
         labels = ["MBD", "DDD"]
@@ -581,14 +595,19 @@ if __name__ == "__main__":
 
         # 2) Scatter of all runs + mean lines
         fig2, ax2 = plt.subplots(figsize=(7,4))
-        ax2.scatter(np.zeros_like(c_MBD), c_MBD, alpha=0.6, label="MBD")
-        ax2.scatter(np.ones_like(c_DDD),  c_DDD, alpha=0.6, label="DDD")
+        ax2.scatter(np.zeros_like(c_MBD), c_MBD, alpha=0.6, label="MBD", color="blue")
+        ax2.scatter(np.ones_like(c_DDD),  c_DDD, alpha=0.6, label="DDD", color="orange")
         ax2.hlines(mu_mbd, -0.2, 0.2)
         ax2.hlines(mu_ddd,  0.8, 1.2)
         ax2.set_xticks([0,1], labels)
         ax2.set_ylabel("Cost")
         ax2.set_title(f"Per-run Costs over {N} runs ({model})")
         ax2.grid(True, axis="y", alpha=0.3)
+        handles = [
+            Line2D([0], [0], marker='o', linestyle='None', label=mbd_label, color="blue"),
+            Line2D([0], [0], marker='o', linestyle='None', label=ddd_label, color="orange"),
+        ]
+        ax2.legend(handles=handles, title="Per-run cost stats", loc="best", frameon=True, framealpha=0.9)
         fig2.tight_layout()
 
         # 3) Mean with whiskers
@@ -652,5 +671,23 @@ if __name__ == "__main__":
             fig2.savefig(out_dir / f"{model}_cost_runs_scatter.pdf")
             fig3.savefig(out_dir / f"{model}_cost_mean_whiskers.pdf")
             fig4.savefig(out_dir / f"{model}_cost_runs_timeseries_overlay_shaded.pdf")
+
+            N = max(len(c_MBD), len(c_DDD))
+            runs = np.arange(1, N + 1)
+            def pad(a, n):
+                out = np.full(n, np.nan, dtype=float)
+                out[:len(a)] = a
+                return out
+
+            df = pd.DataFrame({
+                "run": runs,
+                "c_MBD": pad(c_MBD, N),
+                "c_DDD": pad(c_DDD, N),
+            })
+
+            csv_path = out_dir / f"{model}_per_run_costs.csv"
+            df.to_csv(csv_path, index=False)
+            print(f"Saved per-run costs to {csv_path}")
+
 
         plt.show()

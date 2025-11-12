@@ -702,7 +702,8 @@ def build_and_solve_dro_lmi_upd(
     # Constraints ---------------------
     cons = []
     cons += [lam >= 0]
-    cons += [P >> eps * I(2*nx)]
+    if model.lower() in ["correlated", "corr", "1"]:    cons += [P >> 0]
+    else:                                               cons += [P >> eps * I(2*nx)]
 
     obj_dro = cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2)
     reg = 0.0
@@ -787,7 +788,8 @@ def build_and_solve_dro_lmi_upd(
         # 5) epigraphs for each direction:
         #    For every i, [[s_i, β_i],[β_i, τ_i]] >= 0
         for i in range(nx):
-            cons += [s_AA[i] >= 1e-9]#, tau_AA[i] <= 1e3]
+            if model.lower() in ["correlated", "corr", "1"]:    cons += [s_AA[i] >= 1e-9]
+            else:                                               cons += [s_AA[i] >= 1e-9, tau_AA[i] <= 1e3]
             cons += [cp.bmat([[s_AA[i],      beta_AA[i]],
                             [beta_AA[i],   tau_AA[i]]]) >> 0]
 
@@ -808,7 +810,8 @@ def build_and_solve_dro_lmi_upd(
         young_blk = -cp.diag(s_AA)
 
         # 9) use the rotated selector in the big LMI wherever S_AA appears
-        cons += [s_AB >= 1e-9]#, tau_AB <= 1e3]
+        if model.lower() in ["correlated", "corr", "1"]:    cons += [s_AB >= 1e-9]
+        else:                                               cons += [s_AB >= 1e-9, tau_AB <= 1e3]
         cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
 
 
