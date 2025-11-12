@@ -3,6 +3,8 @@ import json, argparse, yaml, sys
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
 
 from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi, build_and_solve_dro_lmi_upd
@@ -529,6 +531,7 @@ if __name__ == "__main__":
     else: 
         N = 20
         model = p.get("model", "independent")
+        save = p.get("save", False)
         c_MBD, c_DDD = [], []
         for i in range(N):
             print(f"\n\n----- RUN {i+1}/{N} -----")
@@ -575,7 +578,6 @@ if __name__ == "__main__":
         ax1.set_title("Mean ± 1 SD over N runs")
         ax1.grid(True, axis="y", alpha=0.3)
         fig1.tight_layout()
-        fig1.savefig(out_dir / f"{model}_cost_mean_std_bar.pdf")
 
         # 2) Scatter of all runs + mean lines
         fig2, ax2 = plt.subplots(figsize=(7,4))
@@ -585,10 +587,9 @@ if __name__ == "__main__":
         ax2.hlines(mu_ddd,  0.8, 1.2)
         ax2.set_xticks([0,1], labels)
         ax2.set_ylabel("Cost")
-        ax2.set_title(f"Per-run costs with mean lines ({model})")
+        ax2.set_title(f"Per-run Costs over {N} runs ({model})")
         ax2.grid(True, axis="y", alpha=0.3)
         fig2.tight_layout()
-        fig2.savefig(out_dir / f"{model}_cost_runs_scatter.pdf")
 
         # 3) Mean with whiskers
         fig3, ax3 = plt.subplots(figsize=(6,4))
@@ -602,5 +603,54 @@ if __name__ == "__main__":
         ax3.set_title(f"Mean with ±1 SD whiskers ({model})")
         ax3.grid(True, axis="y", alpha=0.3)
         fig3.tight_layout()
-        fig3.savefig(out_dir / f"{model}_cost_mean_whiskers.pdf")
+
+
+        # Align on common index
+        t_max = min(len(c_MBD), len(c_DDD))
+        t = np.arange(1, t_max + 1, dtype=int)
+
+        y_mbd = np.asarray(c_MBD[:t_max], dtype=float)
+        y_ddd = np.asarray(c_DDD[:t_max], dtype=float)
+
+        # Finite mask to ignore NaNs/Infs in shading
+        finite = np.isfinite(y_mbd) & np.isfinite(y_ddd)
+
+        # Who's smaller (green when DDD < MBD, else red)
+        better = (y_ddd < y_mbd) & finite         # green mask
+        worse  = (~better) & finite                # red mask
+
+        # Plot
+        fig4, ax4 = plt.subplots(figsize=(9,4.8))
+
+        ax4.plot(t, y_mbd, marker="o", linewidth=1.5, alpha=0.9, label="MBD")
+        ax4.plot(t, y_ddd, marker="s", linewidth=1.5, alpha=0.9, label="DDD")
+
+        # Light conditional shading between curves
+        ax4.fill_between(t, y_mbd, y_ddd, where=better, interpolate=True, color="green", alpha=0.12)
+        ax4.fill_between(t, y_mbd, y_ddd, where=worse,  interpolate=True, color="red",   alpha=0.12)
+
+        # Cosmetics
+        ax4.set_xlabel("Run")
+        ax4.set_ylabel("Cost")
+        ax4.set_title(f"Per-run cost comparison with conditional shading ({model})")
+        ax4.grid(True, alpha=0.3)
+
+        # Legend (include shading meaning without duplicating)
+        handles, labels = ax4.get_legend_handles_labels()
+        handles += [
+            mpatches.Patch(color="green", alpha=0.12, label="DDD < MBD"),
+            mpatches.Patch(color="red",   alpha=0.12, label="DDD ≥ MBD"),
+        ]
+        labels += ["DDD < MBD", "DDD ≥ MBD"]
+        ax4.legend(handles, labels, loc="best")
+
+        fig4.tight_layout()
+
+        # Save
+        if save:
+            fig1.savefig(out_dir / f"{model}_cost_mean_std_bar.pdf")
+            fig2.savefig(out_dir / f"{model}_cost_runs_scatter.pdf")
+            fig3.savefig(out_dir / f"{model}_cost_mean_whiskers.pdf")
+            fig4.savefig(out_dir / f"{model}_cost_runs_timeseries_overlay_shaded.pdf")
+
         plt.show()

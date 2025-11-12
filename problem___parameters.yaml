@@ -9,7 +9,7 @@ params:
   save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
   ALL: 1                                                                        # VAR ------------------------------ true or false
-  COST: 0                                                                       # VAR ------------------------------ true or false
+  COST: 1                                                                       # VAR ------------------------------ true or false
   use_set_out_mats: 0                                                           # set | may be var (true or false)
   SNR: 0                                                                        # set
   solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")

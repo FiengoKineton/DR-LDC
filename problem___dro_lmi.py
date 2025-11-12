@@ -759,6 +759,7 @@ def build_and_solve_dro_lmi_upd(
         U_A, _, w_A = _residual_anisotropy_weights(R, floor=1e-12, mode="sqrt")
         # Optional: cap tiny directions to avoid numerical issues
         w_A = np.maximum(w_A, 1e-6)
+        w_B = np.mean(w_A)
 
         # ... your existing code that computes beta, beta_a, beta_b ...
         beta_a, beta_b = beta * np.sqrt(nx/(nx+nu)), beta * np.sqrt(nu/(nx+nu))
@@ -780,13 +781,13 @@ def build_and_solve_dro_lmi_upd(
 
 
         Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
-        beta_ab = np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
+        beta_ab = w_B * beta_b #np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
         beta_AB = cp.Parameter(nonneg=True, value=float(np.clip(beta_ab, 0.0, 1e3)))
 
         # 5) epigraphs for each direction:
         #    For every i, [[s_i, β_i],[β_i, τ_i]] >= 0
         for i in range(nx):
-            cons += [s_AA[i] >= 1e-9, tau_AA[i] <= 1e3]
+            cons += [s_AA[i] >= 1e-9]#, tau_AA[i] <= 1e3]
             cons += [cp.bmat([[s_AA[i],      beta_AA[i]],
                             [beta_AA[i],   tau_AA[i]]]) >> 0]
 
@@ -807,7 +808,7 @@ def build_and_solve_dro_lmi_upd(
         young_blk = -cp.diag(s_AA)
 
         # 9) use the rotated selector in the big LMI wherever S_AA appears
-        cons += [s_AB >= 1e-9, tau_AB <= 1e3]
+        cons += [s_AB >= 1e-9]#, tau_AB <= 1e3]
         cons += [cp.bmat([[s_AB, beta_AB], [beta_AB, tau_AB]]) >> 0]
 
 
