@@ -13,19 +13,19 @@ https://pure.tue.nl/ws/portalfiles/portal/345125383/1777033-Graduation_Project_F
 
 TO MODIFY
 
-Spiegare meglio il fatto dele multiple openloop simulations
+TODO    (LaTeX) Spiegare meglio il fatto dele multiple openloop simulations
 
-Definire matematicamente il bound beta
+TODO    (LaTeX) Definire matematicamente il bound beta
 
-Rendere la notazione piu semplice (no \Pi)
+TODO    (LaTeX) Rendere la notazione piu semplice (no \Pi)
 
-Ridurre I termini di regolarizzazione (eg \mhu)
+TODO    (LaTeX) Ridurre I termini di regolarizzazione (eg \mhu)
 
-Per fare un paragone piu "fair", aggiungere il termine corretto di Sigma_w nella Baseline
+TEST    Per fare un paragone piu "fair", aggiungere il termine corretto di Sigma_w nella Baseline
 
-MBD -> Baseline / DDD -> DD
+TODO    (LaTeX) MBD -> Baseline / DDD -> DD
 
-Far partire le simulazioni da valori diversi da 0.
+DONE    Far partire le simulazioni da valori diversi da 0.
 
 
 

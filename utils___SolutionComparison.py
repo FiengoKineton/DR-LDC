@@ -451,7 +451,7 @@ class ResultsComparator:
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
     def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", ID: str = "temp", plot: bool = True, re_evaluate: bool = False,
-                           burn_in: int = 0, normalize: str = None, error_weights: dict = None) -> dict:
+                           burn_in: int = 0, normalize: str = None, error_weights: dict = None, init_cond: str = "rand") -> dict:
         """
         Compare MBD vs DDD for the SAME method ('lmi' or 'baseline').
 
@@ -665,27 +665,6 @@ class ResultsComparator:
             t, X, _, Z, *_ = self._npz_extract_states(cD)
             comp_kpis_D = {"x": self._stream_stats(X, "x"), "z": self._stream_stats(Z, "z")}
 
-        # ---- Overlay cost curves from precomputed NPZs (if present) ----
-        if k_mbd.exists() and k_ddd.exists() and self.save:
-            KM = self._load_cost_npz(k_mbd)
-            KD = self._load_cost_npz(k_ddd)
-            T_cost = min(KM["T"], KD["T"])
-            t_cost = np.arange(T_cost) * self.ts
-
-            title_i = f"{method.upper()} cost: instantaneous (MBD vs DDD)"
-            title_a = f"{method.upper()} cost: running average (MBD vs DDD)"
-            save_i  = run_dir / f"{base}_overlay_cost_instantaneous.pdf"
-            save_a  = run_dir / f"{base}_overlay_cost_running_avg.pdf"
-            self._plot_overlay_costs(
-                t_cost,
-                {"inst": KM["inst"][:T_cost], "running": KM["running"][:T_cost]},
-                {"inst": KD["inst"][:T_cost], "running": KD["running"][:T_cost]},
-                title_i, title_a, save_i, save_a, save=self.save
-            )
-            if plot: plt.show()
-        else:
-            print("\n[warn] Missing cost NPZ for one/both runs; skipping cost overlays.")
-
 
         print("\n=== Plant matrix deltas_plnt (DDD minus MBD) ===")
         for k, st in deltas_plnt.items():
@@ -762,9 +741,9 @@ class ResultsComparator:
                 # Re-simulate both
                 cl = Closed_Loop()
                 print("simulating closed loop of MDB...")
-                sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB, Sigma_w=SigmaM, gamma=gamM, init_cond="rand")
+                sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB, Sigma_w=SigmaM, gamma=gamM, init_cond=init_cond)
                 print("simulating closed loop of DDD...")
-                sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD, Sigma_w=SigmaD, gamma=gamD, init_cond="rand")
+                sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD, Sigma_w=SigmaD, gamma=gamD, init_cond=init_cond)
                 t = sim_m["step"]
                 XM = sim_m["X"]; XcM = sim_m["Xc"]; UM = sim_m["U"]; YM = sim_m["Y"]; ZM = sim_m["Z"]
                 XD = sim_d["X"]; XcD = sim_d["Xc"]; UD = sim_d["U"]; YD = sim_d["Y"]; ZD = sim_d["Z"]
@@ -796,6 +775,8 @@ class ResultsComparator:
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
 
+
+
         if c_mbd.exists() and c_ddd.exists():# or self.save:
             if not re_evaluate:
                 dataM = np.load(c_mbd)
@@ -804,14 +785,15 @@ class ResultsComparator:
                 _, XD, _, ZD, *_ = self._npz_extract_states(dataD)
             else:
                 cl = Closed_Loop()
-                print("simulating closed loop of MDB...")
-                sim_m = cl.simulate_composite(Pcl=plnt_clM, Sigma_w=SigmaM, gamma=gamM, init_cond="rand")
-                print("simulating closed loop of DDD...")
-                sim_d = cl.simulate_composite(Pcl=plnt_clD, Sigma_w=SigmaD, gamma=gamD, init_cond="rand")
+                print("simulating composite closed loop of MDB...")
+                sim_m = cl.simulate_composite(Pcl=plnt_clM, Sigma_w=SigmaM, gamma=gamM, init_cond=init_cond)
+                print("simulating composite closed loop of DDD...")
+                sim_d = cl.simulate_composite(Pcl=plnt_clD, Sigma_w=SigmaD, gamma=gamD, init_cond=init_cond)
                 t = sim_m["step"]
                 XM = sim_m["X"]; ZM = sim_m["Z"]
                 XD = sim_d["X"]; ZD = sim_d["Z"]
 
+            ZM_cost, ZD_cost = ZM, ZD  # for cost overlays later
             T = min(XM.shape[0], XD.shape[0])
 
             title = f"{method.upper()} composite closed-loop: states (MBD vs DDD)"
@@ -824,6 +806,36 @@ class ResultsComparator:
 
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
+
+        # ---- Overlay cost curves from precomputed NPZs (if present) ----
+        if k_mbd.exists() and k_ddd.exists():# and self.save:
+            if not re_evaluate:
+                KM = self._load_cost_npz(k_mbd)
+                KD = self._load_cost_npz(k_ddd)
+            else: 
+                cl = Closed_Loop()
+                print("simulating cost of MDB...")
+                KM = cl.simulate_Z_cost(Z=ZM_cost, plot=plot)
+                print("simulating cost of DDD...")
+                KD = cl.simulate_Z_cost(Z=ZD_cost, plot=plot)
+                
+
+            T_cost = min(KM["T"], KD["T"])
+            t_cost = np.arange(T_cost) * self.ts
+
+            title_i = f"{method.upper()} cost: instantaneous (MBD vs DDD)"
+            title_a = f"{method.upper()} cost: running average (MBD vs DDD)"
+            save_i  = run_dir / f"{base}_overlay_cost_instantaneous.pdf"
+            save_a  = run_dir / f"{base}_overlay_cost_running_avg.pdf"
+            self._plot_overlay_costs(
+                t_cost,
+                {"inst": KM["inst"][:T_cost], "running": KM["running"][:T_cost]},
+                {"inst": KD["inst"][:T_cost], "running": KD["running"][:T_cost]},
+                title_i, title_a, save_i, save_a, save=self.save
+            )
+            if plot: plt.show()
+        else:
+            print("\n[warn] Missing cost NPZ for one/both runs; skipping cost overlays.")
 
         # Assemble report
         report = {

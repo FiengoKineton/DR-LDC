@@ -920,12 +920,17 @@ class MatricesAPI():
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
         return plant, ctrl0
 
-    def _augment_matrices(self, B_w, D_vw, D_yw, var: float = 0, Sigma_nom: np.ndarray = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, np.ndarray]:
+    def _augment_matrices(self, B_w, D_vw, D_yw, var: float = 0, Sigma_nom: np.ndarray = None, N: tuple = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, np.ndarray]:
         nx, _, _, ny, nz = self.get_dimensions_from_yaml()
 
-        B_w = np.block([[B_w, (1e-4)*np.eye(nx), np.zeros((nx, ny))]])
-        D_vw = np.block([[D_vw, np.zeros((nz, nx + ny))]])
-        D_yw = np.block([[D_yw,np.zeros((ny, nx)),(1e-4)*np.eye(ny)]])
+        if N is None:
+            n1, n2 = nx, ny
+        else:
+            n1, n2 = N
+
+        B_w = np.block([[B_w, (1e-4)*np.eye(nx, n1), np.zeros((nx, n2))]])
+        D_vw = np.block([[D_vw, np.zeros((nz, n1 + n2))]])
+        D_yw = np.block([[D_yw,np.zeros((ny, n1)),(1e-4)*np.eye(ny, n2)]])
         n_w = B_w.shape[1]
         
         if Sigma_nom is None:

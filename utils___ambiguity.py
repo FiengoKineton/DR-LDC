@@ -18,7 +18,7 @@ class WassersteinAmbiguitySet:
     - W_ind: iid disturbances with that marginal
     - W_cor: arbitrary temporal correlation but each marginal in the ball
     """
-    def __init__(self, gamma: float = None, ellipse: bool = False, n: int = None, var: float = None):
+    def __init__(self, gamma: float = None, ellipse: bool = False, n: int = None, var: float = None, alpha: float = 1.5):
 
         p = cfg.get("params", {})
         set = p.get("ambiguity", {})
@@ -36,6 +36,12 @@ class WassersteinAmbiguitySet:
         self._chol_nom = None
         self.time = np.arange(self.T)*self.ts
         self.ellipse = ellipse
+
+        rng = np.random.default_rng()
+        M = rng.uniform(low=-alpha/8, high=alpha/8, size=(n, n))
+        K = M - M.T # skew-symmetric
+        self.Sigma_test = alpha * np.eye(n) + K #(1 + gamma/np.sqrt(n))**2 * np.eye(n)
+        self.Nw = n
 
 
     @staticmethod
@@ -228,7 +234,7 @@ class WassersteinAmbiguitySet:
         Returns array shape (T, n).
         """
         if Sigma is None:
-            Sigma_use = self.Sigma_nom
+            Sigma_use = self.Sigma_test
         else:
             Sigma_use = self.project_cov_to_ball(Sigma)
 
@@ -244,7 +250,7 @@ class WassersteinAmbiguitySet:
         with stationary marginal covariance = Sigma_proj ∈ ball.
         """
         if Sigma is None:
-            Sigma_target = self.Sigma_nom
+            Sigma_target = self.Sigma_test
         else:
             #self.Sigma_nom = np.eye(Sigma[0].size)
             Sigma_target = self.project_cov_to_ball(Sigma)
@@ -585,16 +591,19 @@ class Disturbances:
 # =====================================================================================
 
 if __name__ == "__main__":
+    model = "W2"
+
     # simple test
-    wass = Disturbances(model="W2", gamma=0.5, n=2, var=1, ellipse=True)
-    print("Nominal Sigma:\n", wass.Sigma_nom)
-    print("Gamma:", wass.gamma)
-    print("Mode:", wass.mode)
+    wass = Disturbances(model=model, gamma=0.5, n=2, var=1, ellipse=True)
+    print(f"{model} initialized: mode={wass.mode}, gamma={wass.gamma}, n={wass.Nw}")
+    print(f" Nominal covariance Sigma_nom:\n{wass.Sigma_nom}")
+    print(f" Test covariance Sigma_test:\n{wass.Sigma_test}")
+
 
     # sample iid
     t = wass.time
     w = wass.sample()
-    print(wass.is_member_empirical(w))
+    print(f"Is within bounds? {wass.is_member_empirical(w)}")
 
 
     # distribution plots
@@ -609,15 +618,10 @@ if __name__ == "__main__":
         plt.plot(t, w)
         plt.xlabel("Time")
         plt.grid()
-        plt.legend()
         plt.show()
 
     # plain plug-in estimate
-    gamma_hat, info = wass.estimate_gamma_from_samples(w, include_mean=True)
-
-    # with uncertainty; set correlated=True if your generator used AR(1) etc.
-    gamma_hat, (lo, hi), info_ci = wass.estimate_gamma_with_ci(
-        w, include_mean=True, correlated=False, B=400, alpha=0.10
-    )
-
-    print(f"gamma_hat ≈ {gamma_hat:.4g}  (90% CI [{lo:.4g}, {hi:.4g}])")
+    Sigma_estm = wass.estm_Sigma_nom(w)
+    print("Estimated Sigma from samples:\n", Sigma_estm)
+    gamma_estm, *_ = wass.estimate_gamma_with_ci(w)
+    print("Estimated gamma from samples:", gamma_estm)

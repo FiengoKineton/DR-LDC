@@ -31,8 +31,9 @@ def build_and_solve_dro_lmi(
     nx, nw, nu, nz, ny = plant.dims()
 
     Sigma_nom, gamma, var = noise.Sigma_nom, noise.gamma, noise.var
+    Sigma_nom = noise.Sigma_test        # VERIFY
 
-    Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, var)
+    Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(B_w=Bw, D_vw=Dzw, D_yw=Dyw, var=var, Sigma_nom=Sigma_nom)
 
     # Decision variables
     lam = cp.Variable(nonneg=True, name="lambda")
@@ -633,8 +634,11 @@ def build_and_solve_dro_lmi_upd(
         d = Disturbances(n=nw)
         Sigma_nom = d.estm_Sigma_nom(w)
         print(f"Estimated Sigma_nom:\n{Sigma_nom}")
+        print(f"True Sigma_nom:\n{d.Sigma_test}")
+
         gamma, *_ = d.estimate_gamma_with_ci(w)
         print(f"Estimated disturbance dimension nw: {nw}, gamma: {gamma}")
+        print(f"True gamma: {d.gamma}")
 
         #Delta = cp.Variable((Ox.shape[0], Ox.shape[1]), name='Delta')
         #Ax, Bu = Ax_hat + Delta[:, :nx], Bu_hat + Delta[:, nx:nx+nu]
@@ -652,7 +656,7 @@ def build_and_solve_dro_lmi_upd(
         Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
         #Cz, Dzw, Dzu, *_ = api.build_out_matrices(nw=nw)
 
-        #Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, var, Sigma_nom)
+        Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(B_w=Bw, D_vw=Dzw, D_yw=Dyw, var=var, Sigma_nom=Sigma_nom, N=(1,1))
 
     else:
         raise ValueError("approach must be 'DeePC', 'Young' or 'Mats'")

@@ -1,5 +1,5 @@
 # main.py
-import json, argparse, yaml, sys
+import json, argparse, yaml, sys, time
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -147,6 +147,8 @@ class lmi_pipeline_optim_problem():
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
 
         while not STABLE and i<=1:
+            t0 = time.perf_counter()
+
             # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
             if not upd or not FROM_DATA:
                 plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
@@ -182,7 +184,11 @@ class lmi_pipeline_optim_problem():
                 A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
                 plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
                 ADD = True
-            
+
+
+            t1 = time.perf_counter()
+            Time = t1 - t0
+
             if res.status not in ("optimal", "optimal_inaccurate"):
                 raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
 
@@ -259,9 +265,7 @@ class lmi_pipeline_optim_problem():
                 "lambda_opt": res.lambda_opt,
                 "spectral_radius_Acl": rho,
                 "Z_cost": self.final_cost,
-                #"rx": None if res.rx is None else res.rx,
-                #"ry": None if res.ry is None else res.ry,
-                #"rz": None if res.rz is None else res.rz,
+                "Time_seconds": Time,
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
@@ -430,12 +434,14 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent") if m == "W2" else m
     _upd = bool(p.get("upd", 0))
+    _re_evaluate = bool(p.get("re_evaluate", 0))
     _method = p.get("method", "lmi")
     _plot = bool(p.get("plot", False)) if plot is None and not COST else plot
     _data = "DDD" if FROM_DATA else "MBD"
     _save = p.get("save", False) if not COST else False
     _comp = bool(p.get("comp", 0)) if comp is None else comp
     _ts = p.get("simulation", {}).get("ts", 0.5)
+    _init_cond = p.get("init_cond", "rand")
 
     #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     if gamma is None or m != "W2":
@@ -455,7 +461,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
     if _comp:
         cmp = ResultsComparator(out_root=out, save=_save, ts=_ts)
-        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot)
+        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
         out = out / f"{_method}" / f"run_{_runID}"

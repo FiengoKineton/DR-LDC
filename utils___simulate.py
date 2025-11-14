@@ -106,6 +106,10 @@ class Closed_Loop():
             rng = np.random.default_rng(seed)
             x = rng.standard_normal((nx, 1))
             xc = rng.standard_normal((nxc, 1))
+        elif init_cond == "e1":
+            x = np.zeros((nx, 1))
+            x[0, 0] = 1.0
+            xc = np.zeros((nxc, 1))
         else:
             raise ValueError(f"Unknown init_cond '{init_cond}'")
 
@@ -373,6 +377,12 @@ class Closed_Loop():
         elif init_cond == "rand":
             rng = np.random.default_rng()
             x = rng.standard_normal((nX, 1))
+        elif init_cond == "e1":
+            x = np.zeros((nX, 1))
+            x[0, 0] = 1.0
+        else:
+            raise ValueError(f"Unknown init_cond '{init_cond}'")
+        
 
         # Disturbance generation
         wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
