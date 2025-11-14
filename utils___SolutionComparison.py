@@ -493,6 +493,11 @@ class ResultsComparator:
             if "recovered_controller" in J:
                 return self._controller_from_dict(J["recovered_controller"])
             raise KeyError("No controller found in JSON payload.")
+        
+        def _Sigma_from_any(J):
+            if "disturbance" in J:
+                return np.array(J["disturbance"]["Sigma_nom"], dtype=float)
+            raise KeyError("No Sigma found in JSON payload.")
 
         def _plnt_from_any(J):
             if "plant" in J:
@@ -520,6 +525,10 @@ class ResultsComparator:
         ctrlD = _ctrl_from_any(JD)
         plntD = _plnt_from_any(JD)
         plnt_clD = _plnt_cl_from_any(JD)
+        SigmaM = _Sigma_from_any(JM)
+        SigmaD = _Sigma_from_any(JD)
+        gamM = float(JM.get("meta", {}).get("gamma", JM.get("achieved_gamma")))
+        gamD = float(JD.get("meta", {}).get("gamma", JD.get("achieved_gamma")))
 
         # Objective values if present
         objM = JM.get("meta", {}).get("objective", JM.get("optimized_cost"))
@@ -743,11 +752,28 @@ class ResultsComparator:
 
 
         # Plots
-        if z_mbd.exists() and z_ddd.exists() and self.save:
-            dataM = np.load(z_mbd)
-            dataD = np.load(z_ddd)
-            t, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
-            _, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
+        if z_mbd.exists() and z_ddd.exists():# and self.save:
+            if not re_evaluate:
+                dataM = np.load(z_mbd)
+                dataD = np.load(z_ddd)
+                t, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
+                _, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
+            else:
+                # Re-simulate both
+                cl = Closed_Loop()
+                print("simulating closed loop of MDB...")
+                sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB, Sigma_w=SigmaM, gamma=gamM, init_cond="rand")
+                print("simulating closed loop of DDD...")
+                sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD, Sigma_w=SigmaD, gamma=gamD, init_cond="rand")
+                t = sim_m["step"]
+                XM = sim_m["X"]; XcM = sim_m["Xc"]; UM = sim_m["U"]; YM = sim_m["Y"]; ZM = sim_m["Z"]
+                XD = sim_d["X"]; XcD = sim_d["Xc"]; UD = sim_d["U"]; YD = sim_d["Y"]; ZD = sim_d["Z"]
+
+                """print("plotting MDB...")
+                cl.plot_timeseries(sim_m)
+                print("plotting DDD...")
+                cl.plot_timeseries(sim_d)"""
+
             T = min(XM.shape[0], XD.shape[0])
 
             title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
@@ -767,26 +793,25 @@ class ResultsComparator:
             self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
             if plot: plt.show()
 
-            if re_evaluate:
-                # Re-simulate both
-                cl = Closed_Loop()
-                print("simulating closed loop of MDB...")
-                sim_m = cl.simulate_closed_loop(plant=p_MDB, ctrl=c_MDB)
-                print("simulating closed loop of DDD...")
-                sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD)
-
-                print("plotting MDB...")
-                cl.plot_timeseries(sim_m)
-                print("plotting DDD...")
-                cl.plot_timeseries(sim_d)
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
 
-        if c_mbd.exists() and c_ddd.exists() and self.save:
-            dataM = np.load(c_mbd)
-            dataD = np.load(c_ddd)
-            t, XM, _, ZM, *_ = self._npz_extract_states(dataM)
-            _, XD, _, ZD, *_ = self._npz_extract_states(dataD)
+        if c_mbd.exists() and c_ddd.exists():# or self.save:
+            if not re_evaluate:
+                dataM = np.load(c_mbd)
+                dataD = np.load(c_ddd)
+                t, XM, _, ZM, *_ = self._npz_extract_states(dataM)
+                _, XD, _, ZD, *_ = self._npz_extract_states(dataD)
+            else:
+                cl = Closed_Loop()
+                print("simulating closed loop of MDB...")
+                sim_m = cl.simulate_composite(Pcl=plnt_clM, Sigma_w=SigmaM, gamma=gamM, init_cond="rand")
+                print("simulating closed loop of DDD...")
+                sim_d = cl.simulate_composite(Pcl=plnt_clD, Sigma_w=SigmaD, gamma=gamD, init_cond="rand")
+                t = sim_m["step"]
+                XM = sim_m["X"]; ZM = sim_m["Z"]
+                XD = sim_d["X"]; ZD = sim_d["Z"]
+
             T = min(XM.shape[0], XD.shape[0])
 
             title = f"{method.upper()} composite closed-loop: states (MBD vs DDD)"
@@ -797,18 +822,6 @@ class ResultsComparator:
             self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
             if plot: plt.show()
 
-            if re_evaluate:
-                # Re-simulate both
-                cl = Closed_Loop()
-                print("simulating closed loop of MDB...")
-                sim_m = cl.simulate_composite(Pcl=plnt_clM)
-                print("simulating closed loop of DDD...")
-                sim_d = cl.simulate_closed_loop(Pcl=plnt_clD)
-
-                print("plotting composite MDB...")
-                cl.plot_timeseries(sim_m)
-                print("plotting composite DDD...")
-                cl.plot_timeseries(sim_d)
         else:
             print("\n[warn] Missing NPZ for one/both runs; skipping plots.")
 

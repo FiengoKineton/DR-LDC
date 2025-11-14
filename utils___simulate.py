@@ -75,8 +75,7 @@ class Closed_Loop():
                             Sigma_w: np.ndarray = None,
                             gamma: float = None,
                             seed: int = 11,
-                            x0: np.ndarray | None = None,
-                            xc0: np.ndarray | None = None):
+                            init_cond: str = "zeros"):
         """
         Simulate the interconnection (no composite shortcut) so we can view y, u explicitly.
 
@@ -99,8 +98,16 @@ class Closed_Loop():
 
         # Initial conditions
         T = int(self.Tf / self.ts)
-        x = np.zeros((nx, 1)) #if x0 is None else np.asarray(x0, float).reshape(nx, 1)
-        xc = np.zeros((nxc, 1)) #if xc0 is None else np.asarray(xc0, float).reshape(nxc, 1)
+
+        if init_cond == "zeros":
+            x = np.zeros((nx, 1))
+            xc = np.zeros((nxc, 1))
+        elif init_cond == "rand":
+            rng = np.random.default_rng(seed)
+            x = rng.standard_normal((nx, 1))
+            xc = rng.standard_normal((nxc, 1))
+        else:
+            raise ValueError(f"Unknown init_cond '{init_cond}'")
 
         # Precompute a sampling factor for w
         if Sigma_w is not None:
@@ -116,6 +123,7 @@ class Closed_Loop():
         Y  = np.zeros((T, ny))
         U  = np.zeros((T, nu))
         Z  = np.zeros((T, nz))
+        step = np.zeros((T,), dtype=int)
 
         wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
         W = wass.sample(T=T, Sigma=Sigma_w)
@@ -153,6 +161,7 @@ class Closed_Loop():
             U[t, :]  = u.ravel()
             Z[t, :]  = z.ravel()
             W[t, :]  = w.ravel()
+            step[t] = t
 
             # Update
             x_next  = A @ x + Bu @ u + Bw @ w
@@ -161,7 +170,7 @@ class Closed_Loop():
 
         return {
             "X": X, "Xc": Xc, "Y": Y, "U": U, "Z": Z, "W": W,
-            "T": T, "nx": nx, "nxc": nxc, "ny": ny, "nu": nu, "nz": nz, "nw": nw
+            "T": T, "nx": nx, "nxc": nxc, "ny": ny, "nu": nu, "nz": nz, "nw": nw, "step": step,
         }
     
 
@@ -325,7 +334,7 @@ class Closed_Loop():
         np.savez_compressed(fname, **sim)
         return fname
 
-    def simulate_composite(self, Pcl: Plant_cl, Sigma_w: np.ndarray = None, gamma: float = 0.5) -> Dict[str, Any]:
+    def simulate_composite(self, Pcl: Plant_cl, Sigma_w: np.ndarray = None, gamma: float = 0.5, init_cond: str = "zeros") -> Dict[str, Any]:
         """
         Simulate the composed system:
             X_{t+1} = Acl X_t + Bcl w_t
@@ -359,7 +368,11 @@ class Closed_Loop():
             raise ValueError("Non-positive simulation horizon. Check Tf and ts.")
 
         # Initial condition
-        x = np.zeros((nX, 1))
+        if init_cond == "zeros":
+            x = np.zeros((nX, 1))
+        elif init_cond == "rand":
+            rng = np.random.default_rng()
+            x = rng.standard_normal((nX, 1))
 
         # Disturbance generation
         wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
@@ -388,6 +401,7 @@ class Closed_Loop():
         # Storage
         X = np.zeros((T, nX))
         Z = np.zeros((T, nz))
+        step = np.zeros((T,), dtype=int)
 
         # Rollout
         for t in range(T):
@@ -395,13 +409,14 @@ class Closed_Loop():
             z = C @ x + D @ w
             X[t, :] = x.ravel()
             Z[t, :] = z.ravel()
+            step[t] = t
             x = A @ x + B @ w
 
         return {
             "X": X,               # (T, nX)
             "Z": Z,               # (T, nz)
             "W": W,               # (T, nw)
-            "T": T, "ts": self.ts,
+            "T": T, "ts": self.ts, "step": step,
             "nX": nX, "nw": nw, "nz": nz,
         }
 

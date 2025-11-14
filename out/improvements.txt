@@ -1,3 +1,37 @@
+Mathijs Schuurmans
+
+Hjalmarsson
+
+Formulas for Data-driven Control: stabilization, optimality and robustness
+
+https://pure.tue.nl/ws/portalfiles/portal/345125383/1777033-Graduation_Project_Final_Report.pdf
+
+
+
+
+
+
+TO MODIFY
+
+Spiegare meglio il fatto dele multiple openloop simulations
+
+Definire matematicamente il bound beta
+
+Rendere la notazione piu semplice (no \Pi)
+
+Ridurre I termini di regolarizzazione (eg \mhu)
+
+Per fare un paragone piu "fair", aggiungere il termine corretto di Sigma_w nella Baseline
+
+MBD -> Baseline / DDD -> DD
+
+Far partire le simulazioni da valori diversi da 0.
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------
+
 Ho individuato alcuni punti critici e aree da approfondire:
   - CHANGE: Alcune condizioni LMI non risultano completamente motivate o spiegate, per cui mi viene difficile verificarne la correttezza. 
             Assicurati di precisare tutti i passaggi, specialmente per il caso data-driven. Verifica anche la dimensione delle matrici.
