@@ -199,7 +199,7 @@ def build_and_solve_dro_lmi(
         solver = "SCS"
         print("\n===================================================\nCVXOPT failed, trying SCS...")
         try:
-            prob.solve(solver=cp.SCS, verbose=True, eps=1e-4, max_iters=100000)
+            prob.solve(solver=cp.SCS, verbose=True, eps=1e-4, max_iters=10000)
             print(f"SCS status: {prob.status}")
             if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
                 success_SCS = True
@@ -439,11 +439,6 @@ def build_and_solve_dro_lmi_upd(
     def I(n):
         return np.eye(n)
 
-    def _is_stable(M, tol=1e-9):
-        eigvals = np.linalg.eigvals(M)
-        spectral_radius = np.max(np.abs(eigvals))
-        return spectral_radius < 1- tol
-
     def Z(r, c): 
         return np.zeros((r, c)) 
 
@@ -454,9 +449,6 @@ def build_and_solve_dro_lmi_upd(
         if x is None:
             return None
         return float(x) if np.isscalar(x) else x
-
-    def _fro(M):
-        return cp.norm(M, 'fro')
 
     def _residual_anisotropy_weights(R, *, floor=1e-12, mode="sqrt"):
         """
@@ -659,6 +651,8 @@ def build_and_solve_dro_lmi_upd(
         Cy, Dyw = Oy[:, :nx], Oy[:, nx:nx+nw]
         Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
         #Cz, Dzw, Dzu, *_ = api.build_out_matrices(nw=nw)
+
+        #Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, var, Sigma_nom)
 
     else:
         raise ValueError("approach must be 'DeePC', 'Young' or 'Mats'")

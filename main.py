@@ -146,7 +146,7 @@ class lmi_pipeline_optim_problem():
         STABLE, i = False, 0
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
 
-        while not STABLE and i<=5:
+        while not STABLE and i<=1:
             # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
             if not upd or not FROM_DATA:
                 plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
@@ -233,6 +233,21 @@ class lmi_pipeline_optim_problem():
             print(abs(eig))
         
 
+
+        # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
+        #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
+        sim = cl.simulate_closed_loop(plant, ctrl, Sigma_nom, gamma)
+        out_npz = out + f"___closed_loop_run.npz"
+
+        sim_composite = cl.simulate_composite(plant_cl, Sigma_nom, gamma)
+        out_composite = out + f"___closed_loop_composite.npz"
+
+        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
+        self.final_cost = sim_cost["J"]
+        print("\nFinal closed-loop cost J =", self.final_cost)
+        out_cost = out + f"___closed_loop_run_cost.npz"
+
+
         # JSON
         payload = {
             "meta": {
@@ -243,6 +258,7 @@ class lmi_pipeline_optim_problem():
                 "gamma": res.gamma,
                 "lambda_opt": res.lambda_opt,
                 "spectral_radius_Acl": rho,
+                "Z_cost": self.final_cost,
                 #"rx": None if res.rx is None else res.rx,
                 #"ry": None if res.ry is None else res.ry,
                 #"rz": None if res.rz is None else res.rz,
@@ -287,27 +303,15 @@ class lmi_pipeline_optim_problem():
                 }
 
         out_json = out + f"___results_run.json"
-        if save: self.save_json(out_json, payload)
-        print(f"[saved] {out_json}")
-
-        # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
-        #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
-        sim = cl.simulate_closed_loop(plant, ctrl, Sigma_nom, gamma)
-        out_npz = out + f"___closed_loop_run.npz"
-        if save: cl.save_npz(sim, str(out_npz))
-        print(f"[saved] {out_npz}")
-
-        sim_composite = cl.simulate_composite(plant_cl, Sigma_nom, gamma)
-        out_composite = out + f"___closed_loop_composite.npz"
-        if save: cl.save_npz(sim_composite, str(out_composite))
-        print(f"[saved] {out_composite}")
-
-        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
-        self.final_cost = sim_cost["J"]
-        print("\nFinal closed-loop cost J =", self.final_cost)
-        out_cost = out + f"___closed_loop_run_cost.npz"
-        if save: cl.save_npz(sim_cost, str(out_cost))   
-        print(f"[saved] {out_cost}")
+        if save: 
+            cl.save_npz(sim, str(out_npz))
+            print(f"[saved] {out_npz}")
+            cl.save_npz(sim_composite, str(out_composite))
+            print(f"[saved] {out_composite}")
+            cl.save_npz(sim_cost, str(out_cost))   
+            print(f"[saved] {out_cost}")
+            self.save_json(out_json, payload)
+            print(f"[saved] {out_json}")
 
         # 7) Plot results
         if plot: 
@@ -405,12 +409,12 @@ class lmi_pipeline_optim_problem():
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
 def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False, COST: bool = False):
-    parser = argparse.ArgumentParser(description="DRO LMI Optimization")
+    #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
     #parser.add_argument("--p", action="store_true", help="Force Plot")
     #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
-    args = parser.parse_args()
+    #args = parser.parse_args()
 
     if yaml is None:
         raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
