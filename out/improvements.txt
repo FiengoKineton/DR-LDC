@@ -15,15 +15,15 @@ TO MODIFY
 
 TODO    (LaTeX) Spiegare meglio il fatto dele multiple openloop simulations
 
-TODO    (LaTeX) Definire matematicamente il bound beta
+TODO    (Math) Definire matematicamente il bound beta
 
-TODO    (LaTeX) Rendere la notazione piu semplice (no \Pi)
+DONE    (LaTeX) Rendere la notazione piu semplice (no \Pi)
 
-TODO    (LaTeX) Ridurre I termini di regolarizzazione (eg \mhu)
+DONE    (LaTeX) Ridurre I termini di regolarizzazione (eg \mhu)
 
 TEST    Per fare un paragone piu "fair", aggiungere il termine corretto di Sigma_w nella Baseline
 
-TODO    (LaTeX) MBD -> Baseline / DDD -> DD
+DONE    (LaTeX) MBD -> Baseline / DDD -> DD
 
 DONE    Far partire le simulazioni da valori diversi da 0.
 
