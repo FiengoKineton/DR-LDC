@@ -21,7 +21,7 @@ from utils___SNR import SNRAnalyzer
 # ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
 
 class baseline_optim_problem(): 
-    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, save: bool = False, FROM_DATA: bool = None):
+    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, save: bool = False, FROM_DATA: bool = None, init_cond: str = "zero"):
 
         # Run optimization AND capture the exact plant used
         cl = Closed_Loop()  # instantiate simulation class
@@ -41,12 +41,12 @@ class baseline_optim_problem():
 
         # Load back the exact same objects and simulate
         Sigma_loaded, ctrl_loaded, plant_loaded, _ = self.load_results_json(json_path)
-        sim = cl.simulate_closed_loop(plant_loaded, ctrl_loaded, Sigma_loaded, gamma)
+        sim = cl.simulate_closed_loop(plant=plant_loaded, ctrl=ctrl_loaded, Sigma_w=Sigma_loaded, gamma=gamma, init_cond=init_cond)
         out_npz = out + f"___closed_loop_run.npz"
         if save: cl.save_npz(sim, str(out_npz))
         print(f"[saved] {out_npz}")
 
-        sim_composite = cl.simulate_composite(plant_cl, gamma)
+        sim_composite = cl.simulate_composite(Pcl=plant_cl, gamma=gamma, init_cond=init_cond)
         out_composite = out + f"___closed_loop_composite.npz"
         if save: cl.save_npz(sim_composite, str(out_composite))
         print(f"[saved] {out_composite}")
@@ -137,7 +137,7 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, noise: Noise, upd: bool = False, plot: bool = False, save: bool = False, FROM_DATA: bool = False):
+    def __init__(self, params: dict, out: Path, noise: Noise, upd: bool = False, plot: bool = False, save: bool = False, FROM_DATA: bool = False, init_cond: str = "zero"):
 
         recover = Recover()
         api = MatricesAPI()
@@ -242,10 +242,10 @@ class lmi_pipeline_optim_problem():
 
         # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
         #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
-        sim = cl.simulate_closed_loop(plant, ctrl, Sigma_nom, gamma)
+        sim = cl.simulate_closed_loop(plant=plant, ctrl=ctrl, Sigma_w=Sigma_nom, gamma=gamma, init_cond=init_cond)
         out_npz = out + f"___closed_loop_run.npz"
 
-        sim_composite = cl.simulate_composite(plant_cl, Sigma_nom, gamma)
+        sim_composite = cl.simulate_composite(Pcl=plant_cl, Sigma_w=Sigma_nom, gamma=gamma, init_cond=init_cond)
         out_composite = out + f"___closed_loop_composite.npz"
 
         sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
@@ -434,7 +434,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _type = p.get("plant", {}).get("type", "explicit")
     _model = p.get("model", "independent") if m == "W2" else m
     _upd = bool(p.get("upd", 0))
-    _re_evaluate = bool(p.get("re_evaluate", 0))
+    _re_evaluate = bool(p.get("re_evaluate", 0)) if not ALL else False
     _method = p.get("method", "lmi")
     _plot = bool(p.get("plot", False)) if plot is None and not COST else plot
     _data = "DDD" if FROM_DATA else "MBD"
@@ -471,10 +471,10 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
         if _method == "base":
             print("\nRunning baseline optimization...")
-            opt = baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
+            opt = baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
         else:
             print("\nRunning LMI pipeline optimization...")
-            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA)
+            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
 
         if COST:
             return opt._return_final_cost()

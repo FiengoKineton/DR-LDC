@@ -15,13 +15,13 @@ TO MODIFY
 
 TODO    (LaTeX) Spiegare meglio il fatto dele multiple openloop simulations
 
-TODO    (Math) Definire matematicamente il bound beta
+DONE    (Math) Definire matematicamente il bound beta
 
 DONE    (LaTeX) Rendere la notazione piu semplice (no \Pi)
 
 DONE    (LaTeX) Ridurre I termini di regolarizzazione (eg \mhu)
 
-TEST    Per fare un paragone piu "fair", aggiungere il termine corretto di Sigma_w nella Baseline
+DONE ?? Per fare un paragone piu "fair", aggiungere il termine corretto di Sigma_w nella Baseline
 
 DONE    (LaTeX) MBD -> Baseline / DDD -> DD
 

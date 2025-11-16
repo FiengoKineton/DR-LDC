@@ -31,7 +31,8 @@ def build_and_solve_dro_lmi(
     nx, nw, nu, nz, ny = plant.dims()
 
     Sigma_nom, gamma, var = noise.Sigma_nom, noise.gamma, noise.var
-    Sigma_nom = noise.Sigma_test        # VERIFY
+    d = Disturbances(n=nw)
+    Sigma_nom = d.Sigma_test        # VERIFY
 
     Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(B_w=Bw, D_vw=Dzw, D_yw=Dyw, var=var, Sigma_nom=Sigma_nom)
 
@@ -788,8 +789,7 @@ def build_and_solve_dro_lmi_upd(
         for i in range(nx):
             if model.lower() in ["correlated", "corr", "1"]:    cons += [s_AA[i] >= 1e-9]
             else:                                               cons += [s_AA[i] >= 1e-9, tau_AA[i] <= 1e3]
-            cons += [cp.bmat([[s_AA[i],      beta_AA[i]],
-                            [beta_AA[i],   tau_AA[i]]]) >> 0]
+            cons += [cp.bmat([[s_AA[i],      beta_AA[i]], [beta_AA[i],   tau_AA[i]]]) >> 0]
 
         # 6) keep AB part as-is for now (still isotropic), or do the same for AB if you want
         tau_AB = cp.Variable(nonneg=True, name="tau_ab")  # unchanged
@@ -822,8 +822,7 @@ def build_and_solve_dro_lmi_upd(
 
         reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN #+ mu * tP * (cp.sum(beta_AA) + beta_AB)**2
 
-        cons += consK + consL + consM + consN
-        #cons += consP
+        cons += consK + consL + consM + consN     # += consP
     else:
         pass
 
@@ -892,9 +891,9 @@ def build_and_solve_dro_lmi_upd(
     print("\n===================================================\nAttempting to solve with MOSEK...")
     try:
         prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-8,
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-8,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-8,
+            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-7,
+            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-7,
+            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-7,
             #'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6,
             'MSK_IPAR_INTPNT_SCALING': 1, # 0: no scaling, 1: geometric mean, 2: equilibrate
         })
@@ -903,9 +902,10 @@ def build_and_solve_dro_lmi_upd(
             success_MOSEK = True
     except Exception as mosek_e:
         print(f"MOSEK error: {mosek_e}")
+        sys.exit(0)
 
-    if not success_MOSEK and 0:
-        solver = "CVXOPT"
+    if not success_MOSEK: # and 0:
+        """solver = "CVXOPT"
         print("\n===================================================\nMOSEK failed, trying CVXOPT...")
         try:
             prob.solve(solver=cp.CVXOPT,
@@ -919,7 +919,7 @@ def build_and_solve_dro_lmi_upd(
         except Exception as e:
             print(f"CVXOPT error: {e}")
 
-    if not (success_MOSEK or success_CVXOPT):
+    if not (success_MOSEK or success_CVXOPT):"""
         solver = "SCS"
         print("\n===================================================\nCVXOPT failed, trying SCS...")
         try:

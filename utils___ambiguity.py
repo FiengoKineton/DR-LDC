@@ -447,6 +447,7 @@ class Disturbances:
         self.mode = getattr(self.impl, "mode", model)
         self.gamma = getattr(self.impl, "gamma", gamma)
         self.Sigma_nom = getattr(self.impl, "Sigma_nom", None)
+        self.Sigma_test = getattr(self.impl, "Sigma_test", None)
         self.time = getattr(self.impl, "time", None)
         self.ts = getattr(self.impl, "ts", None)
         self.T = getattr(self.impl, "T", None)
