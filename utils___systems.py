@@ -46,6 +46,22 @@ class Plant_cl:
         return nx_cl, nw_cl, nz_cl
 
 @dataclass
+class Plant_k:
+    A: np.ndarray
+    B: np.ndarray
+    C: np.ndarray
+    D: np.ndarray
+    K: np.ndarray
+    V: np.ndarray
+
+    def dims(self):
+        nx = self.A.shape[0]
+        nu = self.B.shape[1]
+        nz = self.C.shape[0]
+        nw = self.V.shape[1]
+        return nx, nu, nz, nw
+
+@dataclass
 class Noise:
     Sigma_nom: np.ndarray
     var: float

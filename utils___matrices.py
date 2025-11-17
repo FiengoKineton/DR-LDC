@@ -2,7 +2,7 @@ import __main__
 import re, json, yaml, sys
 import numpy as np
 from scipy.linalg import expm
-from utils___systems import Plant, Controller, Plant_cl, Data
+from utils___systems import Plant, Controller, Plant_cl, Data, Plant_k
 from typing import Tuple, List
 from numpy.linalg import norm
 from utils___simulate import Open_Loop
@@ -822,6 +822,37 @@ class MatricesAPI():
 
         return plant, ctrl0
 
+    def change_of_coordinates(self, plant: Plant, T: np.ndarray) -> Plant:
+        """
+        Apply state-space change of coordinates x_new = T x.
+        Returns new Plant with transformed A, Bu, Bw, Cz.
+        """
+
+        T_inv = np.linalg.inv(T)
+        A_new  = T @ plant.A @ T_inv
+        Bu_new = T @ plant.Bu
+        Bw_new = T @ plant.Bw
+        Cz_new = plant.Cz @ T_inv
+
+        return Plant(A=A_new, Bu=Bu_new, Bw=Bw_new,
+                     Cz=Cz_new, Dzw=plant.Dzw,
+                     Dzu=plant.Dzu, Cy=plant.Cy,
+                     Dyw=plant.Dyw)
+    
+    def K_rapresentation_change(self, plant: Plant, ctrl: Controller) -> Plant_k:
+        # Dzw, Dyw are zero by definition in our setups
+        A, Bu, Bw = plant.A, plant.Bu, plant.Bw
+        Cy, Cz, Dzu = plant.Cy, plant.Cz, plant.Dzu
+        Ac, Bc, Cc, Dc = ctrl.Ac, ctrl.Bc, ctrl.Cc, ctrl.Dc
+
+        Abar = np.block([[A, 0], [Bc @ Cy, Ac]])
+        Bbar = np.block([[Bu], [np.zeros((Ac.shape[0], Bu.shape[1]))]])
+        K = np.block([[Dc @ Cy, Cc]])
+        V = np.block([[Bw], [np.zeros((Ac.shape[0], Bw.shape[1]))]])
+        Cbar = np.block([[Cz, np.zeros((Cz.shape[0], Ac.shape[1]))]])
+        Dbar = Dzu
+
+        return Plant_k(A=Abar, B=Bbar, C=Cbar, D=Dbar, K=K, V=V)
 
     # ------------------------- LEGACY EXAMPLE (unchanged) --------------------------
 

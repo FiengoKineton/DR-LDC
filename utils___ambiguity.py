@@ -10,6 +10,400 @@ if yaml is None:
 with open(yaml_path, "r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
 
+
+# =====================================================================================
+
+class metric_2_Wasserstein:
+    """
+    2-Wasserstein ambiguity set around a fixed zero-mean Gaussian P_nom = N(0, Sigma_nom).
+
+    Mathematically (paper's notation):
+
+        W_cor  = { all disturbance sequences w : N0 -> L2(Ω, R^{n_w}) s.t.
+                   W(P_{w(t)}, P_nom) <= gamma  for all t }
+
+        W_ind  = subset of W_cor with w(t) independent across t.
+
+    Here we:
+      * Fix P_nom = N(0, Sigma_nom).
+      * Use the Gelbrich / 2-Wasserstein distance specialized to Gaussians.
+      * Provide:
+          - membership checks for Gaussian marginals,
+          - Gaussian sampling procedures whose marginals lie in the ball
+            (independent or AR(1)-correlated).
+
+    This is still *Gaussian* inside the ball; the full ambiguity set in the paper
+    has no parametric restriction, but these Gaussians are legitimate members of it.
+    """
+
+    # -------------------------------------------------------------------------
+    # basic helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _sym(A: np.ndarray) -> np.ndarray:
+        return 0.5 * (A + A.T)
+
+    @staticmethod
+    def _spd_correction(S: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+        """Force SPD by eigenvalue clipping (numerical guard)."""
+        S = metric_2_Wasserstein._sym(S)
+        vals, vecs = np.linalg.eigh(S)
+        vals = np.maximum(vals, eps)
+        return vecs @ np.diag(vals) @ vecs.T
+
+    # -------------------------------------------------------------------------
+    # 2-Wasserstein / Gelbrich distances (Gaussian case)
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def w2_gaussian_zero_mean(S1: np.ndarray, S2: np.ndarray) -> float:
+        """
+        W_2 between N(0, S1) and N(0, S2).
+
+        For zero-mean Gaussians, this equals the Gelbrich distance and can be
+        written in terms of the Bures metric on SPD matrices.
+        """
+        S1 = metric_2_Wasserstein._spd_correction(S1)
+        S2 = metric_2_Wasserstein._spd_correction(S2)
+
+        S2h = sqrtm(S2)
+        M = S2h @ S1 @ S2h
+        M = np.real_if_close(M, tol=1e-8)
+        Mhalf = sqrtm(M)
+        Mhalf = np.real_if_close(Mhalf, tol=1e-8)
+
+        val = np.trace(S1) + np.trace(S2) - 2.0 * np.trace(Mhalf)
+        val = float(np.maximum(val, 0.0))
+        return np.sqrt(val)
+
+    @staticmethod
+    def w2_gaussian(mu1: np.ndarray, S1: np.ndarray,
+                    mu2: np.ndarray, S2: np.ndarray) -> float:
+        """
+        Full 2-Wasserstein (Gelbrich) distance between Gaussian
+        N(mu1, S1) and N(mu2, S2):
+
+            W^2 = ||mu1 - mu2||^2 + tr(S1 + S2 - 2 (S2^{1/2} S1 S2^{1/2})^{1/2})
+
+        This is exactly Theorem 4.2(1)(2)(3) in the paper when both are normal.
+        """
+        mu1 = np.atleast_1d(mu1).astype(float)
+        mu2 = np.atleast_1d(mu2).astype(float)
+        d_mu2 = float(np.dot(mu1 - mu2, mu1 - mu2))
+
+        w2_cov = metric_2_Wasserstein.w2_gaussian_zero_mean(S1, S2)
+        return float(np.sqrt(d_mu2 + w2_cov**2))
+
+    # -------------------------------------------------------------------------
+    # init
+    # -------------------------------------------------------------------------
+
+    def __init__(self,
+                 gamma: float,
+                 n: int = None, var: float = None, alpha: float = 1.5, ):
+        """
+        Parameters
+        ----------
+        Sigma_nom : (n, n) SPD array
+            Covariance matrix of the fixed nominal normal distribution P_nom.
+        gamma : float
+            Radius of the Wasserstein ball: W(P_w(t), P_nom) <= gamma.
+        mode : {"independent", "correlated"}
+            Which ambiguity set we use to generate processes:
+            - "independent" -> W_ind
+            - "correlated"  -> W_cor via AR(1).
+        T : int
+            Default time horizon.
+        ts : float
+            Sampling time (just stored for convenience).
+        rng : np.random.Generator, optional
+            RNG used for all sampling.
+        """
+
+        p = cfg.get("params", {})
+        set = p.get("ambiguity", {})
+        sim = p.get("simulation", {})
+        Sigma_nom = np.array(set["Sigma_nom"], dtype=float) if n is None or var is None else var * np.eye(n)
+        gamma = float(set.get("gamma", 0.5)) if gamma is None else gamma
+        Tf = sim.get("TotTime", 100)
+        ts = sim.get("ts", 0.5)
+        self.var = float(set.get("var", 1)) if var is None else var
+        
+        mode = p.get("model", "independent")
+
+        Sigma_nom = np.asarray(Sigma_nom, float)
+        self.Sigma_nom = self._spd_correction(Sigma_nom)
+        self.Nw = self.n = self.Sigma_nom.shape[0]
+        self.mu_nom = np.zeros(self.n)
+        self.gamma = float(gamma)
+
+        assert mode in ("independent", "correlated")
+        self.mode = mode
+        self.T = int(Tf / ts)
+        self.ts = float(ts)
+        self.time = np.arange(self.T) * self.ts
+
+        self.rng = np.random.default_rng()
+
+        Sigma_raw = self.make_random_spd_around_nom(alpha=alpha)
+        self.Sigma_test = self.project_zero_mean_cov_to_ball(Sigma_raw)
+
+        self.gamma_estm = None
+        self.Sigma_estm = None
+
+
+    # -------------------------------------------------------------------------
+    # membership tests (Gaussian marginal)
+    # -------------------------------------------------------------------------
+
+    def w2_to_nominal(self, mu: np.ndarray, Sigma: np.ndarray) -> float:
+        """W_2( N(mu, Sigma), P_nom )."""
+        return self.w2_gaussian(mu, Sigma, self.mu_nom, self.Sigma_nom)
+
+    def is_marginal_in_ball(self,
+                            mu: np.ndarray,
+                            Sigma: np.ndarray,
+                            tol: float = 1e-10) -> bool:
+        """
+        Check whether the Gaussian N(mu, Sigma) satisfies W(P, P_nom) <= gamma.
+        This is exactly the condition defining W_cor / W_ind in the paper.
+        """
+        d = self.w2_to_nominal(mu, Sigma)
+        return d <= self.gamma + tol
+
+    def make_random_spd_around_nom(self, alpha: float = 1.5) -> np.ndarray:
+        """
+        Build a random SPD covariance 'around' Sigma_nom.
+        alpha controls how far we move away.
+        """
+        n = self.n
+        A = self.rng.standard_normal((n, n))
+        # random SPD core
+        S = A @ A.T
+        # normalize scale roughly to match Sigma_nom
+        S = S / np.trace(S) * np.trace(self.Sigma_nom)
+        # blend with Sigma_nom
+        Sigma_test = (1 - alpha) * self.Sigma_nom + alpha * S
+        # clean up numerically
+        Sigma_test = self._spd_correction(Sigma_test)
+        return Sigma_test
+
+    # -------------------------------------------------------------------------
+    # projection of zero-mean Gaussian to the W2-ball (covariance geodesic)
+    # -------------------------------------------------------------------------
+
+    def project_zero_mean_cov_to_ball(self,
+                                      Sigma: np.ndarray,
+                                      tol: float = 1e-7,
+                                      maxit: int = 60) -> np.ndarray:
+        """
+        Project SPD Sigma (zero-mean Gaussian) onto the closed W2-ball
+        { N(0, S) : W_2(N(0,S), N(0,Sigma_nom)) <= gamma }.
+
+        We move along the Bures geodesic from Sigma towards Sigma_nom until
+        the boundary W_2 = gamma is hit. For zero-mean Gaussians this respects
+        the structure in the paper (Theorem 4.2(3)).
+        """
+        Sigma = self._spd_correction(Sigma)
+
+        if self.w2_gaussian_zero_mean(Sigma, self.Sigma_nom) <= self.gamma:
+            return Sigma
+
+        Sigh = sqrtm(Sigma)
+        Sigh = np.real_if_close(Sigh, tol=1e-8)
+        M = Sigh @ self.Sigma_nom @ Sigh
+        M = np.real_if_close(M, tol=1e-8)
+        Ah = sqrtm(M)
+        Ah = np.real_if_close(Ah, tol=1e-8)
+
+        def cov_on_geodesic(t: float) -> np.ndarray:
+            T_ = (1.0 - t) * Sigh + t * Ah
+            G = T_ @ T_
+            return self._spd_correction(G)
+
+        lo, hi = 0.0, 1.0
+        for _ in range(maxit):
+            mid = 0.5 * (lo + hi)
+            G = cov_on_geodesic(mid)
+            d = self.w2_gaussian_zero_mean(G, self.Sigma_nom)
+            if d > self.gamma:
+                lo = mid
+            else:
+                hi = mid
+            if hi - lo < tol:
+                break
+        return cov_on_geodesic(hi)
+
+    # -------------------------------------------------------------------------
+    # empirical helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def empirical_mean_and_cov(w: np.ndarray,
+                               unbiased: bool = True) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Given samples w shape (T, n), compute empirical mean and covariance
+        (L2 sense, as in the paper).
+        """
+        w = np.asarray(w, float)
+        mu = w.mean(axis=0)
+        z = w - mu
+        denom = max(1, (w.shape[0] - 1) if unbiased else w.shape[0])
+        S = z.T @ z / denom
+        S = metric_2_Wasserstein._spd_correction(S)
+        return mu, S
+
+    def empirical_marginal_in_ball(self, w: np.ndarray, tol: float = 1e-10) -> bool:
+        """
+        Take a trajectory w(t) and check whether its empirical marginal
+        distribution is inside the W2-ball wrt P_nom.
+        """
+        mu_hat, S_hat = self.empirical_mean_and_cov(w, unbiased=True)
+        d = self.w2_to_nominal(mu_hat, S_hat)
+        return d <= self.gamma + tol
+    
+    # -------------------------------------------------------------------------
+    # sampling utilities (Gaussian elements of the ambiguity sets)
+    # -------------------------------------------------------------------------
+
+    def sample(self,
+               T: int | None = None,
+               Sigma: np.ndarray | None = None,
+               rho: float = 0.9) -> np.ndarray:
+        """
+        Sample a disturbance trajectory of length T from a Gaussian distribution
+        lying in the Wasserstein ball, using the selected mode:
+
+        mode = "independent":
+            w(t) iid ~ N(0, Sigma_use).
+        mode = "correlated":
+            AR(1): w_{t+1} = F w_t + eps_t with stationary marginal N(0, Sigma_use).
+
+        Sigma_init:
+            candidate covariance. It will be projected into the ball.
+            If None, we use Sigma_nom (center of the ambiguity set).
+        """
+        T = self.T if T is None else int(T)
+        Sigma_use = self.Sigma_test #if Sigma is None else self.project_zero_mean_cov_to_ball(Sigma)
+
+        if self.mode == "independent":
+            return self._sample_iid_gaussian(T, Sigma_use)
+        else:
+            return self._sample_correlated_gaussian(T, Sigma_use, rho=rho)
+
+    def _sample_iid_gaussian(self, T: int, Sigma: np.ndarray) -> np.ndarray:
+        """
+        Generate w(t) iid ~ N(0, Sigma), with Sigma already in the ball.
+        This is one particular element of W_ind.
+        """
+        Sigma = self._spd_correction(Sigma)
+        L = cholesky(Sigma)
+        z = self.rng.standard_normal(size=(T, self.n))
+        return z @ L.T
+
+    def _sample_correlated_gaussian(self,
+                                    T: int,
+                                    Sigma: np.ndarray,
+                                    rho: float = 0.9) -> np.ndarray:
+        """
+        Generate an AR(1) process with stationary marginal N(0, Sigma):
+
+            w_{t+1} = F w_t + eps_t,    F = rho I,   eps_t ~ N(0, Q),
+
+        where Q solves the discrete-time Lyapunov equation
+
+            Sigma = F Sigma F^T + Q.
+
+        Since the marginal at every t is N(0, Sigma) and Sigma is in the ball,
+        this trajectory belongs to W_cor.
+        """
+        Sigma = self._spd_correction(Sigma)
+        n = Sigma.shape[0]
+        F = rho * np.eye(n)
+        Q = self._sym(Sigma - F @ Sigma @ F.T)
+        Q = self._spd_correction(Q)
+
+        LQ = cholesky(Q)
+        Ls = cholesky(Sigma)
+
+        w = np.zeros((T, n))
+        # initialize in the stationary distribution
+        w[0] = self.rng.standard_normal(n) @ Ls.T
+        for t in range(T - 1):
+            eps = self.rng.standard_normal(n) @ LQ.T
+            w[t + 1] = F @ w[t] + eps
+
+        return w
+
+    # -------------------------------------------------------------------------
+    #  NEW: estimate gamma (radius) and Pw
+    # -------------------------------------------------------------------------
+
+    def estm_Sigma_nom(self, w: np.ndarray, unbiased: bool = True) -> np.ndarray:
+        """
+        Estimate Sigma_nom from disturbance data w (T, n).
+
+        This uses the empirical covariance of (w - mean(w)), consistent with
+        Sigma_nom := ∫ v v^T dP_nom(v) for a zero-mean nominal distribution.
+
+        Returns the estimate and updates self.Sigma_nom, self.mu_nom.
+        """
+        w = np.asarray(w, float)
+        _, S_hat = self.empirical_mean_and_cov(w, unbiased=unbiased)
+
+        #self.Sigma_nom = S_hat
+        self.mu_nom = np.zeros(self.n)
+        self.Sigma_estm = S_hat
+        return S_hat
+
+    def estimate_gamma_with_ci(self,
+                                w: np.ndarray,
+                                include_mean: bool = False,
+                                unbiased: bool = True,
+                                set_internal: bool = True) -> float:
+        """
+        Estimate the Wasserstein radius gamma from disturbance samples w (T, n),
+        assuming that (mu_nom, Sigma_nom) have ALREADY been set, e.g. via
+        estm_Sigma_nom(w_nom) on some (possibly different) data.
+
+        This uses a simple plug-in estimator:
+            gamma_hat = W_2( N(mu_hat, Sigma_hat), N(mu_nom, Sigma_nom) ).
+
+        Parameters
+        ----------
+        w : array (T, n)
+            Disturbance time series from the 'true' Pw.
+        include_mean : bool
+            If True, include the mean shift in W_2, otherwise assume both zero-mean.
+        unbiased : bool
+            Use 1/(T-1) vs 1/T for covariance.
+        set_internal : bool
+            If True, store gamma_hat in self.gamma.
+
+        Returns
+        -------
+        gamma_hat : float
+        """
+        w = np.asarray(w, float)
+        T, n = w.shape
+        if n != self.n: 
+            Sigma_nom = self.var * np.eye(n)
+        else:
+            Sigma_nom = self.Sigma_nom
+
+        if self.Sigma_estm is None: self.estm_Sigma_nom(w)
+
+        if include_mean:
+            gamma_hat = self.w2_gaussian(self.mu_hat, self.Sigma_estm, self.mu_nom, Sigma_nom)
+        else:
+            gamma_hat = self.w2_gaussian_zero_mean(self.Sigma_estm, Sigma_nom)
+
+        if set_internal:
+            self.gamma = float(gamma_hat)
+
+        return float(gamma_hat), 
+
 # =====================================================================================
 
 class WassersteinAmbiguitySet:
@@ -461,6 +855,8 @@ class Disturbances:
             return WithoutNoise()
         if model == "Gaussian":
             return GaussianNoise(n=n, var=var)
+        if model == "2W":
+            return metric_2_Wasserstein(gamma=gamma, n=n, var=var)
         raise ValueError(f"Unknown ambiguity model: {model}")
 
     def __getattr__(self, name: str):
@@ -592,10 +988,12 @@ class Disturbances:
 # =====================================================================================
 
 if __name__ == "__main__":
-    model = "W2"
+    model = "2W"
+    n = 2 # None
+    var = 1
 
     # simple test
-    wass = Disturbances(model=model, gamma=0.5, n=2, var=1, ellipse=True)
+    wass = Disturbances(model=model, gamma=0.5, n=n, var=var, ellipse=True)
     print(f"{model} initialized: mode={wass.mode}, gamma={wass.gamma}, n={wass.Nw}")
     print(f" Nominal covariance Sigma_nom:\n{wass.Sigma_nom}")
     print(f" Test covariance Sigma_test:\n{wass.Sigma_test}")
@@ -604,13 +1002,13 @@ if __name__ == "__main__":
     # sample iid
     t = wass.time
     w = wass.sample()
-    print(f"Is within bounds? {wass.is_member_empirical(w)}")
+    #print(f"Is within bounds? {wass.is_member_empirical(w)}")
 
-
-    # distribution plots
-    stats = wass.plot_disturbance_distribution(w, bins=40, plot_pairs=True, save_path=None)
-    print("mu:", stats["mu"])
-    print("Sigma:\n", stats["Sigma"])
+    if n > 1:
+        # distribution plots
+        stats = wass.plot_disturbance_distribution(w, bins=40, plot_pairs=True, save_path=None)
+        print("mu:", stats["mu"])
+        print("Sigma:\n", stats["Sigma"])
           
     if 1:
         plt.figure()
