@@ -124,11 +124,12 @@ class metric_2_Wasserstein:
         p = cfg.get("params", {})
         set = p.get("ambiguity", {})
         sim = p.get("simulation", {})
-        Sigma_nom = np.array(set["Sigma_nom"], dtype=float) if n is None or var is None else var * np.eye(n)
+        self.var = float(set.get("var", 1)) if var is None else var
+
+        Sigma_nom = np.array(set["Sigma_nom"], dtype=float) if n is None else self.var * np.eye(n)
         gamma = float(set.get("gamma", 0.5)) if gamma is None else gamma
         Tf = sim.get("TotTime", 100)
         ts = sim.get("ts", 0.5)
-        self.var = float(set.get("var", 1)) if var is None else var
         
         mode = p.get("model", "independent")
 
@@ -357,7 +358,7 @@ class metric_2_Wasserstein:
         self.Sigma_estm = S_hat
         return S_hat
 
-    def estimate_gamma_with_ci(self,
+    def _estimate_gamma_with_ci(self,
                                 w: np.ndarray,
                                 include_mean: bool = False,
                                 unbiased: bool = True,
@@ -403,6 +404,28 @@ class metric_2_Wasserstein:
             self.gamma = float(gamma_hat)
 
         return float(gamma_hat), 
+
+    def estimate_gamma_with_ci(self, w, beta=0.1):
+        """
+        Heuristic data-driven W2 radius γ_N(β) for DRO.
+        w : (N, d) array of disturbance samples.
+        beta : confidence tail probability (e.g. 0.1 for 90%).
+        """
+        N, d = w.shape
+
+        # Scale estimates
+        m2 = np.mean(np.sum(w**2, axis=1))  # E[||w||^2]
+        s_w = np.sqrt(m2)                   # typical magnitude
+
+        # Dimension-dependent exponent alpha
+        alpha = max(d / 2.0, 2.0)
+
+        # Heuristic constants (you can tune these)
+        c0 = 5.0
+        C0 = 10.0
+
+        radius = c0 * s_w * ((np.log(C0 / beta) / N) ** (1.0 / alpha))
+        return float(radius),
 
 # =====================================================================================
 

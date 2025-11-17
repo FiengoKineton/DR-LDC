@@ -144,9 +144,10 @@ class lmi_pipeline_optim_problem():
         cl = Closed_Loop() 
 
         STABLE, i = False, 0
+        tot_time = 0
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
 
-        while not STABLE and i<=1:
+        while not STABLE and i<=5:
             t0 = time.perf_counter()
 
             # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
@@ -188,6 +189,7 @@ class lmi_pipeline_optim_problem():
 
             t1 = time.perf_counter()
             Time = t1 - t0
+            tot_time += Time
 
             if res.status not in ("optimal", "optimal_inaccurate"):
                 raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
@@ -206,7 +208,7 @@ class lmi_pipeline_optim_problem():
             
             eig = np.linalg.eigvals(Acl)
             rho = float(np.max(np.abs(eig)))
-            if rho < 1.05:
+            if rho < 1.00:
                 STABLE = True
             i += 1
 
@@ -248,7 +250,7 @@ class lmi_pipeline_optim_problem():
         sim_composite = cl.simulate_composite(Pcl=plant_cl, Sigma_w=Sigma_nom, gamma=gamma, init_cond=init_cond)
         out_composite = out + f"___closed_loop_composite.npz"
 
-        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
+        sim_cost = cl.simulate_Z_cost(Z=sim["Z"], plot=plot)
         self.final_cost = sim_cost["J"]
         print("\nFinal closed-loop cost J =", self.final_cost)
         out_cost = out + f"___closed_loop_run_cost.npz"
@@ -256,6 +258,7 @@ class lmi_pipeline_optim_problem():
 
         # JSON
         payload = {
+            "prob": "DDD" if FROM_DATA else "MBD",
             "meta": {
                 "model": model,
                 "solver": res.solver,
@@ -266,6 +269,8 @@ class lmi_pipeline_optim_problem():
                 "spectral_radius_Acl": rho,
                 "Z_cost": self.final_cost,
                 "Time_seconds": Time,
+                "attempt": i,
+                "Total_time": tot_time,
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
@@ -432,7 +437,6 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
     _runID = p.get("directories", {}).get("runID", "temp")
     _type = p.get("plant", {}).get("type", "explicit")
-    _model = p.get("model", "independent") if m == "W2" else m
     _upd = bool(p.get("upd", 0))
     _re_evaluate = bool(p.get("re_evaluate", 0)) if not ALL else False
     _method = p.get("method", "lmi")
@@ -442,6 +446,13 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _comp = bool(p.get("comp", 0)) if comp is None else comp
     _ts = p.get("simulation", {}).get("ts", 0.5)
     _init_cond = p.get("init_cond", "rand")
+
+    if m == "W2":
+        _model = p.get("model", "independent")
+    elif m == "2W":
+        _model = m + "_" + p.get("model", "independent")
+    else:
+        _model = m
 
     #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     if gamma is None or m != "W2":

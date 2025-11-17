@@ -419,7 +419,7 @@ def build_and_solve_dro_lmi_upd(
         data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
         x, x_next, u, y, z = data.get_data()
     else: 
-        op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=50)
+        op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=1)
         datasets = op.datasets
 
 
@@ -542,7 +542,7 @@ def build_and_solve_dro_lmi_upd(
             Sigma_w_hat = np.diag(sp)                       # so Bw_hat @ Sigma_w_hat @ Bw_hat.T = S (rank-nw approx)
 
             # If you prefer the literal half-split, uncomment:
-            # Bw_hat = Up @ np.diag(sp_sqrt)
+            #Bw_hat = Up @ np.diag(sp_sqrt)
             # Sigma_w_hat = np.eye(nw)
 
         elif mode == "known_cov":
@@ -633,12 +633,13 @@ def build_and_solve_dro_lmi_upd(
         nw = Bw.shape[1]
         w = _pseudo_inv(Bw) @ R
         d = Disturbances(n=nw)
-        Sigma_nom = d.estm_Sigma_nom(w)
+        Sigma_nom = d.estm_Sigma_nom(w.T)
         print(f"Estimated Sigma_nom:\n{Sigma_nom}")
         print(f"True Sigma_nom:\n{d.Sigma_test}")
 
-        gamma, *_ = d.estimate_gamma_with_ci(w)
-        print(f"Estimated disturbance dimension nw: {nw}, gamma: {gamma}")
+        gamma, *_ = d.estimate_gamma_with_ci(w.T)
+        gamma2, *_ = d._estimate_gamma_with_ci(w.T)
+        print(f"Estimated disturbance dimension nw: {nw}, gamma: {gamma}, gamma2: {gamma2}")
         print(f"True gamma: {d.gamma}")
 
         #Delta = cp.Variable((Ox.shape[0], Ox.shape[1]), name='Delta')
@@ -902,7 +903,7 @@ def build_and_solve_dro_lmi_upd(
             success_MOSEK = True
     except Exception as mosek_e:
         print(f"MOSEK error: {mosek_e}")
-        sys.exit(0)
+        #sys.exit(0)
 
     if not success_MOSEK: # and 0:
         """solver = "CVXOPT"
