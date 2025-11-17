@@ -1,5 +1,5 @@
 # main.py
-import json, argparse, yaml, sys, time
+import json, argparse, yaml, sys, time, psutil, os
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -147,8 +147,14 @@ class lmi_pipeline_optim_problem():
         tot_time = 0
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
 
+        self.proc = psutil.Process(os.getpid())
+        self.solve_stats = []
+
         while not STABLE and i<=5:
             t0 = time.perf_counter()
+            cpu0 = self.proc.cpu_times()
+            cpu0_total = cpu0.user + cpu0.system
+
 
             # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
             if not upd or not FROM_DATA:
@@ -188,7 +194,13 @@ class lmi_pipeline_optim_problem():
 
 
             t1 = time.perf_counter()
+            cpu1 = self.proc.cpu_times()
+            cpu1_total = cpu1.user + cpu1.system
+            d_cpu = cpu1_total - cpu0_total
+
+
             Time = t1 - t0
+            stress = d_cpu / Time if Time > 0 else 0.0
             tot_time += Time
 
             if res.status not in ("optimal", "optimal_inaccurate"):
@@ -255,6 +267,11 @@ class lmi_pipeline_optim_problem():
         print("\nFinal closed-loop cost J =", self.final_cost)
         out_cost = out + f"___closed_loop_run_cost.npz"
 
+        self.rho = rho
+        self.lamda = res.lambda_opt
+        self.Time = Time
+        self.attempt = i
+        self.stress = stress
 
         # JSON
         payload = {
@@ -271,6 +288,7 @@ class lmi_pipeline_optim_problem():
                 "Time_seconds": Time,
                 "attempt": i,
                 "Total_time": tot_time,
+                "stress": self.stress,
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
@@ -338,8 +356,16 @@ class lmi_pipeline_optim_problem():
         
         self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl, sim, Sigma_nom
 
-    def _return_final_cost(self):
-        return self.final_cost
+    def _return_final_infos(self):
+        infos = {
+            "J": self.final_cost,
+            "lamda": self.lamda,
+            "rho": self.rho,
+            "time": self.Time, 
+            "attempts": self.attempt,
+            "stress": self.stress,
+        }
+        return infos
 
     def plant_to_dict(self, P: Plant):
         return {
@@ -488,7 +514,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
 
         if COST:
-            return opt._return_final_cost()
+            return opt._return_final_infos()
         
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
@@ -515,6 +541,303 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
         # 4) Plot worst/best SNR bands
         an.plot_worst_best_lines()
+
+
+# ------------------------- Evaluation --------------------------------------------
+
+def MutipleRunsEvaluation(p, N: int = None):
+    N = 20 if N is None else N
+    model = p.get("model", "independent")
+    save = bool(p.get("save", False))
+    plot = bool(p.get("plot", False))
+    c_MBD, c_DDD = [], []
+    l_MBD, l_DDD = [], []
+    r_MBD, r_DDD = [], []
+    t_MBD, t_DDD = [], []
+    a_MBD, a_DDD = [], []
+    s_MBD, s_DDD = [], []
+
+    out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")
+    out = out / "MutipleRunsEvaluation"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / p.get("directories", {}).get("runID", "temp")
+    path.mkdir(parents=True, exist_ok=True)
+    mbd_file = path / "_MBD_runs.csv"
+    ddd_file = path / "_DDD_runs.csv"
+
+    NOT_FOUND = not (mbd_file.is_file() and ddd_file.is_file())
+
+
+    if bool(p.get("re_evaluate", 0)) or NOT_FOUND:
+        for i in range(N):
+            print("\n\n\n\n"
+                "==============================\n"
+                f"----- RUN {i+1}/{N} -----\n"
+                "==============================\n"
+                "\n\n\n\n")
+            try:
+                infos_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
+                c_mbd = infos_mbd["J"]
+                l_mbd = infos_mbd["lamda"]
+                r_mbd = infos_mbd["rho"]
+                t_mbd = infos_mbd["time"]
+                a_mbd = infos_mbd["attempts"]
+                s_mbd = infos_mbd["stress"]
+
+                c_MBD.append(c_mbd)
+                l_MBD.append(l_mbd)
+                r_MBD.append(r_mbd)
+                t_MBD.append(t_mbd)
+                a_MBD.append(a_mbd)
+                s_MBD.append(s_mbd)
+            except Exception as e:
+                print(f"Error occurred in MBD run {i+1}: {e}")
+
+            try:
+                infos_ddd = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
+                c_ddd = infos_ddd["J"]
+                l_ddd = infos_ddd["lamda"]
+                r_ddd = infos_ddd["rho"]
+                t_ddd = infos_ddd["time"]
+                a_ddd = infos_ddd["attempts"]
+                s_ddd = infos_ddd["stress"]
+
+                c_DDD.append(c_ddd)
+                l_DDD.append(l_ddd)
+                r_DDD.append(r_ddd)
+                t_DDD.append(t_ddd)
+                a_DDD.append(a_ddd)
+                s_DDD.append(s_ddd)
+            except Exception as e:
+                print(f"Error occurred in DDD run {i+1}: {e}")
+
+        print("\n\n===== COST STATISTICS OVER ALL RUNS =====")
+        c_MBD = np.array(c_MBD, dtype=float)
+        c_DDD = np.array(c_DDD, dtype=float)
+        l_MBD = np.array(l_MBD, dtype=float)
+        l_DDD = np.array(l_DDD, dtype=float)
+        r_MBD = np.array(r_MBD, dtype=float)
+        r_DDD = np.array(r_DDD, dtype=float)
+        t_MBD = np.array(t_MBD, dtype=float)
+        t_DDD = np.array(t_DDD, dtype=float)
+        a_MBD = np.array(a_MBD, dtype=float)
+        a_DDD = np.array(a_DDD, dtype=float)
+        s_MBD = np.array(s_MBD, dtype=float)
+        s_DDD = np.array(s_DDD, dtype=float)
+
+        # ------------------------------------------------------------------
+        # SAVE TO CSV (one file for MBD, one for DDD)
+        # ------------------------------------------------------------------
+
+        # In case some runs failed on one side, truncate to common length
+        n_mbd = len(c_MBD)
+        n_ddd = len(c_DDD)
+        n_common_mbd = min(n_mbd, len(l_MBD), len(r_MBD), len(t_MBD), len(a_MBD), len(s_MBD))
+        n_common_ddd = min(n_ddd, len(l_DDD), len(r_DDD), len(t_DDD), len(a_DDD), len(s_DDD))
+
+        # MBD table: [run, J, lambda, rho, time, attempts, stress]
+        mbd_data = np.column_stack([
+            np.arange(n_common_mbd),
+            c_MBD[:n_common_mbd],
+            l_MBD[:n_common_mbd],
+            r_MBD[:n_common_mbd],
+            t_MBD[:n_common_mbd],
+            a_MBD[:n_common_mbd],
+            s_MBD[:n_common_mbd],
+        ])
+
+        # DDD table
+        ddd_data = np.column_stack([
+            np.arange(n_common_ddd),
+            c_DDD[:n_common_ddd],
+            l_DDD[:n_common_ddd],
+            r_DDD[:n_common_ddd],
+            t_DDD[:n_common_ddd],
+            a_DDD[:n_common_ddd],
+            s_DDD[:n_common_ddd],
+        ])
+
+        np.savetxt(
+            mbd_file,
+            mbd_data,
+            delimiter=",",
+            header="run,J,lambda,rho,time,attempts,stress",
+            comments=""
+        )
+
+        np.savetxt(
+            ddd_file,
+            ddd_data,
+            delimiter=",",
+            header="run,J,lambda,rho,time,attempts,stress",
+            comments=""
+        )
+
+    else:
+        # load, skip header row
+        mbd_data = np.loadtxt(mbd_file, delimiter=",", skiprows=1)
+        ddd_data = np.loadtxt(ddd_file, delimiter=",", skiprows=1)
+
+        # robustify: if only 1 row, loadtxt returns 1D
+        mbd_data = np.atleast_2d(mbd_data)
+        ddd_data = np.atleast_2d(ddd_data)
+
+        # columns: run,J,lambda,rho,time,attempts,stress
+        runs_MBD = mbd_data[:, 0]
+        c_MBD    = mbd_data[:, 1]
+        l_MBD    = mbd_data[:, 2]
+        r_MBD    = mbd_data[:, 3]
+        t_MBD    = mbd_data[:, 4]
+        a_MBD    = mbd_data[:, 5]
+        s_MBD    = mbd_data[:, 6]
+
+        runs_DDD = ddd_data[:, 0]
+        c_DDD    = ddd_data[:, 1]
+        l_DDD    = ddd_data[:, 2]
+        r_DDD    = ddd_data[:, 3]
+        t_DDD    = ddd_data[:, 4]
+        a_DDD    = ddd_data[:, 5]
+        s_DDD    = ddd_data[:, 6]
+
+    def analyze_and_plot_metric(
+        y_MBD,
+        y_DDD,
+        metric_name: str,
+        model: str,
+        path: Path,
+        save: bool,
+        N_runs: int | None = None,
+    ):
+        """
+        y_MBD, y_DDD : 1D arrays (list or np.ndarray)
+            Values of the metric for each run.
+        metric_name  : str
+            Used in labels / titles / filenames, e.g. "cost", "lambda", "rho", "time", "attempts", "stress".
+        model        : str
+            Model name for titles / filenames, e.g. "independent", "correlated".
+        path         : Path
+            Base directory where to save artifacts.
+        save         : bool
+            If True, save figures and CSV.
+        N_runs       : int or None
+            Total planned runs, for labeling / padding. If None, use max(len(MBD), len(DDD)).
+        """
+
+        y_MBD = np.asarray(y_MBD, dtype=float)
+        y_DDD = np.asarray(y_DDD, dtype=float)
+
+        # ----- basic stats (ignoring NaNs if present) -----
+        mu_mbd = float(np.nanmean(y_MBD))
+        sd_mbd = float(np.nanstd(y_MBD, ddof=1))
+        mu_ddd = float(np.nanmean(y_DDD))
+        sd_ddd = float(np.nanstd(y_DDD, ddof=1))
+
+        print(f"[{metric_name}] MBD: mean={mu_mbd:.6g}, std={sd_mbd:.6g}")
+        print(f"[{metric_name}] DDD: mean={mu_ddd:.6g}, std={sd_ddd:.6g}")
+
+        mbd_label = rf"MBD  ($\mu$={mu_mbd:.3g}, $\sigma$={sd_mbd:.3g})"
+        ddd_label = rf"DDD  ($\mu$={mu_ddd:.3g}, $\sigma$={sd_ddd:.3g})"
+
+        labels = ["MBD", "DDD"]
+
+        # =========================
+        # 1) scatter + mean lines
+        # =========================
+        fig2, ax2 = plt.subplots(figsize=(7, 4))
+        ax2.scatter(np.zeros_like(y_MBD), y_MBD, alpha=0.6, label="MBD", color="blue")
+        ax2.scatter(np.ones_like(y_DDD),  y_DDD, alpha=0.6, label="DDD", color="orange")
+        ax2.hlines(mu_mbd, -0.2, 0.2)
+        ax2.hlines(mu_ddd,  0.8, 1.2)
+        ax2.set_xticks([0, 1], labels)
+        ax2.set_ylabel(metric_name.capitalize())
+        ax2.set_title(f"Per-run {metric_name} over runs ({model})")
+        ax2.grid(True, axis="y", alpha=0.3)
+
+        handles = [
+            Line2D([0], [0], marker='o', linestyle='None', label=mbd_label, color="blue"),
+            Line2D([0], [0], marker='o', linestyle='None', label=ddd_label, color="orange"),
+        ]
+        ax2.legend(handles=handles, title=f"{metric_name.capitalize()} stats", loc="best",
+                frameon=True, framealpha=0.9)
+        fig2.tight_layout()
+
+        # =========================
+        # 2) time-like overlay
+        # =========================
+
+        # Align on common index
+        t_max = min(len(y_MBD), len(y_DDD))
+        t = np.arange(1, t_max + 1, dtype=int)
+
+        y_mbd = y_MBD[:t_max]
+        y_ddd = y_DDD[:t_max]
+
+        finite = np.isfinite(y_mbd) & np.isfinite(y_ddd)
+        better = (y_ddd < y_mbd) & finite   # DDD better (green)
+        worse  = (~better) & finite         # MBD better or equal (red)
+
+        fig4, ax4 = plt.subplots(figsize=(9, 4.8))
+
+        ax4.plot(t, y_mbd, marker="o", linewidth=1.5, alpha=0.9, label="MBD")
+        ax4.plot(t, y_ddd, marker="s", linewidth=1.5, alpha=0.9, label="DDD")
+
+        ax4.fill_between(t, y_mbd, y_ddd, where=better, interpolate=True,
+                        color="green", alpha=0.12)
+        ax4.fill_between(t, y_mbd, y_ddd, where=worse, interpolate=True,
+                        color="red", alpha=0.12)
+
+        ax4.set_xlabel("Run")
+        ax4.set_ylabel(metric_name.capitalize())
+        ax4.set_title(f"Per-run {metric_name} comparison with conditional shading ({model})")
+        ax4.grid(True, alpha=0.3)
+
+        handles, leg_labels = ax4.get_legend_handles_labels()
+        handles += [
+            mpatches.Patch(color="green", alpha=0.12, label="DDD < MBD"),
+            mpatches.Patch(color="red",   alpha=0.12, label="DDD ≥ MBD"),
+        ]
+        leg_labels += ["DDD < MBD", "DDD ≥ MBD"]
+
+        ax4.legend(handles, leg_labels, loc="best")
+        fig4.tight_layout()
+
+        # =========================
+        # 3) CSV save
+        # =========================
+        if save:
+            path.mkdir(parents=True, exist_ok=True)
+
+            fig2.savefig(path / f"{model}_{metric_name}_runs_scatter.pdf")
+            fig4.savefig(path / f"{model}_{metric_name}_runs_timeseries_overlay_shaded.pdf")
+
+            if N_runs is None:
+                N_runs = max(len(y_MBD), len(y_DDD))
+            runs = np.arange(1, N_runs + 1)
+
+            def pad(a, n):
+                out = np.full(n, np.nan, dtype=float)
+                out[:len(a)] = a
+                return out
+
+            df = pd.DataFrame({
+                "run": runs,
+                f"{metric_name}_MBD": pad(y_MBD, N_runs),
+                f"{metric_name}_DDD": pad(y_DDD, N_runs),
+            })
+
+            csv_path = path / f"{model}_per_run_{metric_name}.csv"
+            df.to_csv(csv_path, index=False)
+            print(f"Saved per-run {metric_name} to {csv_path}")
+
+        if plot: 
+            plt.show()
+
+    analyze_and_plot_metric(c_MBD, c_DDD, "cost",    model, path, save, N_runs=N)
+    analyze_and_plot_metric(l_MBD, l_DDD, "lambda",  model, path, save, N_runs=N)
+    analyze_and_plot_metric(r_MBD, r_DDD, "rho",     model, path, save, N_runs=N)
+    analyze_and_plot_metric(t_MBD, t_DDD, "time",    model, path, save, N_runs=N)
+    analyze_and_plot_metric(a_MBD, a_DDD, "attempts",model, path, save, N_runs=N)
+    analyze_and_plot_metric(s_MBD, s_DDD, "stress",  model, path, save, N_runs=N)
 
 
 # ----------------------------------------------------------------------------------
@@ -557,158 +880,5 @@ if __name__ == "__main__":
         else:
             main(gamma=gamma)
     else: 
-        N = 20
-        model = p.get("model", "independent")
-        save = p.get("save", False)
-        c_MBD, c_DDD = [], []
-
-        for i in range(N):
-            print("\n\n\n\n"
-                  "==============================\n"
-                  f"----- RUN {i+1}/{N} -----\n"
-                  "==============================\n"
-                  "\n\n\n\n")
-            try:
-                c_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
-                c_MBD.append(c_mbd)
-            except Exception as e:
-                print(f"Error occurred in MBD run {i+1}: {e}")
-
-            try:
-                c_ddd = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
-                c_DDD.append(c_ddd)
-            except Exception as e:
-                print(f"Error occurred in DDD run {i+1}: {e}")
-
-        print("\n\n===== COST STATISTICS OVER ALL RUNS =====")
-        c_MBD = np.array(c_MBD, dtype=float)
-        c_DDD = np.array(c_DDD, dtype=float)
-
-        try:
-            base_dir = Path(__file__).resolve().parent
-        except NameError:
-            base_dir = Path.cwd()
-
-        out_dir = base_dir / "out/utils"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        # Stats
-        mu_mbd, sd_mbd = float(np.mean(c_MBD)), float(np.std(c_MBD, ddof=1))
-        mu_ddd, sd_ddd = float(np.mean(c_DDD)), float(np.std(c_DDD, ddof=1))
-        print(f"MBD: mean={mu_mbd:.6g}, std={sd_mbd:.6g}")
-        print(f"DDD: mean={mu_ddd:.6g}, std={sd_ddd:.6g}")
-        mbd_label = rf"MBD  ($\mu$={mu_mbd:.3g}, $\sigma$={sd_mbd:.3g})"
-        ddd_label = rf"DDD  ($\mu$={mu_ddd:.3g}, $\sigma$={sd_ddd:.3g})"
-
-        # 1) Bar-with-errorbars
-        labels = ["MBD", "DDD"]
-        means = [mu_mbd, mu_ddd]
-        stds  = [sd_mbd, sd_ddd]
-
-        fig1, ax1 = plt.subplots(figsize=(6,4))
-        x = np.arange(len(labels))
-        ax1.bar(x, means, yerr=stds, capsize=6)
-        ax1.set_xticks(x, labels)
-        ax1.set_ylabel("Cost")
-        ax1.set_title("Mean ± 1 SD over N runs")
-        ax1.grid(True, axis="y", alpha=0.3)
-        fig1.tight_layout()
-
-        # 2) Scatter of all runs + mean lines
-        fig2, ax2 = plt.subplots(figsize=(7,4))
-        ax2.scatter(np.zeros_like(c_MBD), c_MBD, alpha=0.6, label="MBD", color="blue")
-        ax2.scatter(np.ones_like(c_DDD),  c_DDD, alpha=0.6, label="DDD", color="orange")
-        ax2.hlines(mu_mbd, -0.2, 0.2)
-        ax2.hlines(mu_ddd,  0.8, 1.2)
-        ax2.set_xticks([0,1], labels)
-        ax2.set_ylabel("Cost")
-        ax2.set_title(f"Per-run Costs over {N} runs ({model})")
-        ax2.grid(True, axis="y", alpha=0.3)
-        handles = [
-            Line2D([0], [0], marker='o', linestyle='None', label=mbd_label, color="blue"),
-            Line2D([0], [0], marker='o', linestyle='None', label=ddd_label, color="orange"),
-        ]
-        ax2.legend(handles=handles, title="Per-run cost stats", loc="best", frameon=True, framealpha=0.9)
-        fig2.tight_layout()
-
-        # 3) Mean with whiskers
-        fig3, ax3 = plt.subplots(figsize=(6,4))
-        for i, (name, arr, mu, sd) in enumerate([("MBD", c_MBD, mu_mbd, sd_mbd),
-                                                ("DDD", c_DDD, mu_ddd, sd_ddd)]):
-            ax3.errorbar(i, mu, yerr=sd, fmt="o", capsize=6)
-            ax3.vlines(i, mu - sd, mu + sd)
-
-        ax3.set_xticks([0,1], ["MBD","DDD"])
-        ax3.set_ylabel("Cost")
-        ax3.set_title(f"Mean with ±1 SD whiskers ({model})")
-        ax3.grid(True, axis="y", alpha=0.3)
-        fig3.tight_layout()
-
-
-        # Align on common index
-        t_max = min(len(c_MBD), len(c_DDD))
-        t = np.arange(1, t_max + 1, dtype=int)
-
-        y_mbd = np.asarray(c_MBD[:t_max], dtype=float)
-        y_ddd = np.asarray(c_DDD[:t_max], dtype=float)
-
-        # Finite mask to ignore NaNs/Infs in shading
-        finite = np.isfinite(y_mbd) & np.isfinite(y_ddd)
-
-        # Who's smaller (green when DDD < MBD, else red)
-        better = (y_ddd < y_mbd) & finite         # green mask
-        worse  = (~better) & finite                # red mask
-
-        # Plot
-        fig4, ax4 = plt.subplots(figsize=(9,4.8))
-
-        ax4.plot(t, y_mbd, marker="o", linewidth=1.5, alpha=0.9, label="MBD")
-        ax4.plot(t, y_ddd, marker="s", linewidth=1.5, alpha=0.9, label="DDD")
-
-        # Light conditional shading between curves
-        ax4.fill_between(t, y_mbd, y_ddd, where=better, interpolate=True, color="green", alpha=0.12)
-        ax4.fill_between(t, y_mbd, y_ddd, where=worse,  interpolate=True, color="red",   alpha=0.12)
-
-        # Cosmetics
-        ax4.set_xlabel("Run")
-        ax4.set_ylabel("Cost")
-        ax4.set_title(f"Per-run cost comparison with conditional shading ({model})")
-        ax4.grid(True, alpha=0.3)
-
-        # Legend (include shading meaning without duplicating)
-        handles, labels = ax4.get_legend_handles_labels()
-        handles += [
-            mpatches.Patch(color="green", alpha=0.12, label="DDD < MBD"),
-            mpatches.Patch(color="red",   alpha=0.12, label="DDD ≥ MBD"),
-        ]
-        labels += ["DDD < MBD", "DDD ≥ MBD"]
-        ax4.legend(handles, labels, loc="best")
-
-        fig4.tight_layout()
-
-        # Save
-        if save:
-            fig1.savefig(out_dir / f"{model}_cost_mean_std_bar.pdf")
-            fig2.savefig(out_dir / f"{model}_cost_runs_scatter.pdf")
-            fig3.savefig(out_dir / f"{model}_cost_mean_whiskers.pdf")
-            fig4.savefig(out_dir / f"{model}_cost_runs_timeseries_overlay_shaded.pdf")
-
-            N = max(len(c_MBD), len(c_DDD))
-            runs = np.arange(1, N + 1)
-            def pad(a, n):
-                out = np.full(n, np.nan, dtype=float)
-                out[:len(a)] = a
-                return out
-
-            df = pd.DataFrame({
-                "run": runs,
-                "c_MBD": pad(c_MBD, N),
-                "c_DDD": pad(c_DDD, N),
-            })
-
-            csv_path = out_dir / f"{model}_per_run_costs.csv"
-            df.to_csv(csv_path, index=False)
-            print(f"Saved per-run costs to {csv_path}")
-
-
-        plt.show()
+        MutipleRunsEvaluation(p, N=15)
+ 

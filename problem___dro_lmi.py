@@ -32,7 +32,7 @@ def build_and_solve_dro_lmi(
 
     Sigma_nom, gamma, var = noise.Sigma_nom, noise.gamma, noise.var
     d = Disturbances(n=nw)
-    Sigma_nom = d.Sigma_test        # VERIFY
+    #Sigma_nom = d.Sigma_test        # VERIFY
 
     Bw, Dzw, Dyw, nw, Sigma_nom = api._augment_matrices(B_w=Bw, D_vw=Dzw, D_yw=Dyw, var=var, Sigma_nom=Sigma_nom)
 
@@ -633,11 +633,11 @@ def build_and_solve_dro_lmi_upd(
         nw = Bw.shape[1]
         w = _pseudo_inv(Bw) @ R
         d = Disturbances(n=nw)
-        Sigma_nom = d.estm_Sigma_nom(w.T)
+        Sigma_nom = var * np.eye(nw) #d.estm_Sigma_nom(w.T)
         print(f"Estimated Sigma_nom:\n{Sigma_nom}")
         print(f"True Sigma_nom:\n{d.Sigma_test}")
 
-        gamma, *_ = d.estimate_gamma_with_ci(w.T)
+        #gamma, *_ = d.estimate_gamma_with_ci(w.T)
         gamma2, *_ = d._estimate_gamma_with_ci(w.T)
         print(f"Estimated disturbance dimension nw: {nw}, gamma: {gamma}, gamma2: {gamma2}")
         print(f"True gamma: {d.gamma}")
