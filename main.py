@@ -543,6 +543,29 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         an.plot_worst_best_lines()
 
 
+def select_gamma(p):
+    if not bool(p.get("ambiguity", {}).get("fixGamma", False)):     # set fixGamma: 0
+        if p.get("method", "lmi") == "lmi":                         # ------|set method: "lmi"
+            if p.get("model", "correlated") == "correlated":        # ------|------| set model: "correlated"
+                if bool(p.get("ident", {}).get("stabilise", True)): # ------|------|-------| set stabilise: true
+                    if bool(p.get("use_set_out_mats", False)):      # ------|------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats&Stabilise
+                        gamma = 0.41640786499873816
+                    else:                                           # ------|------|-------|-------| set use_set_out_mats: false           | runID: Opt&Stabilise
+                        gamma = 0.6180339887498949
+                else:                                               # ------|------|-------| set stabilise: false
+                    if bool(p.get("use_set_out_mats", False)):      # ------|------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats
+                        gamma = 0.06888370749726605
+                    else:                                           # ------|------|-------|-------| set use_set_out_mats: false           | runID: Opt
+                        gamma = 0.9016994374947425
+            else:                                                   # ------|------| set model: "independent"
+                gamma = p.get("ambiguity", {}).get("gamma", 0.5)
+        else:
+            gamma = p.get("ambiguity", {}).get("gamma", 0.5)
+    else:                                                           # set fixGamma: 1
+        gamma = p.get("ambiguity", {}).get("gamma", 0.5)
+    
+    return gamma
+
 # ------------------------- Evaluation --------------------------------------------
 
 def MutipleRunsEvaluation(p, N: int = None):
@@ -569,6 +592,9 @@ def MutipleRunsEvaluation(p, N: int = None):
 
 
     if bool(p.get("re_evaluate", 0)) or NOT_FOUND:
+        K_RECENT = 5
+        unstable_hit = False
+
         for i in range(N):
             print("\n\n\n\n"
                 "==============================\n"
@@ -608,8 +634,22 @@ def MutipleRunsEvaluation(p, N: int = None):
                 t_DDD.append(t_ddd)
                 a_DDD.append(a_ddd)
                 s_DDD.append(s_ddd)
+
+                # ---------- NEW: check last K rho_DDD ----------
+                if len(r_DDD) >= K_RECENT:
+                    recent_rho = np.array(r_DDD[-K_RECENT:], dtype=float)
+                    if np.all(recent_rho >= 1.0):
+                        print(
+                            f"[WARN] Last {K_RECENT} DDD rho values are >= 1.0; "
+                            f"recent_rho = {recent_rho}. Stopping further runs."
+                        )
+                        unstable_hit = True
+                        break
+
             except Exception as e:
                 print(f"Error occurred in DDD run {i+1}: {e}")
+
+        print(f"Completed {len(c_MBD)} MBD runs, {len(c_DDD)} DDD runs. unstable_hit={unstable_hit}")
 
         print("\n\n===== COST STATISTICS OVER ALL RUNS =====")
         c_MBD = np.array(c_MBD, dtype=float)
@@ -849,26 +889,7 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
-    if not bool(p.get("ambiguity", {}).get("fixGamma", False)):     # set fixGamma: 0
-        if p.get("method", "lmi") == "lmi":                         # ------|set method: "lmi"
-            if p.get("model", "correlated") == "correlated":        # ------|------| set model: "correlated"
-                if bool(p.get("ident", {}).get("stabilise", True)): # ------|------|-------| set stabilise: true
-                    if bool(p.get("use_set_out_mats", False)):      # ------|------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats&Stabilise
-                        gamma = 0.41640786499873816
-                    else:                                           # ------|------|-------|-------| set use_set_out_mats: false           | runID: Opt&Stabilise
-                        gamma = 0.6180339887498949
-                else:                                               # ------|------|-------| set stabilise: false
-                    if bool(p.get("use_set_out_mats", False)):      # ------|------|-------|-------| set use_set_out_mats: true            | runID: Opt&SetOutMats
-                        gamma = 0.06888370749726605
-                    else:                                           # ------|------|-------|-------| set use_set_out_mats: false           | runID: Opt
-                        gamma = 0.9016994374947425
-            else:                                                   # ------|------| set model: "independent"
-                gamma = p.get("ambiguity", {}).get("gamma", 0.5)
-        else:
-            gamma = p.get("ambiguity", {}).get("gamma", 0.5)
-    else:                                                           # set fixGamma: 1
-        gamma = p.get("ambiguity", {}).get("gamma", 0.5)
-
+    gamma = select_gamma(p)
 
     COST = bool(p.get("COST", 0))
     if not COST:

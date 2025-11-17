@@ -160,7 +160,7 @@ def build_and_solve_dro_lmi(
     else:
         raise ValueError("model must be 'correlated' or 'independent'.")
 
-    cons += [Q >> 0]
+    #cons += [Q >> 0]
     obj = cp.Minimize(cp.trace(Q @ Sigma_nom) + lam * (gamma ** 2) + reg)
     prob = cp.Problem(obj, cons)
 
@@ -702,6 +702,7 @@ def build_and_solve_dro_lmi_upd(
     # Constraints ---------------------
     cons = []
     cons += [lam >= 0]
+    cons += [Q >> 0]
     if model.lower() in ["correlated", "corr", "1"]:    cons += [P >> 0]
     else:                                               cons += [P >> eps * I(2*nx)]
 
