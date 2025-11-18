@@ -12,7 +12,7 @@ class DRO:
                  vals: tuple, model: str,
                  api: MatricesAPI, noise: Noise, 
                  rho: float = 1e-3, eps: float = 1e-6, 
-                 Bw_mode: str = "known_cov", real_perf_mats: bool = False, augmented: bool = True, 
+                 Bw_mode: str = "known_cov", real_perf_mats: bool = False, 
                  aug_mode: str = "std", eval_from_ol: bool = True,
                  reg_fro: bool = False, reg_beta: bool = True,
                  ):
@@ -21,9 +21,10 @@ class DRO:
         self.eps, self.rho = eps, rho
         self.model, self.Bw_mode, self.vals = model, Bw_mode, vals
         self.real_perf_mats, self.augmented, self.aug_mode, self.eval_from_ol \
-              = real_perf_mats, augmented, aug_mode, eval_from_ol
+              = real_perf_mats, vals[3], aug_mode, eval_from_ol
         self.gamma, self.var, self.Sigma_nom = noise.gamma, noise.var, noise.Sigma_nom
-        self.reg_fro, self.reg_beta = reg_fro, reg_beta
+        self.reg_fro, self.reg_beta, self.reg_vect = reg_fro, reg_beta, vals[2]
+        self.inp = vals[4]
 
 
 
@@ -40,7 +41,7 @@ class DRO:
         self.solve_prb()    # -> MOSEK/SCS solver
         self.pack_outs()    # -> builds self.outs & self.others
 
-        return self.outs, (self.get_mats()), self.Sigma_nom, self.others
+        return self.outs, (self.get_mats()), self.Sigma_nom, self.others, self.violations
 
 
     # ============================================================================ #
@@ -377,50 +378,87 @@ class DRO:
         cons = []
         lam, Q, P = self.get_vars(which="main")
 
-        cons += [lam >= 0]
-        cons += [self._posdef(Q, which="strict")]
+        #cons += [lam >= 0]
+        #cons += [self._posdef(Q, which="strict")]
         cons += [self._posdef(P)]
 
         A, B, C, D = self.get_vars(which="mats")
         nx, nu, nw, _, nz = self.get_dims()
 
         if self.reg_beta: 
-            U_A, _, w_A = self._residual_anisotropy_weights
-            w_A = np.maximum(w_A, self.eps)
-            w_B = np.mean(w_A)
+            U_vect, _, w_vect = self._residual_anisotropy_weights
+            w_vect = np.maximum(w_vect, self.eps)
+            w_np = np.mean(w_vect)
 
             self.beta_a = self.beta * np.sqrt(nx/(nx+nu))
-            beta_A_dir_np = np.asarray(self.beta_a * w_A, dtype=float)
-            S_A_base = np.hstack([self._I(nx), self._Z(nx, nx)]).T
-            S_A  = S_A_base @ U_A 
-            self.tau_A = cp.Variable(nx, nonneg=True, name="tau_a_vec")
-            self.s_A = cp.Variable(nx, nonneg=True, name="s_a_vec")
-            self.beta_A = cp.Parameter(nx, nonneg=True, value=beta_A_dir_np)
-
-            for i in range(nx):
-                block_i = cp.bmat([[self.s_A[i],     self.beta_A[i]], 
-                                  [self.beta_A[i],   self.tau_A[i]]])
-                
-                cons += [self.s_A[i] >= self.eps, self.tau_A[i] <= 1e3]
-                cons += [self._posdef(block_i, which="relaxed")]
-            
-
             self.beta_b = self.beta * np.sqrt(nu/(nx+nu))
-            beta_B_np = w_B * self.beta_b
-            S_B = S_A_base
-            self.tau_B = cp.Variable(nonneg=True, name="tau_ab")
-            self.s_B = cp.Variable(nonneg=True, name="s_ab")
-            self.beta_B = cp.Parameter(nonneg=True, value=float(np.clip(beta_B_np, 0.0, 1e3)))
+            S_base = np.hstack([self._I(nx), self._Z(nx, nx)]).T
 
-            block_b = cp.bmat([[self.s_B, self.beta_B], 
-                               [self.beta_B, self.tau_B]])
+            if self.reg_vect:
+                beta_A_dir_np = np.asarray(self.beta_a * w_vect, dtype=float)
+                S_A  = S_base @ U_vect 
+                self.tau_A = cp.Variable(nx, nonneg=True, name="tau_a_vec")
+                self.s_A = cp.Variable(nx, nonneg=True, name="s_a_vec")
+                self.beta_A = cp.Parameter(nx, nonneg=True, value=beta_A_dir_np)
+
+                for i in range(nx):
+                    block_i = cp.bmat([[self.s_A[i],     self.beta_A[i]], 
+                                    [self.beta_A[i],   self.tau_A[i]]])
+                    
+                    #cons += [self.s_A[i] >= self.eps, self.tau_A[i] <= 1e3]
+                    cons += [self._posdef(block_i, which="relaxed")]
+
+                young_blk_A = -cp.diag(self.s_A)
+
+
+                #"""
+                beta_B_dir_np = np.asarray(self.beta_b * w_vect, dtype=float)
+                S_B  = S_base @ U_vect 
+                self.tau_B = cp.Variable(nx, nonneg=True, name="tau_b_vec")
+                self.s_B = cp.Variable(nx, nonneg=True, name="s_b_vec")
+                self.beta_B = cp.Parameter(nx, nonneg=True, value=beta_B_dir_np)
+
+                for i in range(nx):
+                    block_i = cp.bmat([[self.s_B[i],     self.beta_B[i]], 
+                                    [self.beta_B[i],   self.tau_B[i]]])
+                    
+                    #cons += [self.s_B[i] >= self.eps, self.tau_B[i] <= 1e3]
+                    cons += [self._posdef(block_i, which="relaxed")]
+
+                young_blk_B = -cp.diag(self.s_B)    #"""
+
+            else: 
+                cons += [self._posdef(Q, which="relaxed")]
+
+                beta_A_np = w_np * self.beta_a
+                S_A = S_base
+                self.tau_A = cp.Variable(nonneg=True, name="tau_ab")
+                self.s_A = cp.Variable(nonneg=True, name="s_ab")
+                self.beta_A = cp.Parameter(nonneg=True, value=float(np.clip(beta_A_np, 0.0, 1e3)))
+
+                block_a = cp.bmat([[self.s_A, self.beta_A], 
+                                [self.beta_A, self.tau_A]])
+                
+                #cons += [self.s_A >= self.eps, self.tau_A <= 1e3]
+                cons += [self._posdef(block_a, which="strict")]
+                young_blk_A = -self.s_A * self._I(nx)
             
-            cons += [self.s_B >= self.eps, self.tau_B <= 1e3]
-            cons += [self._posdef(block_b, which="relaxed")]
+
+                beta_B_np = w_np * self.beta_b
+                S_B = S_base
+                self.tau_B = cp.Variable(nonneg=True, name="tau_ab")
+                self.s_B = cp.Variable(nonneg=True, name="s_ab")
+                self.beta_B = cp.Parameter(nonneg=True, value=float(np.clip(beta_B_np, 0.0, 1e3)))
+
+                block_b = cp.bmat([[self.s_B, self.beta_B], 
+                                [self.beta_B, self.tau_B]])
+                
+                #cons += [self.s_B >= self.eps, self.tau_B <= 1e3]
+                cons += [self._posdef(block_b, which="strict")]
+                young_blk_B = -self.s_B * self._I(nx)
 
 
-            state_blk = -P + (cp.sum(self.tau_A) + self.tau_B) * self._I(2*nx)
-            young_blk = -cp.diag(self.s_A)
+            state_blk = -P + (cp.sum(self.tau_A) + cp.sum(self.tau_B)) * self._I(2*nx)
 
 
 
@@ -440,13 +478,12 @@ class DRO:
                     [ self._Z(nw,2*nx),     lam*self._I(nw),   -Q - lam*self._I(nw),    self._Z(nw,2*nx),   self._Z(nw,  nz),   self._Z(nw,   nx),      self._Z(nw,   nx)       ],
                     [ A,                    B,                  self._Z(2*nx, nw),      state_blk,          self._Z(2*nx,nz),   S_A,                    S_B                     ],
                     [ C,                    D,                  self._Z(nz,  nw),       self._Z(nz, 2*nx), -self._I(nz),        self._Z(nz,   nx),      self._Z(nz,   nx)       ],
-                    [ self._Z(nx,2*nx),     self._Z(nx,  nw),   self._Z(nx,  nw),       S_A.T,              self._Z(nx,  nz),   young_blk,              self._Z(nx,   nx)       ],
-                    [ self._Z(nx,2*nx),     self._Z(nx,  nw),   self._Z(nx,  nw),       S_B.T,              self._Z(nx,  nz),   self._Z(nx, nx),       -self.s_B * self._I(nx)  ],
+                    [ self._Z(nx,2*nx),     self._Z(nx,  nw),   self._Z(nx,  nw),       S_A.T,              self._Z(nx,  nz),   young_blk_A,            self._Z(nx,   nx)       ],
+                    [ self._Z(nx,2*nx),     self._Z(nx,  nw),   self._Z(nx,  nw),       S_B.T,              self._Z(nx,  nz),   self._Z(nx, nx),        young_blk_B             ],
                 ])
 
-
             cons += [self._negdef(blk, which="strict")]
-        
+
         elif self.model == "independent":
             if not self.reg_beta:
                 blk1 = cp.bmat([
@@ -459,8 +496,8 @@ class DRO:
                     [ -P,                   A.T,                C.T,                self._Z(2*nx, nx),  self._Z(2*nx, nx)       ],
                     [  A,                   state_blk,          self._Z(2*nx, nz),  S_A,                S_B                     ],
                     [  C,                   self._Z(nz, 2*nx), -self._I(nz)  ,      self._Z(nz, nx),    self._Z(nz, nx)         ],
-                    [  self._Z(nx,2*nx),    S_A.T,              self._Z(nx, nz),    young_blk,          self._Z(nx,   nx)       ],
-                    [  self._Z(nx,2*nx),    S_B.T,              self._Z(nx, nz),    self._Z(nx,   nx), -self.s_B * self._I(nx)  ],
+                    [  self._Z(nx,2*nx),    S_A.T,              self._Z(nx, nz),    young_blk_A,        self._Z(nx,   nx)       ],
+                    [  self._Z(nx,2*nx),    S_B.T,              self._Z(nx, nz),    self._Z(nx,   nx),  young_blk_B             ],
                 ])  
 
             blk2 = cp.bmat([
@@ -500,17 +537,18 @@ class DRO:
         self.obj = obj_dro
 
     def build_reg(self): 
-        reg = 0.0
+        self.reg_t= self.reg_a = self.reg_b = cp.Parameter(value=0.0)
 
         if self.reg_fro: 
             tK, tL, tM, tN = self.get_vars(which="t")
-            reg += tK + tL + tM + tN
+            self.reg_t = tK + tL + tM + tN
         
-        if self.reg_beta: 
-            reg += cp.sum(self.s_A) + cp.sum(self.tau_A / (self.beta_A + self.eps))
-            reg += self.s_B + self.tau_B / (self.beta_B + self.eps)
+        """if self.reg_beta: 
+            self.reg_a = cp.sum(self.s_A) + cp.sum(self.tau_A / (self.beta_A + self.eps))
+            self.reg_b = cp.sum(self.s_B) + cp.sum(self.tau_B / (self.beta_B + self.eps))"""
 
-        self.reg = self.rho * reg 
+
+        self.reg = self.rho * (self.reg_t + self.reg_a + self.reg_b) 
 
 
     # ============================================================================ #
@@ -560,6 +598,18 @@ class DRO:
         self.status = prob.status
         self.value = prob.value
 
+
+        self.violations = 0
+        for c in self.cons:
+            print(c, "violation:", c.violation())
+            self.violations += 1
+
+        print(self.vars["Q"].value)
+        print(self.value)
+
+        if self.inp: input("Waiting...")
+
+
     def pack_outs(self): 
         lam, Q, P = self.get_vars(which="main")
         X, Y, K, L, M, N = self.get_vars(which="inner")
@@ -592,13 +642,20 @@ class DRO:
             DeltaA, DeltaB, EAA, EAB = recover_deltas(
                 P=P_val, X=X_val, Y=Y_val, M=M_val, N=N_val, Cy=Cy,
                 Ahat=Ax, Buhat=Bu,
-                beta_AA=np.mean(self.beta_A.value), beta_AB=self.beta_B.value,
+                beta_AA=np.mean(self.beta_A.value), beta_AB=np.mean(self.beta_B.value),
             )
 
             self.mats["Ax"] = Ax + DeltaA
             self.mats["Bu"] = Bu + DeltaB
             
-            self.others = (DeltaA, DeltaB), (EAA, EAB), (self.beta, self.beta_a, self.beta_b, self.beta_A.value, self.beta_B.value), (self.s_A.value, self.s_B.value), (self.tau_A.value, self.tau_B.value)
+            D = (DeltaA, DeltaB)
+            E = (EAA, EAB)
+            B = (self.beta, self.beta_a, self.beta_b, self.beta_A.value, self.beta_B.value)
+            S = (self.s_A.value, self.s_B.value)
+            T = (self.tau_A.value, self.tau_B.value)
+            R = (self.obj.value, self.reg.value, self.reg_t.value, self.reg_a.value, self.reg_b.value)
+
+            self.others = D, E, B, S, T, R
         else: 
             self.others = 0.0
 

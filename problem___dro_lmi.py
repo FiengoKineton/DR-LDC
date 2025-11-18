@@ -217,6 +217,10 @@ def build_and_solve_dro_lmi(
     else:
         print("Optimization error: All solvers failed.")
 
+    violations = 0
+    for c in cons:
+        print(c, "violation:", c.violation())
+        violations += 1
 
     # Safe extraction
     def _val(x):
@@ -235,7 +239,7 @@ def build_and_solve_dro_lmi(
     Abar_val, Bbar_val, Cbar_val = _val(Abar.value), _val(Bbar.value), _val(Cbar.value)
     Dbar_val = _val(Dbar.value) if "Dbar" in locals() else None  # guard if you didn’t build it
 
-    return DROLMIResult(
+    dro = DROLMIResult(
         solver=solver,
         status=status,
         obj_value=val,
@@ -245,6 +249,8 @@ def build_and_solve_dro_lmi(
         Pbar=Pbar_val, Abar=Abar_val, Bbar=Bbar_val, Cbar=Cbar_val, Dbar=Dbar_val, 
         Tp = Tp, P=Tp_t_inv @ Pbar_val @ Tp_inv
     )
+
+    return dro, violations
 
 # ================================================================================================
 
@@ -942,6 +948,11 @@ def build_and_solve_dro_lmi_upd(
         print("Optimization error: All solvers failed.")
 
 
+    violations = 0
+    for c in cons:
+        print(c, "violation:", c.violation())
+        violations += 1
+
     # Returning solutions -------------
     P_val, Q_val, K_val, L_val, M_val, N_val, X_val, Y_val \
         = _val(P.value), _val(Q.value), _val(K.value), _val(L.value), _val(M.value), _val(N.value), _val(X.value), _val(Y.value)
@@ -977,9 +988,9 @@ def build_and_solve_dro_lmi_upd(
             = _val(rx.value), _val(ry.value), _val(rz.value)
         other = (rx_val, ry_val, rz_val)
     elif approach == 'Young' or approach == "Mats":
-        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_AA.value, beta_ab), (s_AA.value, s_AB.value), (tau_AA.value, tau_AB.value)
+        other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_AA.value, beta_ab), (s_AA.value, s_AB.value), (tau_AA.value, tau_AB.value), (obj_dro.value, reg.value)
 
-    return dro, P, Sigma_nom, other
+    return dro, P, Sigma_nom, other, violations
 
 # ================================================================================================
 

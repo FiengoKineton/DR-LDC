@@ -138,7 +138,7 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, noise: Noise, upd: bool = False, plot: bool = False, save: bool = False, FROM_DATA: bool = False, init_cond: str = "zero"):
+    def __init__(self, params: dict, out: Path, noise: Noise, upd: bool = False, plot: bool = False, save: bool = False, FROM_DATA: bool = False, init_cond: str = "zero", disturbance_type: str = "Gaussian"):
 
         recover = Recover()
         api = MatricesAPI()
@@ -147,6 +147,8 @@ class lmi_pipeline_optim_problem():
         STABLE, i = False, 0
         tot_time = 0
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
+        old = params.get("old_upd", True)
+        inp = bool(params.get("inp", 0))
 
         self.proc = psutil.Process(os.getpid())
         self.solve_stats = []
@@ -163,7 +165,7 @@ class lmi_pipeline_optim_problem():
                 api.print_plant(plant)
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
-                res = build_and_solve_dro_lmi(
+                res, num_violations = build_and_solve_dro_lmi(
                     plant=plant,
                     api=api,
                     noise=noise,
@@ -178,11 +180,13 @@ class lmi_pipeline_optim_problem():
 
             else:
                 approach = params.get("approach", "Young")
-                old = params.get("old_upd", True)
+                vect = model == "independent"
+                augmented = model == "correlated"
+                reg_fro, reg_beta = False, True
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
                 if old:
-                    res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
+                    res, P, Sigma_nom, other, num_violations = build_and_solve_dro_lmi_upd(
                         api=api,
                         vals=(upd, FROM_DATA, plot),
                         noise=noise,
@@ -191,10 +195,10 @@ class lmi_pipeline_optim_problem():
                         d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
                     )
                 else:
-                    dro = DRO(vals=(upd, FROM_DATA, plot), model=model, 
-                              api=api, noise=noise, )
+                    dro = DRO(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, 
+                              api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta)
                     
-                    res, P, Sigma_nom, other = dro.run()
+                    res, P, Sigma_nom, other, num_violations = dro.run()
 
                 A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
                 plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
@@ -286,8 +290,10 @@ class lmi_pipeline_optim_problem():
             "prob": "DDD" if FROM_DATA else "MBD",
             "meta": {
                 "model": model,
+                "disturbance_type": disturbance_type,
                 "solver": res.solver,
                 "status": res.status,
+                "num_violations": int(num_violations),
                 "objective": res.obj_value,
                 "gamma": res.gamma,
                 "lambda_opt": res.lambda_opt,
@@ -297,6 +303,10 @@ class lmi_pipeline_optim_problem():
                 "attempt": i,
                 "Total_time": tot_time,
                 "stress": self.stress,
+                "vect": vect if not old and FROM_DATA else None,
+                "augmented": augmented if FROM_DATA else True,
+                "reg_fro": reg_fro if not old and FROM_DATA else None, 
+                "reg_beta": reg_beta if not old and FROM_DATA else None,
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
@@ -333,8 +343,8 @@ class lmi_pipeline_optim_problem():
         }
 
         if ADD: 
-            if approach == 'Young' or approach == 'Mats':
-                D, E, B, S, T = other
+            if (approach == 'Young' or approach == 'Mats') and old or not old and reg_beta:
+                D, E, B, S, T, R = other
                 payload["Young_approach"] = {
                     "approach": approach,
                     "D": self._to_serializable(D),  # handles (DeltaA, DeltaB) as matrices/tuples
@@ -342,6 +352,7 @@ class lmi_pipeline_optim_problem():
                     "B": self._to_serializable(B),  # now OK if matrix, vector, or scalars tuple
                     "S": self._to_serializable(S),  # now OK if matrix
                     "T": self._to_serializable(T),  # now OK if matrix
+                    "R": self._to_serializable(R),
                 }
 
         out_json = out + f"___results_run.json"
@@ -526,7 +537,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             opt = baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
         else:
             print("\nRunning LMI pipeline optimization...")
-            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
+            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond, disturbance_type=_model)
 
         if COST or info:
             return opt._return_final_infos(), _model

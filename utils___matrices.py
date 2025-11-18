@@ -15,6 +15,7 @@ if yaml is None: raise ImportError("PyYAML not available. Install with `pip inst
 with open(yaml_path, "r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
 
+inp = bool(cfg.get("params", {}).get("inp", 0))
 
 # ------------------------- COMPOSE MATRICES FROM LMI --------------------------
 
@@ -215,6 +216,7 @@ class Recover():
             D_c = N_val
         except np.linalg.LinAlgError:
             print("Error: Singular matrix in controller reconstruction. Using fallback.")
+            if inp: input("seriously?")
             A_c = K_val - X_val @ A @ Y_val - L_val @ Y_val - X_val @ Bu @ M_val
             B_c = L_val
             C_c = M_val
