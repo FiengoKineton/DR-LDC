@@ -431,7 +431,7 @@ class ResultsComparator:
         T = int(d["T"]) if "T" in keys else int(inst.shape[0])
         return {"inst": inst, "running": running, "J": J, "T": T}
 
-    def _plot_overlay_costs(self, t, M, D, title_inst, title_avg, save_inst, save_avg, save: bool = True):
+    def _plot_overlay_costs(self, t, M, D, title_inst, title_avg, save_inst, save_avg, save: bool = True, logy=False):
         """Overlay instantaneous and running average cost from two runs."""
         # Instantaneous
         import matplotlib.pyplot as plt
@@ -439,12 +439,20 @@ class ResultsComparator:
         plt.plot(t, M["inst"], label="MBD", linewidth=1.6)
         plt.plot(t, D["inst"], label="DDD", linewidth=1.6, linestyle="--")
         plt.xlabel("t"); plt.ylabel(r"$\|z(t)\|^2$"); plt.title(title_inst); plt.grid(True, alpha=0.3); plt.legend()
+        
+        if logy: plt.yscale("log")
         if save: plt.savefig(save_inst, bbox_inches="tight")
+        
         # Running average
+        M_final = float(np.asarray(M["running"])[-1]) if np.asarray(M["running"]).size > 0 else np.nan
+        D_final = float(np.asarray(D["running"])[-1]) if np.asarray(D["running"]).size > 0 else np.nan
+
         plt.figure(figsize=(8, 3.2))
-        plt.plot(t, M["running"], label="MBD", linewidth=1.6)
-        plt.plot(t, D["running"], label="DDD", linewidth=1.6, linestyle="--")
+        plt.plot(t, M["running"], label=f"MBD: {M_final:.3g}", linewidth=1.6)
+        plt.plot(t, D["running"], label=f"DDD: {D_final:.3g}", linewidth=1.6, linestyle="--")
         plt.xlabel("t"); plt.ylabel(r"$\frac{1}{t}\sum_{k=0}^{t-1}\|z(k)\|^2$"); plt.title(title_avg); plt.grid(True, alpha=0.3); plt.legend()
+
+        if logy: plt.yscale("log")
         if save: plt.savefig(save_avg, bbox_inches="tight")
 
 
@@ -823,6 +831,15 @@ class ResultsComparator:
             T_cost = min(KM["T"], KD["T"])
             t_cost = np.arange(T_cost) * self.ts
 
+            def _log_condition(arr):
+                if len(arr) == 0:
+                    return False
+                if not np.all(arr > 0):
+                    return False
+                return np.max(arr) > 5 * arr[-1]
+
+            use_log = _log_condition(KM["running"][:T_cost]) or _log_condition(KD["running"][:T_cost])
+
             title_i = f"{method.upper()} cost: instantaneous (MBD vs DDD)"
             title_a = f"{method.upper()} cost: running average (MBD vs DDD)"
             save_i  = run_dir / f"{base}_overlay_cost_instantaneous.pdf"
@@ -831,7 +848,7 @@ class ResultsComparator:
                 t_cost,
                 {"inst": KM["inst"][:T_cost], "running": KM["running"][:T_cost]},
                 {"inst": KD["inst"][:T_cost], "running": KD["running"][:T_cost]},
-                title_i, title_a, save_i, save_a, save=self.save
+                title_i, title_a, save_i, save_a, save=self.save, logy=use_log
             )
             if plot: plt.show()
         else:

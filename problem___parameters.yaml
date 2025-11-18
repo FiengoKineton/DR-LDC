@@ -2,7 +2,8 @@ params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
   upd: 1                                                                        # set
-  model: "independent"                                                          # set | may be var ("correlated" or "independent")
+  old_upd: 0                                                                    # set
+  model: "correlated"                                                          # set | may be var ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   approach: "Mats"                                                              # VAR ------------------------------ ("DeePC", "Young", "Mats")
   comp: 0                                                                       # VAR ------------------------------ true or false
@@ -30,7 +31,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "2W"                                                               # VAR ------------------------------ look for the names in main.py
+    runID: "2W_new"                                                               # VAR ------------------------------ look for the names in main.py
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set

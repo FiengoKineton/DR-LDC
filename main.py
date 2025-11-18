@@ -10,6 +10,7 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from problem___baseline import run_once
 from problem___dro_lmi import build_and_solve_dro_lmi, build_and_solve_dro_lmi_upd
+from problem___DRO import DRO
 
 from utils___systems import Plant, Controller, Plant_cl, Noise
 from utils___simulate import Closed_Loop 
@@ -177,16 +178,23 @@ class lmi_pipeline_optim_problem():
 
             else:
                 approach = params.get("approach", "Young")
+                old = params.get("old_upd", True)
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
-                res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
-                    api=api,
-                    vals=(upd, FROM_DATA, plot),
-                    noise=noise,
-                    model=model,
-                    approach=approach,
-                    d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
-                )
+                if old:
+                    res, P, Sigma_nom, other = build_and_solve_dro_lmi_upd(
+                        api=api,
+                        vals=(upd, FROM_DATA, plot),
+                        noise=noise,
+                        model=model,
+                        approach=approach,
+                        d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
+                    )
+                else:
+                    dro = DRO(vals=(upd, FROM_DATA, plot), model=model, 
+                              api=api, noise=noise, )
+                    
+                    res, P, Sigma_nom, other = dro.run()
 
                 A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
                 plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
@@ -292,6 +300,13 @@ class lmi_pipeline_optim_problem():
             },
             "controller": self.controller_to_dict(ctrl),
             "plant": self.plant_to_dict(plant),
+            "plant_dims": {
+                "nx": A.shape[0], 
+                "nu": Bu.shape[1], 
+                "nw": Bw.shape[1], 
+                "ny": Cy.shape[0], 
+                "nz": Cz.shape[0],
+            },
             "composite_closed_loop": self.plant_cl_to_dict(plant_cl),
             "Acl_eigenvals": {
                 "cartesian": eig_cart,
@@ -443,7 +458,7 @@ class lmi_pipeline_optim_problem():
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
-def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False, COST: bool = False):
+def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False, COST: bool = False, info: bool = False):
     #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
@@ -513,8 +528,8 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             print("\nRunning LMI pipeline optimization...")
             opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
 
-        if COST:
-            return opt._return_final_infos()
+        if COST or info:
+            return opt._return_final_infos(), _model
         
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
@@ -568,7 +583,7 @@ def select_gamma(p):
 
 # ------------------------- Evaluation --------------------------------------------
 
-def MutipleRunsEvaluation(p, N: int = None):
+def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
     N = 20 if N is None else N
     model = p.get("model", "independent")
     save = bool(p.get("save", False))
@@ -585,8 +600,8 @@ def MutipleRunsEvaluation(p, N: int = None):
     out.mkdir(parents=True, exist_ok=True)
     path = out / p.get("directories", {}).get("runID", "temp")
     path.mkdir(parents=True, exist_ok=True)
-    mbd_file = path / "_MBD_runs.csv"
-    ddd_file = path / "_DDD_runs.csv"
+    mbd_file = path / f"_{model}_MBD_runs.csv"
+    ddd_file = path / f"_{model}_DDD_runs.csv"
 
     NOT_FOUND = not (mbd_file.is_file() and ddd_file.is_file())
 
@@ -602,7 +617,7 @@ def MutipleRunsEvaluation(p, N: int = None):
                 "==============================\n"
                 "\n\n\n\n")
             try:
-                infos_mbd = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
+                infos_mbd, *_ = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
                 c_mbd = infos_mbd["J"]
                 l_mbd = infos_mbd["lamda"]
                 r_mbd = infos_mbd["rho"]
@@ -620,7 +635,7 @@ def MutipleRunsEvaluation(p, N: int = None):
                 print(f"Error occurred in MBD run {i+1}: {e}")
 
             try:
-                infos_ddd = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
+                infos_ddd, *_ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
                 c_ddd = infos_ddd["J"]
                 l_ddd = infos_ddd["lamda"]
                 r_ddd = infos_ddd["rho"]
@@ -697,21 +712,22 @@ def MutipleRunsEvaluation(p, N: int = None):
             s_DDD[:n_common_ddd],
         ])
 
-        np.savetxt(
-            mbd_file,
-            mbd_data,
-            delimiter=",",
-            header="run,J,lambda,rho,time,attempts,stress",
-            comments=""
-        )
+        if save:
+            np.savetxt(
+                mbd_file,
+                mbd_data,
+                delimiter=",",
+                header="run,J,lambda,rho,time,attempts,stress",
+                comments=""
+            )
 
-        np.savetxt(
-            ddd_file,
-            ddd_data,
-            delimiter=",",
-            header="run,J,lambda,rho,time,attempts,stress",
-            comments=""
-        )
+            np.savetxt(
+                ddd_file,
+                ddd_data,
+                delimiter=",",
+                header="run,J,lambda,rho,time,attempts,stress",
+                comments=""
+            )
 
     else:
         # load, skip header row
@@ -880,6 +896,52 @@ def MutipleRunsEvaluation(p, N: int = None):
     analyze_and_plot_metric(s_MBD, s_DDD, "stress",  model, path, save, N_runs=N)
 
 
+def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
+    """
+    Pretty-print a comparison table between MBD and DDD info dicts.
+
+    Expected keys:
+        "J", "lamda", "rho", "time", "attempts", "stress"
+    """
+    metrics = [
+        ("J",       "Cost J"),
+        ("lamda",   "λ"),
+        ("rho",     "ρ"),
+        ("time",    "Time [s]"),
+        ("attempts","Attempts"),
+        ("stress",  "Stress"),
+    ]
+
+    def fmt(v):
+        # crude but effective formatter
+        if isinstance(v, (int, float)):
+            return f"{v:.4g}"
+        return str(v)
+
+    print("\n" + "=" * 70)
+    print(f" {m} summary ".center(70, "="))
+    print("=" * 70)
+
+    header = f"{'Metric':<15}{'MBD':>15}{'DDD':>15}{'DDD - MBD':>15}"
+    print(header)
+    print("-" * 70)
+
+    for key, label in metrics:
+        v_m = infos_mbd.get(key, None)
+        v_d = infos_ddd.get(key, None)
+
+        # difference only if both are numeric
+        if isinstance(v_m, (int, float)) and isinstance(v_d, (int, float)):
+            diff = v_d - v_m
+            diff_str = f"{diff:+.3g}"
+        else:
+            diff_str = ""
+
+        print(f"{label:<15}{fmt(v_m):>15}{fmt(v_d):>15}{diff_str:>15}")
+
+    print("=" * 70 + "\n")
+
+
 # ----------------------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -895,9 +957,11 @@ if __name__ == "__main__":
     if not COST:
         ALL = bool(p.get("ALL", False))
         if ALL:
-            main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL)
-            main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL)
+            infos_mbd, m = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL, info=True)
+            infos_ddd, _ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL, info=True)
             main(comp=True, gamma=gamma, ALL=ALL)
+
+            print_infos_comparison(m, infos_mbd, infos_ddd)
         else:
             main(gamma=gamma)
     else: 
