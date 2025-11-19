@@ -432,8 +432,8 @@ class DRO:
 
                 beta_A_np = w_np * self.beta_a
                 S_A = S_base
-                self.tau_A = cp.Variable(nonneg=True, name="tau_ab")
-                self.s_A = cp.Variable(nonneg=True, name="s_ab")
+                self.tau_A = cp.Variable(nonneg=True, name="tau_a")
+                self.s_A = cp.Variable(nonneg=True, name="s_a")
                 self.beta_A = cp.Parameter(nonneg=True, value=float(np.clip(beta_A_np, 0.0, 1e3)))
 
                 block_a = cp.bmat([[self.s_A, self.beta_A], 
@@ -446,8 +446,8 @@ class DRO:
 
                 beta_B_np = w_np * self.beta_b
                 S_B = S_base
-                self.tau_B = cp.Variable(nonneg=True, name="tau_ab")
-                self.s_B = cp.Variable(nonneg=True, name="s_ab")
+                self.tau_B = cp.Variable(nonneg=True, name="tau_b")
+                self.s_B = cp.Variable(nonneg=True, name="s_b")
                 self.beta_B = cp.Parameter(nonneg=True, value=float(np.clip(beta_B_np, 0.0, 1e3)))
 
                 block_b = cp.bmat([[self.s_B, self.beta_B], 
@@ -543,9 +543,9 @@ class DRO:
             tK, tL, tM, tN = self.get_vars(which="t")
             self.reg_t = tK + tL + tM + tN
         
-        """if self.reg_beta: 
+        if self.reg_beta: 
             self.reg_a = cp.sum(self.s_A) + cp.sum(self.tau_A / (self.beta_A + self.eps))
-            self.reg_b = cp.sum(self.s_B) + cp.sum(self.tau_B / (self.beta_B + self.eps))"""
+            self.reg_b = cp.sum(self.s_B) + cp.sum(self.tau_B / (self.beta_B + self.eps))
 
 
         self.reg = self.rho * (self.reg_t + self.reg_a + self.reg_b) 
