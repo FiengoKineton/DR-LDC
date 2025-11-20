@@ -153,7 +153,7 @@ class lmi_pipeline_optim_problem():
         self.proc = psutil.Process(os.getpid())
         self.solve_stats = []
 
-        while not STABLE and i<=5:
+        while not STABLE and i<7:
             t0 = time.perf_counter()
             cpu0 = self.proc.cpu_times()
             cpu0_total = cpu0.user + cpu0.system
@@ -182,7 +182,7 @@ class lmi_pipeline_optim_problem():
                 approach = params.get("approach", "Young")
                 vect = model == "independent"
                 augmented = model == "correlated"
-                reg_fro, reg_beta = False, True
+                reg_fro, reg_beta = True, True
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
                 if old:
@@ -229,7 +229,7 @@ class lmi_pipeline_optim_problem():
             # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
             # ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, api, (Acl, Bcl, Ccl, Dcl))
             
-            
+
             eig = np.linalg.eigvals(Acl)
             rho = float(np.max(np.abs(eig)))
             if rho < 1.00:
@@ -284,6 +284,9 @@ class lmi_pipeline_optim_problem():
         self.Time = Time
         self.attempt = i
         self.stress = stress
+        self.obj = res.obj_value
+        self.solver = res.solver
+        self.ratio_violation = num_violations[0] / num_violations[1]
 
         # JSON
         payload = {
@@ -291,10 +294,11 @@ class lmi_pipeline_optim_problem():
             "meta": {
                 "model": model,
                 "disturbance_type": disturbance_type,
-                "solver": res.solver,
+                "solver": self.solver,
                 "status": res.status,
-                "num_violations": int(num_violations),
-                "objective": res.obj_value,
+                "num_violations": int(num_violations[0]),
+                "tot_constraints:": int(num_violations[1]),
+                "objective": self.obj,
                 "gamma": res.gamma,
                 "lambda_opt": res.lambda_opt,
                 "spectral_radius_Acl": rho,
@@ -390,6 +394,9 @@ class lmi_pipeline_optim_problem():
             "time": self.Time, 
             "attempts": self.attempt,
             "stress": self.stress,
+            "obj": self.obj,
+            "solver": self.solver,
+            "ratio_violation": self.ratio_violation,
         }
         return infos
 
@@ -568,7 +575,6 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         # 4) Plot worst/best SNR bands
         an.plot_worst_best_lines()
 
-
 def select_gamma(p):
     if not bool(p.get("ambiguity", {}).get("fixGamma", False)):     # set fixGamma: 0
         if p.get("method", "lmi") == "lmi":                         # ------|set method: "lmi"
@@ -592,19 +598,25 @@ def select_gamma(p):
     
     return gamma
 
+
 # ------------------------- Evaluation --------------------------------------------
 
-def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
+def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = None):
     N = 20 if N is None else N
     model = p.get("model", "independent")
     save = bool(p.get("save", False))
     plot = bool(p.get("plot", False))
+    use = True
+
     c_MBD, c_DDD = [], []
     l_MBD, l_DDD = [], []
     r_MBD, r_DDD = [], []
     t_MBD, t_DDD = [], []
     a_MBD, a_DDD = [], []
     s_MBD, s_DDD = [], []
+    v_MBD, v_DDD = [], []
+    o_MBD, o_DDD = [], []
+    p_MBD, p_DDD = [], []
 
     out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")
     out = out / "MutipleRunsEvaluation"
@@ -618,8 +630,7 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
 
 
     if bool(p.get("re_evaluate", 0)) or NOT_FOUND:
-        K_RECENT = 5
-        unstable_hit = False
+        k = 0
 
         for i in range(N):
             print("\n\n\n\n"
@@ -627,57 +638,71 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
                 f"----- RUN {i+1}/{N} -----\n"
                 "==============================\n"
                 "\n\n\n\n")
+            infos_mbd, *_ = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
+            c_mbd = infos_mbd["J"]
+            l_mbd = infos_mbd["lamda"]
+            r_mbd = infos_mbd["rho"]
+            t_mbd = infos_mbd["time"]
+            a_mbd = infos_mbd["attempts"]
+            s_mbd = infos_mbd["stress"]
+            v_mbd = infos_mbd["ratio_violation"]
+            p_mbd = 1 if infos_mbd["solver"] in ["MOSEK", "mosek"] else 0
+            o_mbd = infos_mbd["obj"]
+
+            c_MBD.append(c_mbd)
+            l_MBD.append(l_mbd)
+            r_MBD.append(r_mbd)
+            t_MBD.append(t_mbd)
+            a_MBD.append(a_mbd)
+            s_MBD.append(s_mbd)
+            v_MBD.append(v_mbd)
+            p_MBD.append(p_mbd)
+            o_MBD.append(o_mbd)
+
+            infos_ddd, *_ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
+            c_ddd = infos_ddd["J"]
+            l_ddd = infos_ddd["lamda"]
+            r_ddd = infos_ddd["rho"]
+            t_ddd = infos_ddd["time"]
+            a_ddd = infos_ddd["attempts"]
+            s_ddd = infos_ddd["stress"]
+            v_ddd = infos_ddd["ratio_violation"]
+            p_ddd = 1 if infos_ddd["solver"] in ["MOSEK", "mosek"] else 0
+            o_ddd = infos_ddd["obj"]
+
+            c_DDD.append(c_ddd)
+            l_DDD.append(l_ddd)
+            r_DDD.append(r_ddd)
+            t_DDD.append(t_ddd)
+            a_DDD.append(a_ddd)
+            s_DDD.append(s_ddd)
+            v_DDD.append(v_ddd)
+            p_DDD.append(p_ddd)
+            o_DDD.append(o_ddd)
+
+            if r_ddd > 1.0:
+                k += 1
+
+            """# ---------- NEW: check last K rho_DDD ----------
+            if len(r_DDD) >= K_RECENT:
+                recent_rho = np.array(r_DDD[-K_RECENT:], dtype=float)
+                if np.all(recent_rho >= 1.0):
+                    print(
+                        f"[WARN] Last {K_RECENT} DDD rho values are >= 1.0; "
+                        f"recent_rho = {recent_rho}. Stopping further runs."
+                    )
+                    unstable_hit = True
+                    break
+            
             try:
-                infos_mbd, *_ = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=False, COST=COST)
-                c_mbd = infos_mbd["J"]
-                l_mbd = infos_mbd["lamda"]
-                r_mbd = infos_mbd["rho"]
-                t_mbd = infos_mbd["time"]
-                a_mbd = infos_mbd["attempts"]
-                s_mbd = infos_mbd["stress"]
+                pass
+            except Exception as e: 
+                print(f"Error occurred in MBD run {i+1}: {e}")"""
 
-                c_MBD.append(c_mbd)
-                l_MBD.append(l_mbd)
-                r_MBD.append(r_mbd)
-                t_MBD.append(t_mbd)
-                a_MBD.append(a_mbd)
-                s_MBD.append(s_mbd)
-            except Exception as e:
-                print(f"Error occurred in MBD run {i+1}: {e}")
-
-            try:
-                infos_ddd, *_ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
-                c_ddd = infos_ddd["J"]
-                l_ddd = infos_ddd["lamda"]
-                r_ddd = infos_ddd["rho"]
-                t_ddd = infos_ddd["time"]
-                a_ddd = infos_ddd["attempts"]
-                s_ddd = infos_ddd["stress"]
-
-                c_DDD.append(c_ddd)
-                l_DDD.append(l_ddd)
-                r_DDD.append(r_ddd)
-                t_DDD.append(t_ddd)
-                a_DDD.append(a_ddd)
-                s_DDD.append(s_ddd)
-
-                # ---------- NEW: check last K rho_DDD ----------
-                if len(r_DDD) >= K_RECENT:
-                    recent_rho = np.array(r_DDD[-K_RECENT:], dtype=float)
-                    if np.all(recent_rho >= 1.0):
-                        print(
-                            f"[WARN] Last {K_RECENT} DDD rho values are >= 1.0; "
-                            f"recent_rho = {recent_rho}. Stopping further runs."
-                        )
-                        unstable_hit = True
-                        break
-
-            except Exception as e:
-                print(f"Error occurred in DDD run {i+1}: {e}")
-
+        unstable_hit = k > int(N/5)
         print(f"Completed {len(c_MBD)} MBD runs, {len(c_DDD)} DDD runs. unstable_hit={unstable_hit}")
 
-        print("\n\n===== COST STATISTICS OVER ALL RUNS =====")
+        print(f"\n\n===== COST STATISTICS OVER {N} RUNS =====")
         c_MBD = np.array(c_MBD, dtype=float)
         c_DDD = np.array(c_DDD, dtype=float)
         l_MBD = np.array(l_MBD, dtype=float)
@@ -690,6 +715,12 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
         a_DDD = np.array(a_DDD, dtype=float)
         s_MBD = np.array(s_MBD, dtype=float)
         s_DDD = np.array(s_DDD, dtype=float)
+        v_MBD = np.array(v_MBD, dtype=float)
+        v_DDD = np.array(v_DDD, dtype=float)
+        p_MBD = np.array(p_MBD, dtype=float)
+        p_DDD = np.array(p_DDD, dtype=float)        
+        o_MBD = np.array(o_MBD, dtype=float)
+        o_DDD = np.array(o_DDD, dtype=float)
 
         # ------------------------------------------------------------------
         # SAVE TO CSV (one file for MBD, one for DDD)
@@ -710,6 +741,9 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
             t_MBD[:n_common_mbd],
             a_MBD[:n_common_mbd],
             s_MBD[:n_common_mbd],
+            v_MBD[:n_common_mbd],
+            o_MBD[:n_common_mbd],
+            p_MBD[:n_common_mbd],
         ])
 
         # DDD table
@@ -721,6 +755,9 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
             t_DDD[:n_common_ddd],
             a_DDD[:n_common_ddd],
             s_DDD[:n_common_ddd],
+            v_DDD[:n_common_ddd],
+            o_DDD[:n_common_ddd],
+            p_DDD[:n_common_ddd],
         ])
 
         if save:
@@ -728,7 +765,7 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
                 mbd_file,
                 mbd_data,
                 delimiter=",",
-                header="run,J,lambda,rho,time,attempts,stress",
+                header="run,J,lambda,rho,time,attempts,stress,ratio_violation",
                 comments=""
             )
 
@@ -736,7 +773,7 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
                 ddd_file,
                 ddd_data,
                 delimiter=",",
-                header="run,J,lambda,rho,time,attempts,stress",
+                header="run,J,lambda,rho,time,attempts,stress,ratio_violation",
                 comments=""
             )
 
@@ -766,6 +803,19 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
         a_DDD    = ddd_data[:, 5]
         s_DDD    = ddd_data[:, 6]
 
+        try:
+            v_MBD = mbd_data[:, 7]
+            v_DDD = ddd_data[:, 7]
+            o_MBD = mbd_data[:, 8]
+            o_DDD = ddd_data[:, 8]
+            p_MBD = mbd_data[:, 9]
+            p_DDD = ddd_data[:, 9]
+        except Exception as e:
+            use = False
+
+
+    idx = np.where(c_DDD < 80)[0]
+
     def analyze_and_plot_metric(
         y_MBD,
         y_DDD,
@@ -793,11 +843,19 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
         y_MBD = np.asarray(y_MBD, dtype=float)
         y_DDD = np.asarray(y_DDD, dtype=float)
 
+        # Align on common index
+        t_max = min(len(y_MBD), len(y_DDD))
+        t = np.arange(1, t_max + 1, dtype=int)[idx]
+
+        y_mbd = y_MBD[:t_max][idx]
+        y_ddd = y_DDD[:t_max][idx]
+
+
         # ----- basic stats (ignoring NaNs if present) -----
-        mu_mbd = float(np.nanmean(y_MBD))
-        sd_mbd = float(np.nanstd(y_MBD, ddof=1))
-        mu_ddd = float(np.nanmean(y_DDD))
-        sd_ddd = float(np.nanstd(y_DDD, ddof=1))
+        mu_mbd = float(np.nanmean(y_mbd))
+        sd_mbd = float(np.nanstd(y_mbd, ddof=1))
+        mu_ddd = float(np.nanmean(y_ddd))
+        sd_ddd = float(np.nanstd(y_ddd, ddof=1))
 
         print(f"[{metric_name}] MBD: mean={mu_mbd:.6g}, std={sd_mbd:.6g}")
         print(f"[{metric_name}] DDD: mean={mu_ddd:.6g}, std={sd_ddd:.6g}")
@@ -811,8 +869,8 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
         # 1) scatter + mean lines
         # =========================
         fig2, ax2 = plt.subplots(figsize=(7, 4))
-        ax2.scatter(np.zeros_like(y_MBD), y_MBD, alpha=0.6, label="MBD", color="blue")
-        ax2.scatter(np.ones_like(y_DDD),  y_DDD, alpha=0.6, label="DDD", color="orange")
+        ax2.scatter(np.zeros_like(y_mbd), y_mbd, alpha=0.6, label="MBD", color="blue")
+        ax2.scatter(np.ones_like(y_ddd),  y_ddd, alpha=0.6, label="DDD", color="orange")
         ax2.hlines(mu_mbd, -0.2, 0.2)
         ax2.hlines(mu_ddd,  0.8, 1.2)
         ax2.set_xticks([0, 1], labels)
@@ -831,13 +889,6 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
         # =========================
         # 2) time-like overlay
         # =========================
-
-        # Align on common index
-        t_max = min(len(y_MBD), len(y_DDD))
-        t = np.arange(1, t_max + 1, dtype=int)
-
-        y_mbd = y_MBD[:t_max]
-        y_ddd = y_DDD[:t_max]
 
         finite = np.isfinite(y_mbd) & np.isfinite(y_ddd)
         better = (y_ddd < y_mbd) & finite   # DDD better (green)
@@ -898,14 +949,50 @@ def MutipleRunsEvaluation(p, COST: bool = True, N: int = None):
 
         if plot: 
             plt.show()
+        
+        return metric_name, (mu_mbd, sd_mbd), (mu_ddd, sd_ddd)
 
-    analyze_and_plot_metric(c_MBD, c_DDD, "cost",    model, path, save, N_runs=N)
-    analyze_and_plot_metric(l_MBD, l_DDD, "lambda",  model, path, save, N_runs=N)
-    analyze_and_plot_metric(r_MBD, r_DDD, "rho",     model, path, save, N_runs=N)
-    analyze_and_plot_metric(t_MBD, t_DDD, "time",    model, path, save, N_runs=N)
-    analyze_and_plot_metric(a_MBD, a_DDD, "attempts",model, path, save, N_runs=N)
-    analyze_and_plot_metric(s_MBD, s_DDD, "stress",  model, path, save, N_runs=N)
 
+    c_n, c_m, c_d = analyze_and_plot_metric(c_MBD, c_DDD, "cost",     model, path, save, N_runs=N)
+    l_n, l_m, l_d = analyze_and_plot_metric(l_MBD, l_DDD, "lambda",   model, path, save, N_runs=N)
+    r_n, r_m, r_d = analyze_and_plot_metric(r_MBD, r_DDD, "rho",      model, path, save, N_runs=N)
+    t_n, t_m, t_d = analyze_and_plot_metric(t_MBD, t_DDD, "time",     model, path, save, N_runs=N)
+    a_n, a_m, a_d = analyze_and_plot_metric(a_MBD, a_DDD, "attempts", model, path, save, N_runs=N)
+    s_n, s_m, s_d = analyze_and_plot_metric(s_MBD, s_DDD, "stress",   model, path, save, N_runs=N)
+    
+    metrics = [
+        (c_n, c_m, c_d),
+        (l_n, l_m, l_d),
+        (r_n, r_m, r_d),
+        (t_n, t_m, t_d),
+        (a_n, a_m, a_d),
+        (s_n, s_m, s_d),
+    ]
+
+    if use: 
+        v_n, v_m, v_d = analyze_and_plot_metric(v_MBD, v_DDD, "ratio_violation", model, path, save, N_runs=N)
+        o_n, o_m, o_d = analyze_and_plot_metric(o_MBD, o_DDD, "objective", model, path, save, N_runs=N)
+        p_n, p_m, p_d = analyze_and_plot_metric(p_MBD, p_DDD, "solver", model, path, save, N_runs=N)
+
+        metrics.extend([
+            (v_n, v_m, v_d),
+            (o_n, o_m, o_d),
+            (p_n, p_m, p_d),
+        ])
+
+    rows = []
+    for name, (mu_mbd, sd_mbd), (mu_ddd, sd_ddd) in metrics:
+        rows.append({
+            "metric": name,
+            "MBD": f"{mu_mbd:.6g} ± {sd_mbd:.6g}",
+            "DDD": f"{mu_ddd:.6g} ± {sd_ddd:.6g}",
+        })
+
+    summary_df = pd.DataFrame(rows, columns=["metric", "MBD", "DDD"])
+
+    csv_path = path / f"_{model}_metrics_summary.csv"
+    summary_df.to_csv(csv_path, index=False)
+    print(f"Saved summary metrics to {csv_path}")
 
 def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
     """
@@ -915,12 +1002,15 @@ def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
         "J", "lamda", "rho", "time", "attempts", "stress"
     """
     metrics = [
-        ("J",       "Cost J"),
-        ("lamda",   "λ"),
-        ("rho",     "ρ"),
-        ("time",    "Time [s]"),
-        ("attempts","Attempts"),
-        ("stress",  "Stress"),
+        ("J",               "Cost J"),
+        ("obj",             "Objective"),
+        ("lamda",           "λ"),
+        ("rho",             "ρ"),
+        ("time",            "Time [s]"),
+        ("attempts",        "Attempts"),
+        ("stress",          "Stress"),
+        ("ratio_violation", "Violations [%]"),
+        ("solver",          "Solver"),
     ]
 
     def fmt(v):
@@ -976,5 +1066,7 @@ if __name__ == "__main__":
         else:
             main(gamma=gamma)
     else: 
-        MutipleRunsEvaluation(p, N=15)
- 
+        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=150)
+
+
+# ----------------------------------------------------------------------------------

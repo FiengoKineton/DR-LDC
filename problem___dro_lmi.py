@@ -217,10 +217,15 @@ def build_and_solve_dro_lmi(
     else:
         print("Optimization error: All solvers failed.")
 
+    total_constraints = len(cons)
+    violation_values = []
     violations = 0
     for c in cons:
+        v = float(c.violation())
+        violation_values.append(v)
         print(c, "violation:", c.violation())
-        violations += 1
+        if v > 1e-6:    violations += 1
+
 
     # Safe extraction
     def _val(x):
@@ -250,7 +255,7 @@ def build_and_solve_dro_lmi(
         Tp = Tp, P=Tp_t_inv @ Pbar_val @ Tp_inv
     )
 
-    return dro, violations
+    return dro, (violations, total_constraints)
 
 # ================================================================================================
 
@@ -948,10 +953,14 @@ def build_and_solve_dro_lmi_upd(
         print("Optimization error: All solvers failed.")
 
 
+    total_constraints = len(cons)
+    violation_values = []
     violations = 0
     for c in cons:
+        v = float(c.violation())
+        violation_values.append(v)
         print(c, "violation:", c.violation())
-        violations += 1
+        if v > 1e-6:    violations += 1
 
     # Returning solutions -------------
     P_val, Q_val, K_val, L_val, M_val, N_val, X_val, Y_val \
@@ -990,7 +999,7 @@ def build_and_solve_dro_lmi_upd(
     elif approach == 'Young' or approach == "Mats":
         other = (DeltaA, DeltaB), (EAA, EAB), (beta, beta_a, beta_b, beta_AA.value, beta_ab), (s_AA.value, s_AB.value), (tau_AA.value, tau_AB.value), (obj_dro.value, reg.value)
 
-    return dro, P, Sigma_nom, other, violations
+    return dro, P, Sigma_nom, other, (violations, total_constraints)
 
 # ================================================================================================
 

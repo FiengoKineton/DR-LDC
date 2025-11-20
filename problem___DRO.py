@@ -25,7 +25,6 @@ class DRO:
         self.gamma, self.var, self.Sigma_nom = noise.gamma, noise.var, noise.Sigma_nom
         self.inp = vals[4]
 
-        reg_fro = False if new else reg_fro
         self.reg_fro, self.reg_beta, self.reg_vect = reg_fro, reg_beta, vals[2]
         self.new = new
 
@@ -44,7 +43,7 @@ class DRO:
         self.solve_prb()    # -> MOSEK/SCS solver
         self.pack_outs()    # -> builds self.outs & self.others
 
-        return self.outs, (self.get_mats()), self.Sigma_nom, self.others, self.violations
+        return self.outs, (self.get_mats()), self.Sigma_nom, self.others, (self.violations, self.total_constraints)
 
 
     # ============================================================================ #
@@ -608,12 +607,14 @@ class DRO:
 
         P_bar = P - (self.sigma_s + self.sigma_p) * Ip
 
+        # NOTE: I switched Ps and P_bar position, I did the calculus for P_bar in (1,1) and Ps in (2,2)-(4,4) but MOSEK doen't break if those are switched
+
         if self.model == "correlated": 
             blk = cp.bmat([
-                [-P_bar,                self._Z(2*nx, nw),  self._Z(2*nx, nw),      A.T,                C.T                 ],
+                [-Ps,                   self._Z(2*nx, nw),  self._Z(2*nx, nw),      A.T,                C.T                 ],
                 [ self._Z(nw, 2*nx),   -lam*self._I(nw),    lam*self._I(nw),        B.T,                D.T                 ],
                 [ self._Z(nw, 2*nx),    lam*self._I(nw),   -Q - lam*self._I(nw),    self._Z(nw, 2*nx),  self._Z(nw, nz)     ],
-                [  A,                   B,                  self._Z(2*nx, nw),     -Ps,                 self._Z(2*nx, nz)   ],
+                [  A,                   B,                  self._Z(2*nx, nw),     -P_bar,              self._Z(2*nx, nz)   ],
                 [  C,                   D,                  self._Z(nz, nw),        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
@@ -621,8 +622,8 @@ class DRO:
 
         elif self.model == "independent":
             blk1 = cp.bmat([
-                [-P_bar,    A.T,                C.T                 ],
-                [ A,       -Ps,                 self._Z(2*nx, nz)   ],
+                [-Ps,       A.T,                C.T                 ],
+                [ A,       -P_bar,              self._Z(2*nx, nz)   ],
                 [ C,        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
