@@ -96,11 +96,11 @@ class DRO:
         if which == "main":
             return self.vars["lam"], self.vars["Q"], self.vars["P"]
         elif which == "inner":
-            return self.vars["X"], self.vars["Y"], self.vars["K"], self.vars["L"], self.vars["M"], self.vars["N"]
+            return self.vars["K"], self.vars["L"], self.vars["Y"], self.vars["X"], self.vars["M"], self.vars["N"]
         elif which == "mats":
             return self.vars["A"], self.vars["B"], self.vars["C"], self.vars["D"]
         elif which == "t":
-            return self.vars["tK"], self.vars["tL"], self.vars["tM"], self.vars["tN"]#, self.vars["tP"]
+            return self.vars["tK"], self.vars["tL"], self.vars["tY"], self.vars["tX"], self.vars["tM"], self.vars["tN"]#, self.vars["tP"]
 
 
     # ============================================================================ #
@@ -208,7 +208,7 @@ class DRO:
         t = cp.Variable(nonneg=True, name=f"t_{name}")
         blk = cp.bmat([ [t * self._I(m),    A               ],
                         [A.T,               t * self._I(n)  ]])
-        return t, [blk >> 0]
+        return t, [blk >> 0], [t >= 0]
 
 
     # ============================================================================ #
@@ -222,6 +222,10 @@ class DRO:
         Ax, Bu = Ox[:, :nx], Ox[:, nx:nx+nu]
 
         R = X - (Ax @ X_ + Bu @ U_)
+        self.c = R @ self._pseudo_inv(Dx)
+        self.c_a = np.sqrt(nx/(nx+nu)) * self.c
+        self.c_b = np.sqrt(nu/(nx+nu)) * self.c
+
         Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
         W_ = self._pseudo_inv(Bw) @ R
 
@@ -530,11 +534,11 @@ class DRO:
         
 
         if self.reg_fro:
-            _, _, K, L, M, N = self.get_vars(which="inner")
-            tK, consK = self.spectral_norm_epigraph(K, "K")
-            tL, consL = self.spectral_norm_epigraph(L, "L")
-            tM, consM = self.spectral_norm_epigraph(M, "M")
-            tN, consN = self.spectral_norm_epigraph(N, "N")
+            K, L, Y, X, M, N = self.get_vars(which="inner")
+            tK, consK, _ = self.spectral_norm_epigraph(K, "K")
+            tL, consL, _ = self.spectral_norm_epigraph(L, "L")
+            tM, consM, _ = self.spectral_norm_epigraph(M, "M")
+            tN, consN, _ = self.spectral_norm_epigraph(N, "N")
             #tP, consP = self.spectral_norm_epigraph(P, "P") 
 
             cons += consK + consL + consM + consN #+ consP
@@ -544,19 +548,37 @@ class DRO:
             self.vars["tM"] = tM
             self.vars["tN"] = tN
             #self.vars["tP"] = tP
-        
+
         self.cons = cons
 
     def build_con_new(self):
         cons = []
         lam, Q, P = self.get_vars(which="main")
+        self.c_e = None
 
         cons += [lam >= 0]
         cons += [self._posdef(Q)]
         cons += [self._posdef(P)]
 
         A, B, C, D = self.get_vars(which="mats")
-        nx, nu, nw, _, nz = self.get_dims()
+        nx, nu, nw, _, nz = self.get_dims()    
+
+        # ------ Build C_e ------------------------------ #
+        kappa_A = np.linalg.norm(self.c_a, 2)
+        kappa_B = np.linalg.norm(self.c_b, 2)
+        c_y     = np.linalg.norm(self.mats["Cy"], 2)
+
+        tY_hi, tM_hi, tN_hi, tX_hi = 0.9, 0.13, 0.36, 2.8e5
+
+        e11 = kappa_A * tY_hi + kappa_B * tM_hi 
+        e12 = kappa_A + kappa_B * tN_hi  * c_y
+        e22 = tX_hi  * kappa_A
+
+        gamma_E = e11**2 + e12**2 + e22**2
+        beta_E_np = gamma_E * self._I(2*self.c.shape[0])
+        #self.c_e = cp.Constant(beta_E_np)
+        # ----------------------------------------------- #
+
 
         U_R, _, w_R = self._residual_anisotropy_weights
         U_R = np.block([[U_R, np.zeros_like(U_R)], [np.zeros_like(U_R), U_R]])
@@ -572,7 +594,7 @@ class DRO:
         self.beta_B = cp.Parameter(nx, value=beta_B)
 
         self.beta = cp.diag(cp.hstack([self.beta_A, self.beta_B]))
-        self.beta_E = U_R @ self.beta @ U_R.T
+        self.beta_E = U_R @ self.beta @ U_R.T if self.c_e is None else self.c_e
 
         self.s_A = cp.Variable(nx, name="s_a")
         self.s_B = cp.Variable(nx, name="s_b")
@@ -651,24 +673,32 @@ class DRO:
 
             cons += [self._negdef(blk1, which="strict")]
             cons += [self._negdef(blk2, which="strict")]
-        
+
+
 
         if self.reg_fro:
-            _, _, K, L, M, N = self.get_vars(which="inner")
-            tK, consK = self.spectral_norm_epigraph(K, "K")
-            tL, consL = self.spectral_norm_epigraph(L, "L")
-            tM, consM = self.spectral_norm_epigraph(M, "M")
-            tN, consN = self.spectral_norm_epigraph(N, "N")
-            #tP, consP = self.spectral_norm_epigraph(P, "P") 
+            K, L, Y, X, M, N = self.get_vars(which="inner")
+            tK, consK, consk = self.spectral_norm_epigraph(K, "K")
+            tL, consL, consl = self.spectral_norm_epigraph(L, "L")
+            tY, consY, consy = self.spectral_norm_epigraph(Y, "Y")
+            tX, consX, consx = self.spectral_norm_epigraph(X, "X")
+            tM, consM, consm = self.spectral_norm_epigraph(M, "M")
+            tN, consN, consn = self.spectral_norm_epigraph(N, "N")
 
-            cons += consK + consL + consM + consN #+ consP
+            cons += consK + consL + consX + consY + consM + consN
 
             self.vars["tK"] = tK
             self.vars["tL"] = tL
+            self.vars["tX"] = tX
+            self.vars["tY"] = tY
             self.vars["tM"] = tM
             self.vars["tN"] = tN
-            #self.vars["tP"] = tP
-        
+
+            """self.c_e = cp.mat([
+                [self.c_a * tY + self.c_b * tM, self.c_a + tN * self.c_b @ self.mats["Cy"]],
+                [self._Z(self.c_a.shape[0]),    tX * self.c_a]
+            ])"""
+
         self.cons = cons
 
     def build_obj(self): 
@@ -682,8 +712,8 @@ class DRO:
         self.reg_t= self.reg_a = self.reg_b = cp.Parameter(value=0.0)
 
         if self.reg_fro: 
-            tK, tL, tM, tN = self.get_vars(which="t")
-            self.reg_t = tK + tL + tM + tN
+            tK, tL, tY, tX, tM, tN = self.get_vars(which="t")
+            self.reg_t = tK + tL + tY + tX + tM + tN
         
         if self.reg_beta and not self.new: 
             self.reg_a = cp.sum(self.s_A) + cp.sum(self.tau_A / (self.beta_A + self.eps))
@@ -745,15 +775,17 @@ class DRO:
         self.violations = 0
         self.violation_values = []  # optional, if you want to keep the actual numbers
 
-        for c in self.cons:
-            v = float(c.violation())   # CVXPY residual for this constraint
-            self.violation_values.append(v)
-            print(c, "violation:", v)
+        try:
+            for c in self.cons:
+                v = float(c.violation())   # CVXPY residual for this constraint
+                self.violation_values.append(v)
+                print(c, "violation:", v)
 
-            # count as violation only if it's larger than tolerance
-            if v > 1e-6:
-                self.violations += 1
-
+                # count as violation only if it's larger than tolerance
+                if v > 1e-6:
+                    self.violations += 1
+        except Exception as e: 
+            pass
 
         print(f"total_constraints: {self.total_constraints}, num violations: {self.violations}")
         print(f"Objective value: {self.value}")
@@ -764,7 +796,7 @@ class DRO:
 
     def pack_outs(self): 
         lam, Q, P = self.get_vars(which="main")
-        X, Y, K, L, M, N = self.get_vars(which="inner")
+        K, L, Y, X, M, N = self.get_vars(which="inner")
         A, B, C, D = self.get_vars(which="mats")
 
 
