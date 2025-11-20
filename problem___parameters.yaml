@@ -3,7 +3,7 @@ params:
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
   upd: 1                                                                        # set
   old_upd: 0                                                                    # set
-  model: "independent"                                                          # ("correlated" or "independent")
+  model: "correlated"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
   comp: 0                                                                       # VAR ------------------------------ true or false
