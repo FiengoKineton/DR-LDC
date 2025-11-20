@@ -596,7 +596,7 @@ class DRO:
         cons += [self._posdef(blkP)]
 
 
-        G = cp.Variable((Np, Np), PSD=True, name="G")
+        G = cp.Variable((Np, Np), name="G")
         blkG = cp.bmat([
             [G,     Ip  ], 
             [Ip,    P   ],
@@ -608,7 +608,7 @@ class DRO:
             [H, G],
             [G, S],
         ])
-        cons += [self._posdef(blkH)] + [self._posdef(H)]
+        cons += [self._posdef(blkH)]  + [self._posdef(H)]
 
         Ps = cp.Variable((Np, Np), name="Ps")
         blkPs = cp.bmat([   #G + H - inv(Ps)
@@ -619,16 +619,17 @@ class DRO:
 
 
         P_bar = P - (self.sigma_s + self.sigma_p) * self.beta_E
-        #cons += [self._posdef(P_bar)]
+        cons += [self._posdef(P_bar)] 
+        
 
         # NOTE: I switched Ps and P_bar position, I did the calculus for P_bar in (1,1) and Ps in (2,2)-(4,4) but MOSEK doen't break if those are switched
 
         if self.model == "correlated": 
             blk = cp.bmat([
-                [-Ps,                   self._Z(2*nx, nw),  self._Z(2*nx, nw),      A.T,                C.T                 ],
+                [-P_bar,                   self._Z(2*nx, nw),  self._Z(2*nx, nw),      A.T,                C.T                 ],
                 [ self._Z(nw, 2*nx),   -lam*self._I(nw),    lam*self._I(nw),        B.T,                D.T                 ],
                 [ self._Z(nw, 2*nx),    lam*self._I(nw),   -Q - lam*self._I(nw),    self._Z(nw, 2*nx),  self._Z(nw, nz)     ],
-                [  A,                   B,                  self._Z(2*nx, nw),     -P_bar,              self._Z(2*nx, nz)   ],
+                [  A,                   B,                  self._Z(2*nx, nw),     -Ps,              self._Z(2*nx, nz)   ],
                 [  C,                   D,                  self._Z(nz, nw),        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
@@ -636,15 +637,15 @@ class DRO:
 
         elif self.model == "independent":
             blk1 = cp.bmat([
-                [-Ps,       A.T,                C.T                 ],
-                [ A,       -P_bar,              self._Z(2*nx, nz)   ],
+                [-P_bar,       A.T,                C.T                 ],
+                [ A,       -Ps,              self._Z(2*nx, nz)   ],
                 [ C,        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
             blk2 = cp.bmat([
                 [-lam*self._I(nw),  lam*self._I(nw),    B.T,                D.T                 ],
                 [ lam*self._I(nw), -Q-lam*self._I(nw),  self._Z(nw, 2*nx),  self._Z(nw, nz)     ],
-                [ B,                self._Z(2*nx, nw), -P,                  self._Z(2*nx, nz)   ],
+                [ B,                self._Z(2*nx, nw), -Ps,                  self._Z(2*nx, nz)   ],
                 [ D,                self._Z(nz, nw),    self._Z(nz, 2*nx), -self._I(nz)         ],
             ]) 
 
