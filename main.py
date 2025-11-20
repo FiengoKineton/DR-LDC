@@ -181,7 +181,7 @@ class lmi_pipeline_optim_problem():
             else:
                 approach = params.get("approach", "Young")
                 vect = model == "independent"
-                augmented = model == "correlated"
+                augmented = False #model == "correlated"
                 reg_fro, reg_beta = True, True
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
@@ -192,7 +192,6 @@ class lmi_pipeline_optim_problem():
                         noise=noise,
                         model=model,
                         approach=approach,
-                        d=(params.get("ambiguity", {}).get("model", "W2") == "Gaussian")
                     )
                 else:
                     dro = DRO(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, 
@@ -235,6 +234,7 @@ class lmi_pipeline_optim_problem():
             if rho < 1.00:
                 STABLE = True
             i += 1
+            break
 
         eig_cart = [
             {"re": float(ev.real), "im": float(ev.imag), "abs": float(np.abs(ev))}
@@ -990,7 +990,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
 
     summary_df = pd.DataFrame(rows, columns=["metric", "MBD", "DDD"])
 
-    csv_path = path / f"_{model}_metrics_summary.csv"
+    csv_path = path / f"_{model}_metrics_summary_{N}_runs.csv"
     summary_df.to_csv(csv_path, index=False)
     print(f"Saved summary metrics to {csv_path}")
 
@@ -1066,7 +1066,7 @@ if __name__ == "__main__":
         else:
             main(gamma=gamma)
     else: 
-        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=150)
+        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=10)
 
 
 # ----------------------------------------------------------------------------------

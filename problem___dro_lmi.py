@@ -416,7 +416,6 @@ def build_and_solve_dro_lmi_upd(
     mhu_y: float = 0.5,
     mhu_z: float = 0.5,
     approach: str = "DeePC",
-    d: bool = False,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -861,9 +860,9 @@ def build_and_solve_dro_lmi_upd(
                 [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AA.T,       Z(nx,  nz),  young_blk,      Z(nx,   nx)     ],
                 [ Z(nx,2*nx),    Z(nx,  nw),   Z(nx,  nw),   S_AB.T,       Z(nx,  nz),  Z(nx, nx),     -s_AB * Ix       ],
             ])
+            cons += [negdef(state_blk)]
 
         cons += [negdef(big_corr)]
-        cons += [negdef(state_blk)]
 
     elif model.lower() in ["independent", "indep", "2"]:
         if approach == "DeePC":
@@ -879,7 +878,8 @@ def build_and_solve_dro_lmi_upd(
                 [  C,           Z(nz, 2*nx), -Iz,           Z(nz, nx),      Z(nz, nx)       ],
                 [  Z(nx,2*nx),  S_AA.T,       Z(nx, nz),    young_blk,      Z(nx,   nx)     ],
                 [  Z(nx,2*nx),  S_AB.T,       Z(nx, nz),    Z(nx,   nx),   -s_AB * Ix       ],
-            ])            
+            ])       
+            cons += [negdef(state_blk)]     
         
         blk2 = cp.bmat([
             [-lam*Iw,   lam*Iw,         B.T,            D.T         ],
@@ -890,7 +890,6 @@ def build_and_solve_dro_lmi_upd(
 
         cons += [negdef(blk1)]
         cons += [negdef(blk2)]
-        if d: cons += [negdef(state_blk)]
     else:
         raise ValueError("model must be 'correlated' or 'independent'.")
 

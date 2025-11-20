@@ -2,17 +2,24 @@
   "prob": "MBD",
   "meta": {
     "model": "independent",
+    "disturbance_type": "2W_independent",
     "solver": "MOSEK",
     "status": "optimal",
+    "num_violations": 0,
+    "tot_constraints:": 3,
     "objective": 14.386063521261573,
     "gamma": 0.5,
     "lambda_opt": 19.176102998156598,
     "spectral_radius_Acl": 0.9996543728187575,
-    "Z_cost": 4.091150689151997,
-    "Time_seconds": 0.3365168000018457,
+    "Z_cost": 16.13273905232902,
+    "Time_seconds": 0.3603933000122197,
     "attempt": 1,
-    "Total_time": 0.3365168000018457,
-    "stress": 2.4144411214998587
+    "Total_time": 0.3603933000122197,
+    "stress": 2.991523427220885,
+    "vect": null,
+    "augmented": true,
+    "reg_fro": null,
+    "reg_beta": null
   },
   "controller": {
     "Ac": [

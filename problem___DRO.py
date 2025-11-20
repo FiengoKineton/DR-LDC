@@ -3,6 +3,7 @@ import cvxpy as cp
 from utils___systems import DROLMIResult, Noise
 from utils___matrices import MatricesAPI, recover_deltas
 from utils___simulate import Open_Loop
+from utils___ambiguity import Disturbances
 import sys
 
 
@@ -11,17 +12,18 @@ class DRO:
     def __init__(self, 
                  vals: tuple, model: str,
                  api: MatricesAPI, noise: Noise, 
-                 rho: float = 1e-3, eps: float = 1e-6, 
+                 rho: float = 1e-2, eps: float = 1e-6, sim_N: int = 20,
                  Bw_mode: str = "known_cov", real_perf_mats: bool = False, 
-                 aug_mode: str = "std", eval_from_ol: bool = True,
+                 aug_mode: str = "std", eval_from_ol: bool = True, estm_noise: bool = False,
                  reg_fro: bool = False, reg_beta: bool = True, new: bool = True,
                  ):
 
+        Bw_mode = "proj" if estm_noise else Bw_mode
         self.api = api
-        self.eps, self.rho = eps, rho
+        self.eps, self.rho, self.sim_N = eps, rho, sim_N
         self.model, self.Bw_mode, self.vals = model, Bw_mode, vals
-        self.real_perf_mats, self.augmented, self.aug_mode, self.eval_from_ol \
-              = real_perf_mats, vals[3], aug_mode, eval_from_ol
+        self.real_perf_mats, self.augmented, self.aug_mode, self.eval_from_ol, self.estm_noise \
+              = real_perf_mats, vals[3], aug_mode, eval_from_ol, estm_noise
         self.gamma, self.var, self.Sigma_nom = noise.gamma, noise.var, noise.Sigma_nom
         self.inp = vals[4]
 
@@ -172,7 +174,7 @@ class DRO:
             X_, X, U_, Y_, Z_ = data.get_data()
 
         else:
-            op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=1)
+            op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=self.sim_N)
             datasets = op.datasets
 
 
@@ -222,6 +224,11 @@ class DRO:
         R = X - (Ax @ X_ + Bu @ U_)
         Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
         W_ = self._pseudo_inv(Bw) @ R
+
+        if self.estm_noise:
+            d = Disturbances(n=nw)
+            self.Sigma_nom = d.estm_Sigma_nom(W_.T)
+            self.gamma, *_ = d._estimate_gamma_with_ci(W_.T)
 
 
         Dy = np.vstack([X_, W_])
@@ -298,6 +305,9 @@ class DRO:
         print(f"Total residual energy: {total}")
         cum = np.cumsum(s) / total
         nw = int(np.clip(np.searchsorted(cum, eta) + 1, 1, nx))
+        if nw != 2:
+            if self.inp: input("...")
+            nw = 2
 
         Up = U[:, :nw]
         sp = s[:nw]
@@ -558,24 +568,24 @@ class DRO:
         beta_A = np.asarray(self.beta_a * w_R, dtype=float)
         beta_B = np.asarray(self.beta_b * w_R, dtype=float)
 
-        self.beta_A = cp.Parameter(nx, nonneg=True, value=beta_A)
-        self.beta_B = cp.Parameter(nx, nonneg=True, value=beta_B)
+        self.beta_A = cp.Parameter(nx, value=beta_A)
+        self.beta_B = cp.Parameter(nx, value=beta_B)
 
         self.beta = cp.diag(cp.hstack([self.beta_A, self.beta_B]))
         self.beta_E = U_R @ self.beta @ U_R.T
 
-        self.s_A = cp.Variable(nx, nonneg=True, name="s_a")
-        self.s_B = cp.Variable(nx, nonneg=True, name="s_b")
+        self.s_A = cp.Variable(nx, name="s_a")
+        self.s_B = cp.Variable(nx, name="s_b")
         S = cp.diag(cp.hstack([self.s_A, self.s_B]))
 
 
-        self.sigma_s = cp.Variable(nonneg=True, name="sigma_s")
-        self.sigma_p = cp.Variable(nonneg=True, name="sigma_p")
+        self.sigma_s = cp.Variable(name="sigma_s")
+        self.sigma_p = cp.Variable(name="sigma_p")
 
 
         Is = self._I(S.shape[0])
         blkS = self.sigma_s * Is - S
-        cons += [self._posdef(blkS)]
+        cons += [self._posdef(blkS)] + [self._posdef(S)]
 
         Np = P.shape[0]
         Ip = self._I(Np)
@@ -586,26 +596,30 @@ class DRO:
         cons += [self._posdef(blkP)]
 
 
-        G = cp.Variable((Np, Np), nonneg=True, name="G")
+        G = cp.Variable((Np, Np), PSD=True, name="G")
         blkG = cp.bmat([
             [G,     Ip  ], 
             [Ip,    P   ],
         ])
-        cons += [self._posdef(blkG)]
+        cons += [self._posdef(blkG)] + [self._posdef(G)]
 
-        H = cp.Variable((Np, Np), nonneg=True, name="H")
+        H = cp.Variable((Np, Np), name="H")
         blkH = cp.bmat([
             [H, G],
             [G, S],
         ])
-        cons += [self._posdef(blkH)]
+        cons += [self._posdef(blkH)] + [self._posdef(H)]
 
-        Ps = cp.Variable((Np, Np), nonneg=True, name="Ps")
-        blkPs = G + H - Ps
-        cons += [self._posdef(blkPs)]
+        Ps = cp.Variable((Np, Np), name="Ps")
+        blkPs = cp.bmat([   #G + H - inv(Ps)
+            [G + H, Ip],
+            [Ip,    Ps],
+        ])
+        cons += [self._posdef(blkPs)] + [self._posdef(Ps)]
 
 
-        P_bar = P - (self.sigma_s + self.sigma_p) * Ip
+        P_bar = P - (self.sigma_s + self.sigma_p) * self.beta_E
+        #cons += [self._posdef(P_bar)]
 
         # NOTE: I switched Ps and P_bar position, I did the calculus for P_bar in (1,1) and Ps in (2,2)-(4,4) but MOSEK doen't break if those are switched
 
@@ -675,7 +689,7 @@ class DRO:
             self.reg_b = cp.sum(self.s_B) + cp.sum(self.tau_B / (self.beta_B + self.eps))
 
 
-        self.reg = self.rho * (self.reg_t + self.reg_a + self.reg_b) 
+        self.reg = self.rho * (self.reg_t + self.reg_a + self.reg_b) + self.eps
 
 
     # ============================================================================ #
@@ -692,7 +706,7 @@ class DRO:
                 'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-7,
                 'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-7,
                 'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-7,
-                #'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6,
+                'MSK_DPAR_INTPNT_TOL_STEP_SIZE': 1e-6,
                 'MSK_IPAR_INTPNT_SCALING': 1, # 0: no scaling, 1: geometric mean, 2: equilibrate
             })
             print(f"MOSEK status: {prob.status}")
