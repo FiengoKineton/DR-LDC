@@ -138,7 +138,10 @@ class baseline_optim_problem():
 # ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
 
 class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, noise: Noise, upd: bool = False, plot: bool = False, save: bool = False, FROM_DATA: bool = False, init_cond: str = "zero", disturbance_type: str = "Gaussian"):
+    def __init__(self, params: dict, out: Path, noise: Noise, 
+                 upd: bool = False, plot: bool = False, save: bool = False, 
+                 FROM_DATA: bool = False, init_cond: str = "zero", 
+                 disturbance_type: str = "Gaussian"):
 
         recover = Recover()
         api = MatricesAPI()
@@ -147,7 +150,7 @@ class lmi_pipeline_optim_problem():
         STABLE, i = False, 0
         tot_time = 0
         model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
-        old = params.get("old_upd", True)
+        old = bool(params.get("old_upd", 1))
         inp = bool(params.get("inp", 0))
 
         self.proc = psutil.Process(os.getpid())
@@ -161,8 +164,8 @@ class lmi_pipeline_optim_problem():
 
             # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
             if not upd or not FROM_DATA:
-                plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
-                api.print_plant(plant)
+                plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=noise.gamma, upd=upd)
+                #api.print_plant(plant)
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
                 res, num_violations = build_and_solve_dro_lmi(
@@ -195,7 +198,7 @@ class lmi_pipeline_optim_problem():
                     )
                 else:
                     dro = DRO(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, 
-                              api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta)
+                            api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta)
                     
                     res, P, Sigma_nom, other, num_violations = dro.run()
 

@@ -576,7 +576,7 @@ class MatricesAPI():
 
     def make_matrices_from_data(
         self,
-        gamma: bool = None,
+        gamma: float = None,
         delimiter: str = ",",
         ridge: float = 1e-6,
         eval: bool = False,

@@ -601,8 +601,8 @@ class DRO:
         S = cp.diag(cp.hstack([self.s_A, self.s_B]))
 
 
-        self.sigma_s = cp.Variable(name="sigma_s")
-        self.sigma_p = cp.Variable(name="sigma_p")
+        self.sigma_s = cp.Variable(nonneg=True, name="sigma_s")
+        self.sigma_p = cp.Variable(nonneg=True, name="sigma_p")
 
 
         Is = self._I(S.shape[0])
@@ -618,12 +618,13 @@ class DRO:
         cons += [self._posdef(blkP)]
 
 
-        G = cp.Variable((Np, Np), name="G")
+        G = self.sigma_p * Ip 
+        """cp.Variable((Np, Np), nonneg=True, name="G")
         blkG = cp.bmat([
             [G,     Ip  ], 
             [Ip,    P   ],
         ])
-        cons += [self._posdef(blkG)] + [self._posdef(G)]
+        cons += [self._posdef(blkG)]#"""
 
         H = cp.Variable((Np, Np), name="H")
         blkH = cp.bmat([
