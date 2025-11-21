@@ -68,9 +68,9 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
                 if _estm:
                     _method = "lmi-estm"
                 elif not _old: 
-                    _method = "lmi-upd"
-                else:
                     _method = "lmi-YoungSchur"
+                else:
+                    _method = "lmi-upd"
             else:
                 _method = "lmi"
 

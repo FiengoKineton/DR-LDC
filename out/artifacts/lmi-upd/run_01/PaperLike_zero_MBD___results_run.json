@@ -2,11 +2,11 @@
   "prob": "MBD",
   "meta": {
     "model": "independent",
-    "disturbance_type": "2W_independent",
+    "disturbance_type": "zero",
     "gamma": 0.5,
     "objective": 14.386063521261573,
     "spectral_radius_Acl": 0.9996543728187575,
-    "Z_cost": 20.47644403959708,
+    "Z_cost": 2.05347005500984,
     "lambda_opt": 19.176102998156598,
     "trace_Q_Sigma": 9.592037771722422,
     "real_Z_mats": true
@@ -16,10 +16,10 @@
     "status": "optimal",
     "num_violations": 0,
     "tot_constraints:": 3,
-    "Time_seconds": 0.3804678000160493,
+    "Time_seconds": 0.42338749999180436,
     "attempt": 1,
-    "Total_time": 0.3804678000160493,
-    "stress": 1.9712574887240464
+    "Total_time": 0.42338749999180436,
+    "stress": 2.62023559982634
   },
   "problem_params": {
     "Methodology": "Baseline",

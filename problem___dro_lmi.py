@@ -1088,7 +1088,6 @@ def Young_dro_lmi(
             success_MOSEK = True
     except Exception as mosek_e:
         print(f"MOSEK error: {mosek_e}")
-        #sys.exit(0)
 
     if not success_MOSEK: # and 0:
         """solver = "CVXOPT"
@@ -2055,7 +2054,6 @@ class Young_Schur_dro_lmi:
 
 
         P_bar = P - (self.sigma_s + self.sigma_p) * self.beta_E
-        print(self.beta_E.value); sys.exit(0)
         cons += [self._posdef(P_bar)] 
         
 
@@ -2074,8 +2072,8 @@ class Young_Schur_dro_lmi:
 
         elif self.model == "independent":
             blk1 = cp.bmat([
-                [-P_bar,       A.T,                C.T                 ],
-                [ A,       -Ps,              self._Z(2*nx, nz)   ],
+                [-Ps,       A.T,                C.T                 ],
+                [ A,       -P_bar,              self._Z(2*nx, nz)   ],
                 [ C,        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
@@ -2161,7 +2159,7 @@ class Young_Schur_dro_lmi:
         except Exception as mosek_e:
             print(f"MOSEK error: {mosek_e}")
 
-        if not success_MOSEK:
+        if 0 and not success_MOSEK:
             solver = "SCS"
             print("\n===================================================\nCVXOPT failed, trying SCS...")
             try:
@@ -2200,7 +2198,7 @@ class Young_Schur_dro_lmi:
                 if v > 1e-6:
                     self.violations += 1
         except Exception as e: 
-            pass
+            print(e)
 
         print(f"total_constraints: {self.total_constraints}, num violations: {self.violations}")
         print(f"Objective value: {self.value}")
@@ -2371,7 +2369,7 @@ class lmi_pipeline_optim_problem():
                         problem_params = {
                             "Methodology": "YoungSchur",
                             "FROM_DATA": FROM_DATA, # True
-                            "augmented": True,
+                            "augmented": augmented,
                             "reg_fro": reg_fro,
                             "reg_beta": reg_beta,
                         }

@@ -469,8 +469,9 @@ class ResultsComparator:
           <out_root>/<method>/<base>_DDD/___results_run.json
           and their ___closed_loop_run.npz
         """
-        method = method.strip().lower()
+        method = method.strip()#.lower()
         ID = ID.strip().lower()
+        print(method)
         assert method in ("lmi", "base", "lmi-upd", "lmi-estm", "lmi-YoungSchur"), "method must be 'lmi' or 'baseline'"
 
         suffix = path_name.lstrip("/\\")
