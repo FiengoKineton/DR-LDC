@@ -8,6 +8,8 @@ from numpy.linalg import norm
 from utils___simulate import Open_Loop
 from pathlib import Path
 from scipy.linalg import solve_sylvester
+from utils___ambiguity import Disturbances
+
 
 
 yaml_path="problem___parameters.yaml"
@@ -823,6 +825,115 @@ class MatricesAPI():
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
 
         return plant, ctrl0
+
+
+    def estm_mats(self, 
+                  X_, U_, X, Y_, Z_, gamma: float = None,
+                  Sigma_nom: np.ndarray = None, eps: float = 1e-6,
+                  real_perf_mats: bool = True, estm_noise: bool = False): 
+
+        def _pseudo_inv(M: np.ndarray): 
+            return M.T @ np.linalg.inv(M @ M.T + eps * np.eye(M.shape[0]))
+    
+        nx, nu = X_.shape[0], U_.shape[0]
+
+        Dx = np.vstack([X_, U_])
+        Ox = X @ _pseudo_inv(Dx)
+        Ax, Bu = Ox[:, :nx], Ox[:, nx:nx+nu]
+
+        R = X - (Ax @ X_ + Bu @ U_)
+
+        Bw, nw, residual_anisotropy_weights = self.estm_Bw(R=R, Sigma_nom=Sigma_nom)
+        W_ = _pseudo_inv(Bw) @ R
+
+        if estm_noise:
+            d = Disturbances(n=nw)
+            Sigma_nom = d.estm_Sigma_nom(W_.T)
+            gamma, *_ = d._estimate_gamma_with_ci(W_.T)
+
+
+        Dy = np.vstack([X_, W_])
+        Oy = Y_ @ _pseudo_inv(Dy)
+        Cy, Dyw = Oy[:, :nx], Oy[:, nx:nx+nw]
+
+        if real_perf_mats:
+            Cz, Dzw, Dzu, *_ = self.build_out_matrices(nw=nw)
+        else:
+            Dz = np.vstack([X_, U_, W_])
+            Oz = Z_ @ _pseudo_inv(Dz)
+            Cz, Dzu, Dzw = Oz[:, :nx], Oz[:, nx:nx+nu], Oz[:, nx+nu:nx+nu+nw]
+
+        mats = (Ax, Bu, Bw, Cy, Dyw, Cz, Dzu, Dzw)
+
+        return mats, (W_, nw, residual_anisotropy_weights), (Sigma_nom, gamma)
+
+    def estm_Bw(self, 
+                 R: np.ndarray, Bw_mode: str = "known_cov",
+                 eta: float = 0.95, eps: float = 1e-6,
+                 Sigma_nom: np.ndarray = None):
+        nx, T = R.shape
+        S = (R @ R.T) / max(T, 1)
+        S = 0.5 * (S + S.T) + eps * np.eye(S.shape[0])
+
+        # eig decomposition
+        s_vals, U = np.linalg.eigh(S)
+        s_vals = np.clip(s_vals, 0.0, None)
+        w = np.sqrt(s_vals)
+        order = np.argsort(s_vals)[::-1]
+        s = s_vals[order]
+        U = U[:, order]
+
+        if Bw_mode == "known_cov" and Sigma_nom is not None:
+            Sigma_nom = Sigma_nom
+            nw = Sigma_nom.shape[0]
+            if nw > nx:
+                raise ValueError(f"nw = {nw} > nx = {nx}")
+
+            Up = U[:, :nw]
+            sp = s[:nw]
+            sp = np.clip(sp, eps, None)
+            sp_sqrt = np.sqrt(sp)
+
+            # eig of Sigma_nom
+            lam, Q = np.linalg.eigh(Sigma_nom)
+            lam = np.clip(lam, eps, None)
+            Sigma_inv_sqrt = Q @ np.diag(lam**-0.5) @ Q.T
+
+            Bw = Up @ np.diag(sp_sqrt) @ Sigma_inv_sqrt
+
+            return Bw, nw, (U, s, w)
+
+
+        # rank selection
+        total = max(float(np.sum(s)), 1e-18)
+        print(f"Total residual energy: {total}")
+        cum = np.cumsum(s) / total
+        nw = int(np.clip(np.searchsorted(cum, eta) + 1, 1, nx))
+
+        Up = U[:, :nw]
+        sp = s[:nw]
+        sp_sqrt = np.sqrt(sp)
+
+        if Bw_mode == "factor":
+            # low-rank factor: S ≈ Bw Bw^T, w ~ N(0, I)
+            Bw = Up @ np.diag(sp_sqrt)
+
+        elif Bw_mode == "proj":
+            # just the subspace: Bw Bw^T = Up Up^T
+            Bw = Up
+
+        elif Bw_mode == "white":
+            # use factor but normalize so Σ_w = I in that nw-dim space
+            # here it's effectively same as 'factor' if you treat w ~ N(0, I)
+            Bw = Up @ np.diag(sp_sqrt)
+
+        else:
+            raise ValueError("Bw_mode must be in {'factor','proj','known_cov','white'}")
+
+        return Bw, nw, (U, s, w)
+
+
+    # ------------------------- Others --------------------------------------------------
 
     def change_of_coordinates(self, plant: Plant, T: np.ndarray) -> Plant:
         """

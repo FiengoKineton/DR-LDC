@@ -1,9 +1,14 @@
-import numpy as np
+import json, numpy as np
 from utils___matrices import compose_closed_loop
 
 from numpy.linalg import eigvals
 from scipy.optimize import minimize
 from utils___systems import Plant, Controller
+from pathlib import Path
+
+from utils___systems import Plant, Controller, Plant_cl, Noise
+from utils___simulate import Closed_Loop 
+from utils___matrices import Recover, MatricesAPI, compose_closed_loop
 
 
 # ------------------------- SUPPORTING FUNCTIONS FOR OPTIMIZATION --------
@@ -187,6 +192,122 @@ def run_once(plant: Plant = None,
     print("Dc=\n", ctrl_opt.Dc)
 
     return Sigma_nom, float(base_cost), str(res.message), float(cost_opt), rho, ctrl_opt
+
+
+# ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
+
+class baseline_optim_problem(): 
+    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, save: bool = False, FROM_DATA: bool = None, init_cond: str = "zero"):
+
+        # Run optimization AND capture the exact plant used
+        cl = Closed_Loop()  # instantiate simulation class
+        api = MatricesAPI()
+
+        plant, ctrl0 = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma)
+        api.print_plant(plant)
+
+        Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt = run_once(plant=plant, ctrl0=ctrl0, Sigma_nom=Sigma_nom)
+        Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl_opt)
+        plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
+
+        # Persist everything needed for reproducible simulation
+        json_path = out + f"___results_run.json"
+        if save: self.save_results_json(json_path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant, plant_cl)
+        print(f"[saved] {json_path}")
+
+        # Load back the exact same objects and simulate
+        Sigma_loaded, ctrl_loaded, plant_loaded, _ = self.load_results_json(json_path)
+        sim = cl.simulate_closed_loop(plant=plant_loaded, ctrl=ctrl_loaded, Sigma_w=Sigma_loaded, gamma=gamma, init_cond=init_cond)
+        out_npz = out + f"___closed_loop_run.npz"
+        if save: cl.save_npz(sim, str(out_npz))
+        print(f"[saved] {out_npz}")
+
+        sim_composite = cl.simulate_composite(Pcl=plant_cl, gamma=gamma, init_cond=init_cond)
+        out_composite = out + f"___closed_loop_composite.npz"
+        if save: cl.save_npz(sim_composite, str(out_composite))
+        print(f"[saved] {out_composite}")
+
+        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
+        out_cost = out + f"___closed_loop_run_cost.npz"
+        if save: cl.save_npz(sim_cost, str(out_cost))   
+        print(f"[saved] {out_cost}")
+
+
+        if plot: 
+            cl.plot_timeseries(sim=sim, save=save, out=out)
+            cl.plot_composite(sim=sim_composite, save=save, out=out)
+    
+        self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl_opt, sim, Sigma_nom
+
+
+    def plant_to_dict(self, P: Plant):
+        return {
+            "A": P.A.tolist(), "Bw": P.Bw.tolist(), "Bu": P.Bu.tolist(),
+            "Cz": P.Cz.tolist(), "Dzw": P.Dzw.tolist(), "Dzu": P.Dzu.tolist(),
+            "Cy": P.Cy.tolist(), "Dyw": P.Dyw.tolist(),
+        }
+
+    def plant_cl_to_dict(self, P: Plant_cl):
+        return {
+            "Acl": P.Acl.tolist(),
+            "Bcl": P.Bcl.tolist(), 
+            "Ccl": P.Ccl.tolist(), 
+            "Dcl": P.Dcl.tolist()
+        }
+    
+    def plant_from_dict(self, d: dict) -> Plant:
+        return Plant(
+            A=np.array(d["A"], dtype=float),
+            Bw=np.array(d["Bw"], dtype=float),
+            Bu=np.array(d["Bu"], dtype=float),
+            Cz=np.array(d["Cz"], dtype=float),
+            Dzw=np.array(d["Dzw"], dtype=float),
+            Dzu=np.array(d["Dzu"], dtype=float),
+            Cy=np.array(d["Cy"], dtype=float),
+            Dyw=np.array(d["Dyw"], dtype=float),
+        )
+
+    def controller_to_dict(self, C: Controller):
+        return {"Ac": C.Ac.tolist(), "Bc": C.Bc.tolist(), "Cc": C.Cc.tolist(), "Dc": C.Dc.tolist()}
+
+    def controller_from_dict(self, d: dict) -> Controller:
+        return Controller(
+            Ac=np.array(d["Ac"], dtype=float),
+            Bc=np.array(d["Bc"], dtype=float),
+            Cc=np.array(d["Cc"], dtype=float),
+            Dc=np.array(d["Dc"], dtype=float),
+        )
+
+    def save_results_json(self, path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant, plant_cl):
+        payload = {
+            "Sigma_nom": Sigma_nom.tolist(),
+            "baseline_cost": base_cost,
+            "optimizer_status": msg,
+            "optimized_cost": cost_opt,
+            "spectral_radius_Acl": rho,
+            "controller": self.controller_to_dict(ctrl_opt),
+            "plant": self.plant_to_dict(plant),
+            "composite_closed_loop": self.plant_cl_to_dict(plant_cl),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+    def load_results_json(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        Sigma_nom = np.array(d["Sigma_nom"], dtype=float)
+        ctrl = self.controller_from_dict(d["controller"])
+        plant = self.plant_from_dict(d["plant"])
+        meta = {
+            "baseline_cost": d["baseline_cost"],
+            "optimized_cost": d["optimized_cost"],
+            "optimizer_status": d["optimizer_status"],
+            "spectral_radius_Acl": d["spectral_radius_Acl"],
+        }
+        return Sigma_nom, ctrl, plant, meta
+
+    def get_snr_vars(self):
+        return self.plant, self.ctrl, self.sim, self.Sigma_nom
 
 
 # ------------------------- MAIN SCRIPT ENTRY POINT ----------------------

@@ -1,5 +1,5 @@
 # main.py
-import json, argparse, yaml, sys, time, psutil, os
+import yaml, sys
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -8,473 +8,13 @@ import pandas as pd
 
 
 from matplotlib.lines import Line2D
-from problem___baseline import run_once
-from problem___dro_lmi import build_and_solve_dro_lmi, build_and_solve_dro_lmi_upd
-from problem___DRO import DRO
+from problem___baseline import baseline_optim_problem
+from problem___dro_lmi import lmi_pipeline_optim_problem
 
-from utils___systems import Plant, Controller, Plant_cl, Noise
-from utils___simulate import Closed_Loop 
-from utils___matrices import Recover, MatricesAPI, compose_closed_loop
+from utils___systems import Noise
 from utils___SolutionComparison import ResultsComparator
 from utils___SNR import SNRAnalyzer
 
-
-# ------------------------- BASELINE OPTIMIZATION PROBLEM --------------------------
-
-class baseline_optim_problem(): 
-    def __init__(self, out: Path, Sigma_nom: np.ndarray, gamma: float, plot: bool = False, save: bool = False, FROM_DATA: bool = None, init_cond: str = "zero"):
-
-        # Run optimization AND capture the exact plant used
-        cl = Closed_Loop()  # instantiate simulation class
-        api = MatricesAPI()
-
-        plant, ctrl0 = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma)
-        api.print_plant(plant)
-
-        Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt = run_once(plant=plant, ctrl0=ctrl0, Sigma_nom=Sigma_nom)
-        Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl_opt)
-        plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
-
-        # Persist everything needed for reproducible simulation
-        json_path = out + f"___results_run.json"
-        if save: self.save_results_json(json_path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant, plant_cl)
-        print(f"[saved] {json_path}")
-
-        # Load back the exact same objects and simulate
-        Sigma_loaded, ctrl_loaded, plant_loaded, _ = self.load_results_json(json_path)
-        sim = cl.simulate_closed_loop(plant=plant_loaded, ctrl=ctrl_loaded, Sigma_w=Sigma_loaded, gamma=gamma, init_cond=init_cond)
-        out_npz = out + f"___closed_loop_run.npz"
-        if save: cl.save_npz(sim, str(out_npz))
-        print(f"[saved] {out_npz}")
-
-        sim_composite = cl.simulate_composite(Pcl=plant_cl, gamma=gamma, init_cond=init_cond)
-        out_composite = out + f"___closed_loop_composite.npz"
-        if save: cl.save_npz(sim_composite, str(out_composite))
-        print(f"[saved] {out_composite}")
-
-        sim_cost = cl.simulate_Z_cost(Z=sim_composite["Z"], plot=plot)
-        out_cost = out + f"___closed_loop_run_cost.npz"
-        if save: cl.save_npz(sim_cost, str(out_cost))   
-        print(f"[saved] {out_cost}")
-
-
-        if plot: 
-            cl.plot_timeseries(sim=sim, save=save, out=out)
-            cl.plot_composite(sim=sim_composite, save=save, out=out)
-    
-        self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl_opt, sim, Sigma_nom
-
-
-    def plant_to_dict(self, P: Plant):
-        return {
-            "A": P.A.tolist(), "Bw": P.Bw.tolist(), "Bu": P.Bu.tolist(),
-            "Cz": P.Cz.tolist(), "Dzw": P.Dzw.tolist(), "Dzu": P.Dzu.tolist(),
-            "Cy": P.Cy.tolist(), "Dyw": P.Dyw.tolist(),
-        }
-
-    def plant_cl_to_dict(self, P: Plant_cl):
-        return {
-            "Acl": P.Acl.tolist(),
-            "Bcl": P.Bcl.tolist(), 
-            "Ccl": P.Ccl.tolist(), 
-            "Dcl": P.Dcl.tolist()
-        }
-    
-    def plant_from_dict(self, d: dict) -> Plant:
-        return Plant(
-            A=np.array(d["A"], dtype=float),
-            Bw=np.array(d["Bw"], dtype=float),
-            Bu=np.array(d["Bu"], dtype=float),
-            Cz=np.array(d["Cz"], dtype=float),
-            Dzw=np.array(d["Dzw"], dtype=float),
-            Dzu=np.array(d["Dzu"], dtype=float),
-            Cy=np.array(d["Cy"], dtype=float),
-            Dyw=np.array(d["Dyw"], dtype=float),
-        )
-
-    def controller_to_dict(self, C: Controller):
-        return {"Ac": C.Ac.tolist(), "Bc": C.Bc.tolist(), "Cc": C.Cc.tolist(), "Dc": C.Dc.tolist()}
-
-    def controller_from_dict(self, d: dict) -> Controller:
-        return Controller(
-            Ac=np.array(d["Ac"], dtype=float),
-            Bc=np.array(d["Bc"], dtype=float),
-            Cc=np.array(d["Cc"], dtype=float),
-            Dc=np.array(d["Dc"], dtype=float),
-        )
-
-    def save_results_json(self, path, Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant, plant_cl):
-        payload = {
-            "Sigma_nom": Sigma_nom.tolist(),
-            "baseline_cost": base_cost,
-            "optimizer_status": msg,
-            "optimized_cost": cost_opt,
-            "spectral_radius_Acl": rho,
-            "controller": self.controller_to_dict(ctrl_opt),
-            "plant": self.plant_to_dict(plant),
-            "composite_closed_loop": self.plant_cl_to_dict(plant_cl),
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-
-    def load_results_json(self, path):
-        with open(path, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        Sigma_nom = np.array(d["Sigma_nom"], dtype=float)
-        ctrl = self.controller_from_dict(d["controller"])
-        plant = self.plant_from_dict(d["plant"])
-        meta = {
-            "baseline_cost": d["baseline_cost"],
-            "optimized_cost": d["optimized_cost"],
-            "optimizer_status": d["optimizer_status"],
-            "spectral_radius_Acl": d["spectral_radius_Acl"],
-        }
-        return Sigma_nom, ctrl, plant, meta
-
-    def get_snr_vars(self):
-        return self.plant, self.ctrl, self.sim, self.Sigma_nom
-
-
-# ------------------------- DRO-LMI PIPELINE OPTIMIZATION PROBLEM ------------------
-
-class lmi_pipeline_optim_problem(): 
-    def __init__(self, params: dict, out: Path, noise: Noise, 
-                 upd: bool = False, plot: bool = False, save: bool = False, 
-                 FROM_DATA: bool = False, init_cond: str = "zero", 
-                 disturbance_type: str = "Gaussian"):
-
-        recover = Recover()
-        api = MatricesAPI()
-        cl = Closed_Loop() 
-
-        STABLE, i = False, 0
-        tot_time = 0
-        model = params.get("model", "correlated") if params.get("ambiguity", {}).get("model", "W2") != "Gaussian" else "independent"
-        old = bool(params.get("old_upd", 1))
-        inp = bool(params.get("inp", 0))
-
-        self.proc = psutil.Process(os.getpid())
-        self.solve_stats = []
-
-        while not STABLE and i<7:
-            t0 = time.perf_counter()
-            cpu0 = self.proc.cpu_times()
-            cpu0_total = cpu0.user + cpu0.system
-
-
-            # 1) Define plant and nominal disturbance covariance (keep consistent with your LMI)
-            if not upd or not FROM_DATA:
-                plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=noise.gamma, upd=upd)
-                #api.print_plant(plant)
-
-                # 2) Solve DRO-LMI (choose "correlated" or "independent")
-                res, num_violations = build_and_solve_dro_lmi(
-                    plant=plant,
-                    api=api,
-                    noise=noise,
-                    model=model,
-                    SOLVER=params.get("solver", "MOSEK"),
-                )
-
-                A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
-                Bw, Dzw, Dyw, _, Sigma_nom = api._augment_matrices(Bw, Dzw, Dyw, noise.var)
-                plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-                ADD = False
-
-            else:
-                approach = params.get("approach", "Young")
-                vect = model == "independent"
-                augmented = False #model == "correlated"
-                reg_fro, reg_beta = True, True
-
-                # 2) Solve DRO-LMI (choose "correlated" or "independent")
-                if old:
-                    res, P, Sigma_nom, other, num_violations = build_and_solve_dro_lmi_upd(
-                        api=api,
-                        vals=(upd, FROM_DATA, plot),
-                        noise=noise,
-                        model=model,
-                        approach=approach,
-                    )
-                else:
-                    dro = DRO(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, 
-                            api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta)
-                    
-                    res, P, Sigma_nom, other, num_violations = dro.run()
-
-                A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
-                plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
-                ADD = True
-
-
-            t1 = time.perf_counter()
-            cpu1 = self.proc.cpu_times()
-            cpu1_total = cpu1.user + cpu1.system
-            d_cpu = cpu1_total - cpu0_total
-
-
-            Time = t1 - t0
-            stress = d_cpu / Time if Time > 0 else 0.0
-            tot_time += Time
-
-            if res.status not in ("optimal", "optimal_inaccurate"):
-                raise RuntimeError(f"DRO-LMI solve failed: status={res.status}")
-
-
-            # 3) From (Pbar, Abar, Bbar, Cbar, Dbar) build composite (Acl, Bcl, Ccl, Dcl) in original coords
-
-            Ac, Bc, Cc, Dc = recover.Mc_from_bar(res, plant)
-            ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
-            Acl, Bcl, Ccl, Dcl = compose_closed_loop(plant, ctrl)
-            plant_cl = Plant_cl(Acl=Acl, Bcl=Bcl, Ccl=Ccl, Dcl=Dcl)
-
-            # 4) Recover (Ac, Bc, Cc, Dc) from composite and plant, with residual diagnostics
-            # ctrl_rec, residuals = recover.recover_controller_from_closed_loop(plant, api, (Acl, Bcl, Ccl, Dcl))
-            
-
-            eig = np.linalg.eigvals(Acl)
-            rho = float(np.max(np.abs(eig)))
-            if rho < 1.00:
-                STABLE = True
-            i += 1
-            break
-
-        eig_cart = [
-            {"re": float(ev.real), "im": float(ev.imag), "abs": float(np.abs(ev))}
-            for ev in eig
-        ]
-        eig_polar = [
-            {"abs": float(np.abs(ev)), "ang_rad": float(np.angle(ev))}
-            for ev in eig
-        ]
-
-        warn_margin = 1.0 - 1e-6     # warn if too close to 1 from below
-        hard_fail   = 1.0 + 1e-9     # fail if ≥ 1 within numerical wiggle
-
-        if not np.isfinite(rho):
-            print("Closed loop produced non-finite eigenvalues.")
-
-        if rho >= hard_fail:
-            print(f"Unstable: spectral radius {rho:.6g} ≥ 1.")
-
-        if rho >= warn_margin:
-            print(f"Warning: near-marginal stability, spectral radius {rho:.6g}.")
-
-        if any(abs(eig) >= warn_margin):
-            print("Warning: Closed-loop system may be unstable")
-            print(abs(eig))
-        else:
-            print("Closed-loop system is stable")
-            print(abs(eig))
-        
-
-
-        # 6) Simulate with the recovered controller using the SAME plant and nominal Σ
-        #    If you prefer covariance inflation for robustness testing, replace Sigma_nom here.
-        sim = cl.simulate_closed_loop(plant=plant, ctrl=ctrl, Sigma_w=Sigma_nom, gamma=gamma, init_cond=init_cond)
-        out_npz = out + f"___closed_loop_run.npz"
-
-        sim_composite = cl.simulate_composite(Pcl=plant_cl, Sigma_w=Sigma_nom, gamma=gamma, init_cond=init_cond)
-        out_composite = out + f"___closed_loop_composite.npz"
-
-        sim_cost = cl.simulate_Z_cost(Z=sim["Z"], plot=plot)
-        self.final_cost = sim_cost["J"]
-        print("\nFinal closed-loop cost J =", self.final_cost)
-        out_cost = out + f"___closed_loop_run_cost.npz"
-
-        self.rho = rho
-        self.lamda = res.lambda_opt
-        self.Time = Time
-        self.attempt = i
-        self.stress = stress
-        self.obj = res.obj_value
-        self.solver = res.solver
-        self.ratio_violation = num_violations[0] / num_violations[1]
-
-        # JSON
-        payload = {
-            "prob": "DDD" if FROM_DATA else "MBD",
-            "meta": {
-                "model": model,
-                "disturbance_type": disturbance_type,
-                "solver": self.solver,
-                "status": res.status,
-                "num_violations": int(num_violations[0]),
-                "tot_constraints:": int(num_violations[1]),
-                "objective": self.obj,
-                "gamma": res.gamma,
-                "lambda_opt": res.lambda_opt,
-                "spectral_radius_Acl": rho,
-                "Z_cost": self.final_cost,
-                "Time_seconds": Time,
-                "attempt": i,
-                "Total_time": tot_time,
-                "stress": self.stress,
-                "vect": vect if not old and FROM_DATA else None,
-                "augmented": augmented if FROM_DATA else True,
-                "reg_fro": reg_fro if not old and FROM_DATA else None, 
-                "reg_beta": reg_beta if not old and FROM_DATA else None,
-            },
-            "controller": self.controller_to_dict(ctrl),
-            "plant": self.plant_to_dict(plant),
-            "plant_dims": {
-                "nx": A.shape[0], 
-                "nu": Bu.shape[1], 
-                "nw": Bw.shape[1], 
-                "ny": Cy.shape[0], 
-                "nz": Cz.shape[0],
-            },
-            "composite_closed_loop": self.plant_cl_to_dict(plant_cl),
-            "Acl_eigenvals": {
-                "cartesian": eig_cart,
-                "polar": eig_polar
-            },            
-            "disturbance": {
-                "Sigma_nom": Sigma_nom.tolist(),
-            },
-            "dro_variables": {
-                "Q": None if res.Q is None else res.Q.tolist(),
-                "X": None if res.X is None else res.X.tolist(),
-                "Y": None if res.Y is None else res.Y.tolist(),
-                "K": None if res.K is None else res.K.tolist(),
-                "L": None if res.L is None else res.L.tolist(),
-                "M": None if res.M is None else res.M.tolist(),
-                "N": None if res.N is None else res.N.tolist(),
-                "Pbar": None if res.Pbar is None else res.Pbar.tolist(),
-                "Abar": None if res.Abar is None else res.Abar.tolist(),
-                "Bbar": None if res.Bbar is None else res.Bbar.tolist(),
-                "Cbar": None if res.Cbar is None else res.Cbar.tolist(),
-                "Dbar": None if res.Dbar is None else res.Dbar.tolist(),
-                "Tp": None if res.Tp is None else res.Tp.tolist(),
-            },
-        }
-
-        if ADD: 
-            if (approach == 'Young' or approach == 'Mats') and old or not old and reg_beta:
-                D, E, B, S, T, R = other
-                payload["Young_approach"] = {
-                    "approach": approach,
-                    "D": self._to_serializable(D),  # handles (DeltaA, DeltaB) as matrices/tuples
-                    "E": self._to_serializable(E),  # handles (EAA, EAB) as matrices/tuples
-                    "B": self._to_serializable(B),  # now OK if matrix, vector, or scalars tuple
-                    "S": self._to_serializable(S),  # now OK if matrix
-                    "T": self._to_serializable(T),  # now OK if matrix
-                    "R": self._to_serializable(R),
-                }
-
-        out_json = out + f"___results_run.json"
-        if save: 
-            cl.save_npz(sim, str(out_npz))
-            print(f"[saved] {out_npz}")
-            cl.save_npz(sim_composite, str(out_composite))
-            print(f"[saved] {out_composite}")
-            cl.save_npz(sim_cost, str(out_cost))   
-            print(f"[saved] {out_cost}")
-            self.save_json(out_json, payload)
-            print(f"[saved] {out_json}")
-
-        # 7) Plot results
-        if plot: 
-            cl.plot_timeseries(sim=sim, save=save, out=out)
-            cl.plot_composite(sim=sim_composite, save=save, out=out)
-
-        Data = {
-            'gamma': res.gamma, 'lambda': res.lambda_opt, 'Sigma_nom': Sigma_nom,
-            'A_c': Ac, 'B_c':Bc, 'C_c': Cc, 'D_c': Dc, 'A_cl': Acl, 'rho': rho, 'var' : noise.var,
-            #'rx': None if res.rx is None else res.rx, 'ry': None if res.ry is None else res.ry, 'rz': None if res.rz is None else res.rz
-        }
-        for key in ['gamma', 'lambda', 'Sigma_nom', 'A_c', 'B_c', 'C_c', 'D_c', 'A_cl']:#, 'rho', 'var', 'rx', 'ry', 'rz']:
-            print(f"\n{key} =")
-            print(Data[key])
-        
-        self.plant, self.ctrl, self.sim, self.Sigma_nom = plant, ctrl, sim, Sigma_nom
-
-    def _return_final_infos(self):
-        infos = {
-            "J": self.final_cost,
-            "lamda": self.lamda,
-            "rho": self.rho,
-            "time": self.Time, 
-            "attempts": self.attempt,
-            "stress": self.stress,
-            "obj": self.obj,
-            "solver": self.solver,
-            "ratio_violation": self.ratio_violation,
-        }
-        return infos
-
-    def plant_to_dict(self, P: Plant):
-        return {
-            "A": P.A.tolist(),
-            "Bw": P.Bw.tolist(),
-            "Bu": P.Bu.tolist(),
-            "Cz": P.Cz.tolist(),
-            "Dzw": P.Dzw.tolist(),
-            "Dzu": P.Dzu.tolist(),
-            "Cy": P.Cy.tolist(),
-            "Dyw": P.Dyw.tolist(),
-        }
-
-    def plant_cl_to_dict(self, P: Plant_cl):
-        return {
-            "Acl": P.Acl.tolist(),
-            "Bcl": P.Bcl.tolist(), 
-            "Ccl": P.Ccl.tolist(), 
-            "Dcl": P.Dcl.tolist()
-        }
-
-    def controller_to_dict(self, C: Controller):
-        return {"Ac": C.Ac.tolist(), "Bc": C.Bc.tolist(), "Cc": C.Cc.tolist(), "Dc": C.Dc.tolist()}
-
-    def save_json(self, path: Path, payload: dict):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-
-    def get_snr_vars(self):
-        return self.plant, self.ctrl, self.sim, self.Sigma_nom
-
-    def _to_serializable(self, x):
-        """
-        Convert scalars / arrays / nested tuples-lists of arrays into JSON-safe types.
-        - CVXPy expressions -> use .value first (caller’s job), otherwise we try best-effort.
-        - NumPy arrays -> .tolist()
-        - Scalars -> float/int/bool
-        - Lists/Tuples -> map recursively
-        """
-        import numpy as np
-
-        # cvxpy objects: try to unwrap gracefully if user forgot to pass .value
-        try:
-            import cvxpy as cp
-            if isinstance(x, (cp.Expression, cp.atoms.atom.Atom)):
-                x = x.value
-        except Exception:
-            pass
-
-        if x is None:
-            return None
-        if isinstance(x, (list, tuple)):
-            return [self._to_serializable(xx) for xx in x]
-        if hasattr(x, "toarray"):             # e.g., scipy.sparse
-            x = x.toarray()
-        if isinstance(x, np.ndarray):
-            return x.tolist()
-        # numpy scalar
-        if hasattr(x, "item") and callable(getattr(x, "item")):
-            try:
-                return x.item()
-            except Exception:
-                pass
-        # plain scalars
-        if isinstance(x, (int, float, bool, str)):
-            return x
-        # last resort: try numpy conversion
-        try:
-            import numpy as np
-            return np.asarray(x).tolist()
-        except Exception:
-            # give up: string-ify so JSON doesn't choke
-            return str(x)
 
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
@@ -494,35 +34,57 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
     p = cfg.get("params", {})
     out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
-    m = p.get("ambiguity", {}).get("model", "W2")
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
 
-    _runID = p.get("directories", {}).get("runID", "temp")
-    _type = p.get("plant", {}).get("type", "explicit")
+
     _upd = bool(p.get("upd", 0))
     _re_evaluate = bool(p.get("re_evaluate", 0)) if not ALL else False
-    _method = p.get("method", "lmi")
     _plot = bool(p.get("plot", False)) if plot is None and not COST else plot
     _data = "DDD" if FROM_DATA else "MBD"
     _save = p.get("save", False) if not COST else False
     _comp = bool(p.get("comp", 0)) if comp is None else comp
     _ts = p.get("simulation", {}).get("ts", 0.5)
-    _init_cond = p.get("init_cond", "rand")
+    _init_cond = p.get("simulation", {}).get("init_cond", "rand")
+    _old = bool(p.get("old_upd", 1))
+    _estm = bool(p.get("estm_only", 0))
+    
 
-    if m == "W2":
-        _model = p.get("model", "independent")
-    elif m == "2W":
-        _model = m + "_" + p.get("model", "independent")
-    else:
-        _model = m
+    # ----------------------------------------------------------------------
+    def _generate_dir():
+        m = p.get("ambiguity", {}).get("model", "W2")
+        _runID = p.get("directories", {}).get("runID", "temp")
+        _type = p.get("plant", {}).get("type", "explicit")
+        _method = p.get("method", "lmi")
+
+        if m == "W2":
+            _model = p.get("model", "independent")
+        elif m == "2W":
+            _model = m + "_" + p.get("model", "independent")
+        else:
+            _model = m
+
+        if _method=="lmi":
+            if _upd:
+                if _estm:
+                    _method = "lmi-estm"
+                elif not _old: 
+                    _method = "lmi-upd"
+                else:
+                    _method = "lmi-YoungSchur"
+            else:
+                _method = "lmi"
+
+        path_name = f"{_type}_{_model}_{_data}"
+        return m, path_name, (_method, _runID, _model)
+
+    m, path_name, (_method, _runID, _model) = _generate_dir()
 
     #gamma = p.get("ambiguity", {}).get("gamma", 0.5) if gamma is None else gamma
     if gamma is None or m != "W2":
         gamma = p.get("ambiguity", {}).get("gamma", 0.5)
     else:
         gamma = gamma
-    
-    if _method=="lmi" and _upd: _method = "lmi-upd"
+
 
     var = float(p.get("ambiguity", {})["var"])
     n = p.get("dimensions", {}).get("nw", 2)
@@ -530,8 +92,8 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
     noise = Noise(Sigma_nom=Sigma_nom, avrg=0, var=var, n=n, gamma=gamma)
 
-    path_name = f"{_type}_{_model}_{_data}"
 
+    # ----------------------------------------------------------------------
     if _comp:
         cmp = ResultsComparator(out_root=out, save=_save, ts=_ts)
         return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond)
@@ -573,7 +135,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         print("Z worst/best:", an.worst_best_snr("z"))
 
         # 3) Sweep Σ orientation in a 2D subspace and plot
-        thetas, traces = an.plot_snr_rotation_sweep(dims=(0,1), n_angles=181)
+        n.plot_snr_rotation_sweep(dims=(0,1), n_angles=181)
 
         # 4) Plot worst/best SNR bands
         an.plot_worst_best_lines()
@@ -1069,7 +631,7 @@ if __name__ == "__main__":
         else:
             main(gamma=gamma)
     else: 
-        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=10)
+        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=100)
 
 
 # ----------------------------------------------------------------------------------

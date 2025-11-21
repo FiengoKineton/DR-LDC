@@ -471,7 +471,7 @@ class ResultsComparator:
         """
         method = method.strip().lower()
         ID = ID.strip().lower()
-        assert method in ("lmi", "base", "lmi-upd"), "method must be 'lmi' or 'baseline'"
+        assert method in ("lmi", "base", "lmi-upd", "lmi-estm", "lmi-YoungSchur"), "method must be 'lmi' or 'baseline'"
 
         suffix = path_name.lstrip("/\\")
         if not (suffix.endswith("_MBD") or suffix.endswith("_DDD")):

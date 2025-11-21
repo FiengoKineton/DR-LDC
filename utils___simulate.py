@@ -592,7 +592,17 @@ class Open_Loop():
             print(f"[DATA] Generating dataset {i+1}/{N}...")
             data = self.make_data(plant=plant, gamma=gamma, Sigma=Sigma, multiple_datasets=True, init=init[i % len(init)], input=input[i % len(input)])
             if data["PE"]: 
-                datasets.append(data)
+                if N==1: 
+                    datasets = {
+                        "X_next": data["X_next"],
+                        "X": data["X"][:, :-1],
+                        "Y": data["Y"][:, :-1],
+                        "Z": data["Z"][:, :-1],
+                        "U": data["U"][:, :-1],
+                    }
+                    break
+                else:
+                    datasets.append(data)
             else: 
                 print(f"[DATA] Dataset {i+1} failed PE check. Regenerating...")
                 i -= 1
