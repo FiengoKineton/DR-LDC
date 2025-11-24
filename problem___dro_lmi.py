@@ -402,6 +402,7 @@ def Estm_dro_lmi(
     additional_constraints: bool = False,
     SOLVER: str = None,
     real_Z_mats: bool = True,
+    N_sims: int = 1,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -413,8 +414,7 @@ def Estm_dro_lmi(
     """data = api.get_system(FROM_DATA=True, gamma=gamma, upd=True)
     x, x_next, u, y, z = data.get_data()"""
 
-    N = 1
-    op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=N)
+    op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=N_sims)
     datasets = op.datasets
 
     avg = select_representative_run(datasets) if N!=1 else datasets
@@ -652,6 +652,7 @@ def Young_dro_lmi(
     mu: float = 1e-3,  # keep K, L, M, N from exploding
     approach: str = "DeePC",
     real_Z_mats: bool = False,
+    N_sims: int = 1,
 ) -> DROLMIResult:
     """
     Builds and solves the DRO-LMI you specified.
@@ -661,7 +662,7 @@ def Young_dro_lmi(
     gamma, var = noise.gamma, noise.var
     _, _, plot = vals
 
-    op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=1)
+    op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=N_sims)
     datasets = op.datasets
 
 
@@ -1425,7 +1426,7 @@ class Young_Schur_dro_lmi:
     def __init__(self, 
                  vals: tuple, model: str,
                  api: MatricesAPI, noise: Noise, 
-                 rho: float = 1e-2, eps: float = 1e-6, sim_N: int = 1,
+                 rho: float = 1e-2, eps: float = 1e-6, N_sims: int = 1,
                  Bw_mode: str = "known_cov", real_Z_mats: bool = False, 
                  aug_mode: str = "std", eval_from_ol: bool = True, estm_noise: bool = False,
                  reg_fro: bool = False, reg_beta: bool = True, new: bool = True,
@@ -1433,7 +1434,7 @@ class Young_Schur_dro_lmi:
 
         Bw_mode = "proj" if estm_noise else Bw_mode
         self.api = api
-        self.eps, self.rho, self.sim_N = eps, rho, sim_N
+        self.eps, self.rho, self.N_sims = eps, rho, N_sims
         self.model, self.Bw_mode, self.vals = model, Bw_mode, vals
         self.real_perf_mats, self.augmented, self.aug_mode, self.eval_from_ol, self.estm_noise \
               = real_Z_mats, vals[3], aug_mode, eval_from_ol, estm_noise
@@ -1587,10 +1588,10 @@ class Young_Schur_dro_lmi:
             X_, X, U_, Y_, Z_ = data.get_data()
 
         else:
-            op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=self.sim_N)
+            op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=self.N_sims)
             datasets = op.datasets
 
-            avg = self.select_representative_run(datasets) if self.sim_N!=1 else datasets
+            avg = self.select_representative_run(datasets) if self.N_sims!=1 else datasets
             X_, U_, Y_, Z_, X = avg["X"], avg["U"], avg["Y"], avg["Z"], avg["X_next"]
 
         self.data = {
@@ -2283,6 +2284,7 @@ class lmi_pipeline_optim_problem():
         old = bool(params.get("old_upd", 1))
         inp = bool(params.get("inp", 0))
         estm_only = bool(params.get("estm_only", 0))
+        N_sims = int(params.get("N_sims", 1))
 
         self.proc = psutil.Process(os.getpid())
         self.solve_stats = []
@@ -2297,7 +2299,7 @@ class lmi_pipeline_optim_problem():
             if not upd or not FROM_DATA:
                 plant, _ = api.get_system(FROM_DATA=FROM_DATA, gamma=noise.gamma, upd=upd)
                 real_Z_mats = True
-                #api.print_plant(plant)
+                N_sims = 0
 
                 # 2) Solve DRO-LMI (choose "correlated" or "independent")
                 res, num_violations = Baseline_dro_lmi(
@@ -2331,6 +2333,7 @@ class lmi_pipeline_optim_problem():
                     if old:
                         if approach == "DeePC":
                             real_Z_mats = False
+                            N_sims = 0
                             res, P, Sigma_nom, other, num_violations = DeePC_dro_lmi(
                                 api=api,
                                 vals=(upd, FROM_DATA, plot),
@@ -2352,6 +2355,7 @@ class lmi_pipeline_optim_problem():
                                 model=model,
                                 approach=approach,
                                 real_Z_mats=real_Z_mats,
+                                N_sims=N_sims,
                             ) 
                             problem_params = {
                                 "Methodology": approach,
@@ -2361,7 +2365,7 @@ class lmi_pipeline_optim_problem():
                             }        
                     else:
                         real_Z_mats = False
-                        dro = Young_Schur_dro_lmi(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, 
+                        dro = Young_Schur_dro_lmi(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, N_sims=N_sims,
                                 api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta, real_Z_mats=real_Z_mats)
                         
                         res, P, Sigma_nom, other, num_violations = dro.run()
@@ -2386,6 +2390,7 @@ class lmi_pipeline_optim_problem():
                         model=model,
                         SOLVER=params.get("solver", "MOSEK"),
                         real_Z_mats=real_Z_mats,
+                        N_sims=N_sims,
                     )
 
                     A, Bw, Bu, Cz, Dzw, Dzu, Cy, Dyw = plant.A, plant.Bw, plant.Bu, plant.Cz, plant.Dzw, plant.Dzu, plant.Cy, plant.Dyw
@@ -2482,6 +2487,7 @@ class lmi_pipeline_optim_problem():
         self.obj = res.obj_value
         self.solver = res.solver
         self.ratio_violation = num_violations[0] / num_violations[1]
+        #dist = Disturbances(n=Bw.shape[1])
 
         # JSON
         payload = {
@@ -2496,6 +2502,7 @@ class lmi_pipeline_optim_problem():
                 "lambda_opt": res.lambda_opt,
                 "trace_Q_Sigma": np.trace(res.Q @ Sigma_nom),
                 "real_Z_mats": real_Z_mats,
+                "N_sims": N_sims,
             },
             "solver_performance": {
                 "solver": self.solver,
@@ -2524,6 +2531,7 @@ class lmi_pipeline_optim_problem():
             },            
             "disturbance": {
                 "Sigma_nom": Sigma_nom.tolist(),
+                #"Sigma": dist.Sigma_test.totlist() if dist.Sigma_test is not None else None,
             },
             "dro_variables": {
                 "Q": None if res.Q is None else res.Q.tolist(),

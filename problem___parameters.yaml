@@ -18,11 +18,25 @@ params:
   plot: 0                                                                       # VAR ------------------------------ true or false
   inp: 0                                                                        # VAR ------------------------------ true or false
   re_evaluate: 1                                                                # VAR ------------------------------ true or false
+  N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
 
   ALL: 1                                                                        # VAR ------------------------------ true or false
   COST: 0                                                                       # VAR ------------------------------ true or false
   SNR: 0                                                                        # set
 
+
+  
+  directories:
+    data: "./out/data/session_"                                                 # set
+    artifacts: "./out/artifacts/"                                               # set
+    runID: "ZeroNoise" # "Estm_dro_lmi__N50"
+
+  ambiguity:
+    model: "zero"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
+    gamma: 0.5                                                                  # set
+    fixGamma: 1                                                                 # set | may be var (true or false)
+    Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
+    var: 1                                                                      # set
 
   simulation:
     ts: 0.05                                                                    # set
@@ -35,11 +49,6 @@ params:
     zero_mean: 0                                                                # set | leave it at 0
     X_iv_path: "data/experiment_iv_states.csv"                                  # set | not used yet
     stabilise: 0                                                                # set | leave it at 0
-  
-  directories:
-    data: "./out/data/session_"                                                 # set
-    artifacts: "./out/artifacts/"                                               # set
-    runID: "01" # "Estm_dro_lmi__N50"
 
   plant:
     A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
@@ -48,16 +57,7 @@ params:
 
     type: PaperLike                                                             # set
     seed: 42                                                                    # set
-    A: {eig_min: 0.7, eig_max: 0.95}                                            # set
-
-
-  ambiguity:
-    model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
-    gamma: 0.5                                                                  # set
-    fixGamma: 1                                                                 # set | may be var (true or false)
-    Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
-    var: 1                                                                      # set
-  
+    A: {eig_min: 0.7, eig_max: 0.95}                                            # set  
 
   outputs:
     mode: "A"                                                                   # set | (penalize states & inputs directly) if B then (penalize measured output & inputs)

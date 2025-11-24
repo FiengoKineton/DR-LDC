@@ -12,11 +12,11 @@ https://pure.tue.nl/ws/portalfiles/portal/345125383/1777033-Graduation_Project_F
 
 prepar a step-by-step presentation from the beginning (do more graph)
 
-Test new with w=0
+DONE ?  Test new with w=0
 Solve the thing nonconvex-ly from a known initial point ans see if it is stable and robust
 
-do openloop simulations and see the state with and without noise
-verify graphically the multiple datasets selection for the Indirect Data-Driven case.
+DONE    do openloop simulations and see the state with and without noise
+DONE ?  verify graphically the multiple datasets selection for the Indirect Data-Driven case.
 
 
 --------------------------------------------------------------------------------------------------------------------------------

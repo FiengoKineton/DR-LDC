@@ -5,7 +5,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from typing import Optional, Dict, Any, Iterable
 
-#from utils___matrices import MatricesAPI
 from utils___systems import Plant, Controller, Plant_cl
 from utils___ambiguity import Disturbances
 
@@ -1153,6 +1152,8 @@ if __name__ == "__main__":
     CL = 0
     OL = 1
 
-    m = ["e1", "ones", "random"]
-    if CL: Closed_Loop(TEST=False)
-    if OL: Open_Loop(MAKE_DATA=1, EVAL_FROM_PATH=1, p=True, x0_mode=m[0], s=True)
+    if CL: 
+        cl = Closed_Loop(TEST=False)
+    if OL: 
+        m = ["e1", "ones", "random"]
+        Open_Loop(MAKE_DATA=1, EVAL_FROM_PATH=1, p=True, x0_mode=m[2], s=True)
