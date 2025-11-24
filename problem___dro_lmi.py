@@ -417,7 +417,7 @@ def Estm_dro_lmi(
     op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=N_sims)
     datasets = op.datasets
 
-    avg = select_representative_run(datasets) if N!=1 else datasets
+    avg = select_representative_run(datasets) if N_sims!=1 else datasets
     x, u, y, z, x_next = avg["X"], avg["U"], avg["Y"], avg["Z"], avg["X_next"]
     nx, nu, ny, nz = x.shape[0], u.shape[0], y.shape[0], z.shape[0]
 

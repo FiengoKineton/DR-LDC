@@ -8,7 +8,7 @@ params:
 
   approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
   old_upd: 0               # if 0 uses Young_Schur_dro_lmi                      # set
-  estm_only: 0             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
+  estm_only: 1             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
 
   model: "independent"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
@@ -18,10 +18,10 @@ params:
   plot: 0                                                                       # VAR ------------------------------ true or false
   inp: 0                                                                        # VAR ------------------------------ true or false
   re_evaluate: 1                                                                # VAR ------------------------------ true or false
-  N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
+  N_sims: 50                                                                     # VAR ------------------------------ int(\geq 1)
 
   ALL: 1                                                                        # VAR ------------------------------ true or false
-  COST: 0                                                                       # VAR ------------------------------ true or false
+  COST: 1                                                                       # VAR ------------------------------ true or false
   SNR: 0                                                                        # set
 
 
@@ -29,10 +29,10 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "ZeroNoise" # "Estm_dro_lmi__N50"
+    runID: "Estm_dro_lmi__N50"
 
   ambiguity:
-    model: "zero"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
+    model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
     gamma: 0.5                                                                  # set
     fixGamma: 1                                                                 # set | may be var (true or false)
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set

@@ -631,7 +631,7 @@ if __name__ == "__main__":
         else:
             main(gamma=gamma)
     else: 
-        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=100)
+        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=10)
 
 
 # ----------------------------------------------------------------------------------
