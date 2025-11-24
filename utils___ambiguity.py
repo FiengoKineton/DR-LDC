@@ -535,7 +535,7 @@ class metric_2_Wasserstein:
         alpha = max(d / 2.0, 2.0)
 
         # Heuristic constants (you can tune these)
-        c0 = 5.0
+        c0 = 7.5
         C0 = 10.0
 
         radius = c0 * s_w * ((np.log(C0 / beta) / N) ** (1.0 / alpha))
@@ -1140,6 +1140,8 @@ if __name__ == "__main__":
     t = wass.time
     w = wass.sample()
     #print(f"Is within bounds? {wass.is_member_empirical(w)}")
+    Sigma_nom_estm = 1/(2*w.shape[0]) * ((w.T @ w) + (w.T @ w).T)
+    print("Sigma_nom_estm:", Sigma_nom_estm)
 
     if n > 1:
         # distribution plots
