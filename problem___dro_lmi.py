@@ -3047,7 +3047,7 @@ class YoungSchurNonconvexLikeDROLMI:
 class lmi_pipeline_optim_problem(): 
     def __init__(self, params: dict, out: Path, noise: Noise, 
                  upd: bool = False, plot: bool = False, save: bool = False, 
-                 FROM_DATA: bool = False, init_cond: str = "zero", 
+                 FROM_DATA: bool = False, init_cond: str = "zero", N_sims: int = None,
                  disturbance_type: str = "Gaussian"):
 
         recover = Recover()
@@ -3062,7 +3062,7 @@ class lmi_pipeline_optim_problem():
         old = bool(params.get("old_upd", 1))
         inp = bool(params.get("inp", 0))
         estm_only = bool(params.get("estm_only", 0))
-        N_sims = int(params.get("N_sims", 1))
+        N_sims = int(params.get("N_sims", 1)) if N_sims is None else N_sims
         non_convex = bool(params.get("non_convex", 0))
 
         self.proc = psutil.Process(os.getpid())

@@ -19,7 +19,8 @@ from utils___SNR import SNRAnalyzer
 
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
-def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, ALL: bool = False, COST: bool = False, info: bool = False):
+def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: bool = None, 
+         ALL: bool = False, COST: bool = False, info: bool = False, N_sims: int = None, ):
     #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
     #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
     #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
@@ -112,7 +113,9 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
             opt = baseline_optim_problem(out=out, Sigma_nom=Sigma_nom, gamma=gamma, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond)
         else:
             print("\nRunning LMI pipeline optimization...")
-            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, plot=_plot if not ALL else False, save=_save if not ALL else True, FROM_DATA=FROM_DATA, init_cond=_init_cond, disturbance_type=_model)
+            opt = lmi_pipeline_optim_problem(params=p, out=out, upd=_upd, noise=noise, N_sims=N_sims,
+                                             plot=_plot if not ALL else False, save=_save if not ALL else True, 
+                                             FROM_DATA=FROM_DATA, init_cond=_init_cond, disturbance_type=_model, )
 
         if COST or info:
             return opt._return_final_infos(), _model
@@ -562,6 +565,285 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
     summary_df.to_csv(csv_path, index=False)
     print(f"Saved summary metrics to {csv_path}")
 
+def select_best_N_sims(N_sims_list, means, stds, prefer_small: bool = True, rel_eps: float = 1e-3):
+    """
+    Pick best N_sims given mean and std arrays.
+
+    - prefer_small=True: minimize mean (good for cost J, rho, etc.).
+    - Among near-equal means (within rel_eps), choose smallest std.
+
+    N_sims_list, means, stds: 1D arrays / lists of same length.
+    """
+    N_sims_arr = np.asarray(N_sims_list, dtype=float)
+    means_arr = np.asarray(means, dtype=float)
+    stds_arr = np.asarray(stds, dtype=float)
+
+    if len(N_sims_arr) == 0:
+        raise ValueError("select_best_N_sims: empty input.")
+
+    if prefer_small:
+        base = np.min(means_arr)
+        # "Near best" in relative sense
+        tol = rel_eps * max(abs(base), 1e-12)
+        candidates = np.where(means_arr <= base + tol)[0]
+    else:
+        base = np.max(means_arr)
+        tol = rel_eps * max(abs(base), 1e-12)
+        candidates = np.where(means_arr >= base - tol)[0]
+
+    # Among candidates, choose the one with smallest std
+    best_local_idx = np.argmin(stds_arr[candidates])
+    best_idx = candidates[best_local_idx]
+
+    return int(N_sims_arr[best_idx]), float(means_arr[best_idx]), float(stds_arr[best_idx])
+
+def NsimSweep_FROM_DATA(
+    p: dict,
+    gamma: float = 0.5,
+    COST: bool = True,
+    N_sims_values: list[int] | None = None,
+    runs_per_N: int = 10,
+):
+    """
+    Sweep N_sims for FROM_DATA=True, run `main` multiple times per value,
+    and aggregate mean / std of J and rho.
+
+    - N_sims_values: list of N_sims to test; if None -> [1, 6, 11, ..., 46]
+    - runs_per_N: how many runs per N_sims (default 10)
+    """
+
+    # ------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------
+    if N_sims_values is None:
+        # 10 steps: 1, 6, 11, ..., 46
+        N_sims_values = list(range(1, 50, 5))
+
+    model = p.get("model", "independent")
+    save = bool(p.get("save", False))
+    plot = bool(p.get("plot", False))
+
+    out_root = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")
+    out = out_root / "NsimSweep_FROM_DATA"
+    out.mkdir(parents=True, exist_ok=True)
+
+    path = out / p.get("directories", {}).get("runID", "temp")
+    path.mkdir(parents=True, exist_ok=True)
+
+    csv_file = path / f"_{model}_Nsim_sweep_FROM_DATA.csv"
+
+
+
+    if bool(p.get("re_evaluate", 0)) or not csv_file.is_file():
+        # ------------------------------------------------------------
+        # Storage for aggregated statistics
+        # ------------------------------------------------------------
+        agg_N_sims = []
+        agg_J_mean = []
+        agg_J_std = []
+        agg_rho_mean = []
+        agg_rho_std = []
+
+        # ------------------------------------------------------------
+        # Main sweep loop
+        # ------------------------------------------------------------
+        for idx, N_sims in enumerate(N_sims_values, start=1):
+            print(
+                "\n\n\n"
+                "============================================\n"
+                f"  N_sims sweep step {idx}/{len(N_sims_values)}  (N_sims = {N_sims})\n"
+                "============================================\n"
+            )
+
+            J_vals = []
+            rho_vals = []
+
+            for run_idx in range(runs_per_N):
+                print(
+                    "\n--------------------------------------------\n"
+                    f"  Inner run {run_idx + 1}/{runs_per_N}  (N_sims = {N_sims})\n"
+                    "--------------------------------------------\n"
+                )
+
+                # Only FROM_DATA=True
+                infos_ddd, *_ = main(
+                    FROM_DATA=True,
+                    gamma=gamma,
+                    comp=False,
+                    ALL=False,
+                    COST=COST,
+                    N_sims=N_sims,
+                )
+
+                J_vals.append(float(infos_ddd["J"]))
+                rho_vals.append(float(infos_ddd["rho"]))
+
+            # Convert to numpy and compute stats
+            J_vals = np.asarray(J_vals, dtype=float)
+            rho_vals = np.asarray(rho_vals, dtype=float)
+
+            J_mean = float(np.mean(J_vals))
+            J_std = float(np.std(J_vals, ddof=1)) if len(J_vals) > 1 else 0.0
+            rho_mean = float(np.mean(rho_vals))
+            rho_std = float(np.std(rho_vals, ddof=1)) if len(rho_vals) > 1 else 0.0
+
+            print(f"[N_sims={N_sims}] J:   mean = {J_mean:.6g}, std = {J_std:.6g}")
+            print(f"[N_sims={N_sims}] rho: mean = {rho_mean:.6g}, std = {rho_std:.6g}")
+
+            agg_N_sims.append(N_sims)
+            agg_J_mean.append(J_mean)
+            agg_J_std.append(J_std)
+            agg_rho_mean.append(rho_mean)
+            agg_rho_std.append(rho_std)
+
+        # ------------------------------------------------------------
+        # Build DataFrame & save CSV
+        # ------------------------------------------------------------
+        df = pd.DataFrame(
+            {
+                "N_sims": agg_N_sims,
+                "J_mean": agg_J_mean,
+                "J_std": agg_J_std,
+                "rho_mean": agg_rho_mean,
+                "rho_std": agg_rho_std,
+            }
+        )
+
+        if save:
+            df.to_csv(csv_file, index=False)
+            print(f"Saved N_sims sweep stats to {csv_file}")
+
+    else:
+        # load, skip header row
+        data = np.loadtxt(csv_file, delimiter=",", skiprows=1)
+
+        # robustify: if only 1 row, loadtxt returns 1D
+        data = np.atleast_2d(data)
+
+        # columns: run,J,lambda,rho,time,attempts,stress
+        agg_N_sims      = data[:, 0]
+        agg_J_mean      = data[:, 1]
+        agg_J_std       = data[:, 2]
+        agg_rho_mean    = data[:, 3]
+        agg_rho_std     = data[:, 4]
+
+
+    # ------------------------------------------------------------
+    # Select best N_sims for J and rho
+    # ------------------------------------------------------------
+    # J: want small mean and small std
+    best_N_J, best_J_mean, best_J_std = select_best_N_sims(
+        agg_N_sims, agg_J_mean, agg_J_std, prefer_small=True
+    )
+    print(
+        f"\n[Best J] N_sims = {best_N_J}, "
+        f"J_mean = {best_J_mean:.6g}, J_std = {best_J_std:.6g}"
+    )
+
+    # rho: usually want mean rho < 1 and as small as possible
+    agg_N_sims_arr = np.asarray(agg_N_sims, dtype=float)
+    agg_rho_mean_arr = np.asarray(agg_rho_mean, dtype=float)
+    agg_rho_std_arr = np.asarray(agg_rho_std, dtype=float)
+
+    stable_mask = agg_rho_mean_arr < 1.0  # only consider stable ones
+    if np.any(stable_mask):
+        best_N_rho, best_rho_mean, best_rho_std = select_best_N_sims(
+            agg_N_sims_arr[stable_mask],
+            agg_rho_mean_arr[stable_mask],
+            agg_rho_std_arr[stable_mask],
+            prefer_small=True,
+        )
+        print(
+            f"[Best rho (stable)] N_sims = {best_N_rho}, "
+            f"rho_mean = {best_rho_mean:.6g}, rho_std = {best_rho_std:.6g}"
+        )
+    else:
+        best_N_rho = None
+        best_rho_mean = None
+        best_rho_std = None
+        print("[Best rho] No N_sims with mean rho < 1.0; cannot select a 'stable' best.")
+
+    # ------------------------------------------------------------
+    # Plotting: errorbars vs N_sims
+    # ------------------------------------------------------------
+    # 1) J vs N_sims
+    fig_J, ax_J = plt.subplots(figsize=(7, 4))
+    ax_J.errorbar(
+        agg_N_sims,
+        agg_J_mean,
+        yerr=agg_J_std,
+        fmt="o-",
+        capsize=4,
+    )
+    ax_J.set_xscale("log")
+    ax_J.set_xlabel("N_sims")
+    ax_J.set_ylabel("J (mean ± std)")
+    ax_J.set_title(f"FROM_DATA=True: J vs N_sims ({model})")
+    ax_J.grid(True, alpha=0.3)
+
+    # Mark best J
+    ax_J.axvline(best_N_J, linestyle="--", alpha=0.6)
+    star_J = ax_J.scatter([best_N_J], [best_J_mean], marker="*", s=120)
+    handles, labels = ax_J.get_legend_handles_labels()
+
+    best_handle_J = Line2D(
+        [0], [0],
+        marker="*",
+        linestyle="None",
+        color=star_J.get_facecolor()[0] if hasattr(star_J, "get_facecolor") else "C1",
+        label=f"Best N_sims (J): {best_N_J}",
+    )
+
+    handles.append(best_handle_J)
+    labels.append(f"Best N_sims (J): {best_N_J}")
+
+    ax_J.legend(handles, labels, loc="best")
+    fig_J.tight_layout()
+
+
+    # 2) rho vs N_sims
+    fig_rho, ax_rho = plt.subplots(figsize=(7, 4))
+    ax_rho.errorbar(
+        agg_N_sims,
+        agg_rho_mean,
+        yerr=agg_rho_std,
+        fmt="o-",
+        capsize=4,
+    )
+    ax_rho.set_xscale("log")
+    ax_rho.set_xlabel("N_sims")
+    ax_rho.set_ylabel(r"$\rho$ (mean ± std)")
+    ax_rho.set_title(f"FROM_DATA=True: rho vs N_sims ({model})")
+    ax_rho.grid(True, alpha=0.3)
+
+    # Mark best rho if any stable candidate exists
+    if best_N_rho is not None:
+        ax_rho.axvline(best_N_rho, linestyle="--", alpha=0.6)
+        star_rho = ax_rho.scatter([best_N_rho], [best_rho_mean], marker="*", s=120)
+        handles, labels = ax_rho.get_legend_handles_labels()
+
+        best_handle_rho = Line2D(
+            [0], [0],
+            marker="*",
+            linestyle="None",
+            color=star_rho.get_facecolor()[0] if hasattr(star_rho, "get_facecolor") else "C1",
+            label=f"Best N_sims (ρ): {best_N_rho}",
+        )
+
+        handles.append(best_handle_rho)
+        labels.append(f"Best N_sims (ρ): {best_N_rho}")
+
+    ax_rho.legend(handles, labels, loc="best")
+    fig_rho.tight_layout()
+
+
+    if save:
+        fig_J.savefig(path / f"{model}_J_vs_Nsims_FROM_DATA.pdf")
+        fig_rho.savefig(path / f"{model}_rho_vs_Nsims_FROM_DATA.pdf")
+
+    if plot:
+        plt.show()
+
 def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
     """
     Pretty-print a comparison table between MBD and DDD info dicts.
@@ -623,7 +905,7 @@ if __name__ == "__main__":
     gamma = select_gamma(p)
 
     COST = bool(p.get("COST", 0))
-    if not COST:
+    if not COST and not bool(p.get("test_Nsims", 0)):
         ALL = bool(p.get("ALL", False))
         if ALL:
             infos_mbd, m = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL, info=True)
@@ -634,7 +916,19 @@ if __name__ == "__main__":
         else:
             main(gamma=gamma)
     else: 
-        MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=10)
+        if not bool(p.get("test_Nsims", 0)):
+            MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=10)
+        else: 
+            COST = True
+            N_sims_values = [
+                1,   2,   3,   5,          # Emergence of structure
+                8,  12,  16,               # Early stability range
+                20,  25,  30,               # Practical medoid stability region
+                40,  50,  65,               # Larger-sample variance reduction
+                80, 100, 120, 150           # High-data (plateau) regime
+            ]
+            
+            NsimSweep_FROM_DATA(p=p, gamma=gamma, COST=COST, runs_per_N=10, N_sims_values=N_sims_values)
 
 
 # ----------------------------------------------------------------------------------
