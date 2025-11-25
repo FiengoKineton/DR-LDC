@@ -8,20 +8,21 @@ params:
 
   approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
   old_upd: 0               # if 0 uses Young_Schur_dro_lmi                      # set
-  estm_only: 1             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
+  estm_only: 0             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
+  non_convex: 1            # if 1 uses YoungSchurNonconvexLikeDROLMI            # VAR ------------------------------ true or false
 
-  model: "independent"                                                          # ("correlated" or "independent")
+  model: "correlated"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   
   comp: 0                                                                       # VAR ------------------------------ true or false
   save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
   inp: 0                                                                        # VAR ------------------------------ true or false
-  re_evaluate: 1                                                                # VAR ------------------------------ true or false
-  N_sims: 50                                                                     # VAR ------------------------------ int(\geq 1)
+  re_evaluate: 0                                                                # VAR ------------------------------ true or false
+  N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
 
   ALL: 1                                                                        # VAR ------------------------------ true or false
-  COST: 1                                                                       # VAR ------------------------------ true or false
+  COST: 0                                                                       # VAR ------------------------------ true or false
   SNR: 0                                                                        # set
 
 
@@ -29,7 +30,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "Estm_dro_lmi__N50"
+    runID: "no_Pbar"
 
   ambiguity:
     model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]

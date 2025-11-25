@@ -47,6 +47,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _init_cond = p.get("simulation", {}).get("init_cond", "rand")
     _old = bool(p.get("old_upd", 1))
     _estm = bool(p.get("estm_only", 0))
+    _nonConvex = bool(p.get("non_convex", 0))
     
 
     # ----------------------------------------------------------------------
@@ -65,7 +66,9 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
 
         if _method=="lmi":
             if _upd:
-                if _estm:
+                if _nonConvex: 
+                    _method = "lmi-nonConvex"
+                elif _estm:
                     _method = "lmi-estm"
                 elif not _old: 
                     _method = "lmi-YoungSchur"
