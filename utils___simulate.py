@@ -16,6 +16,23 @@ with open(yaml_path, "r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
 
 
+
+def _initial_condition_from_eigenvalues(M, scale=0.05):
+    eigvals, eigvecs = np.linalg.eig(M)
+    idx = np.argsort(np.real(eigvals))   # sorted by real part
+    critical_idx = idx[-1]               # least stable / most critical
+    v = eigvecs[:, critical_idx]         # shape (n,)
+
+    v_real = np.real(v)
+    norm = np.linalg.norm(v_real)
+    if norm == 0:
+        raise ValueError("Eigenvector has zero real part; pick another mode.")
+
+    v_real = v_real / norm               # normalize
+    x0 = scale * v_real                  # shape (n,)
+    return x0.reshape(-1, 1)             # shape (n, 1)
+
+
 ## ------------------------- CLOSED-LOOP SIMULATION CLASS --------------------------
 
 class Closed_Loop():
@@ -101,16 +118,18 @@ class Closed_Loop():
         if init_cond == "zeros":
             x = np.zeros((nx, 1))
             xc = np.zeros((nxc, 1))
-        elif init_cond == "rand":
-            rng = np.random.default_rng(seed)
-            x = rng.standard_normal((nx, 1))
-            xc = rng.standard_normal((nxc, 1))
+        elif init_cond == "from_eig":            
+            x = _initial_condition_from_eigenvalues(A)
+            xc = _initial_condition_from_eigenvalues(Ac)
+
         elif init_cond == "e1":
             x = np.zeros((nx, 1))
             x[0, 0] = 1.0
             xc = np.zeros((nxc, 1))
-        else:
-            raise ValueError(f"Unknown init_cond '{init_cond}'")
+        else:   # rand
+            rng = np.random.default_rng(seed)
+            x = rng.standard_normal((nx, 1))
+            xc = rng.standard_normal((nxc, 1))
 
         # Precompute a sampling factor for w
         if Sigma_w is not None:
@@ -373,15 +392,14 @@ class Closed_Loop():
         # Initial condition
         if init_cond == "zeros":
             x = np.zeros((nX, 1))
-        elif init_cond == "rand":
-            rng = np.random.default_rng()
-            x = rng.standard_normal((nX, 1))
+        elif init_cond == "from_eig":           
+            x = _initial_condition_from_eigenvalues(A)
         elif init_cond == "e1":
             x = np.zeros((nX, 1))
             x[0, 0] = 1.0
-        else:
-            raise ValueError(f"Unknown init_cond '{init_cond}'")
-        
+        else:   # rand
+            rng = np.random.default_rng()
+            x = rng.standard_normal((nX, 1))        
 
         # Disturbance generation
         wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
@@ -684,9 +702,9 @@ class Open_Loop():
         def simulate_open_loop(A, Bu, Bw, T, x0, U, w_std=0.1, seed=0):
             # rng = np.random.default_rng(seed); W = rng.normal(0.0, 1.0, size=(nw, T)) * w_std
 
-            if init == "zeros":     X = np.zeros((nx, T))
-            elif init == "rand":    X = rng.normal(0, 1.0, size=(nx, T))
-            else:                   raise ValueError(f"Unknown init mode '{init}'.")
+            if init == "zeros":         X = np.zeros((nx, T))
+            elif init == "from_eig":    X = _initial_condition_from_eigenvalues(A)
+            else:                       X = rng.normal(0, 1.0, size=(nx, T))
 
             X[:, 0] = x0
             for t in range(T - 1):

@@ -67,9 +67,16 @@ def select_representative_run(datasets, keys=("X","U","Y","Z","X_next"), weights
             diff = Sk - Sk[i]              # (N, ...)
             total += float(weights[k]) * np.sum(diff**2)
         dists[i] = total
-    i_star = int(np.argmin(-dists))
+    i_star = int(np.argmin(dists))
 
     # 5) Build output using that single, real run (preserves dynamics)
+    meta_sel = dict(datasets[i_star]["meta"])  # copy
+    meta_sel.update({
+        "T": T_min,
+        "N": len(datasets),
+        "selected_index": i_star,
+        "selection": "medoid_over_"+",".join(keys),
+    })
     out = {
         "X":      stacks["X"][i_star],                        # (nx, T)
         "U":      stacks["U"][i_star],                        # (nu, T)
@@ -77,13 +84,7 @@ def select_representative_run(datasets, keys=("X","U","Y","Z","X_next"), weights
         "Z":      stacks["Z"][i_star],                        # (nz, T)
         # pad last column so X_next matches T
         "X_next": np.hstack([stacks["X_next"][i_star], stacks["X_next"][i_star][:, -1][:, None]]),
-        "meta": {
-            **datasets[0]["meta"],
-            "T": T_min,
-            "N": len(datasets),
-            "selected_seed": i_star,
-            "selection": "medoid_over_"+",".join(keys)
-        }
+        "meta": meta_sel,
     }
     return out
 
@@ -666,7 +667,7 @@ def Young_dro_lmi(
     datasets = op.datasets
 
 
-    avg = select_representative_run(datasets)
+    avg = select_representative_run(datasets) if N_sims!=1 else datasets
     x, u, y, z, x_next = avg["X"], avg["U"], avg["Y"], avg["Z"], avg["X_next"]
 
     if plot:

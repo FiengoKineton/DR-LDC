@@ -643,6 +643,8 @@ def NsimSweep_FROM_DATA(
         agg_J_std = []
         agg_rho_mean = []
         agg_rho_std = []
+        agg_obj_mean = []
+        agg_obj_std = []
 
         # ------------------------------------------------------------
         # Main sweep loop
@@ -657,6 +659,7 @@ def NsimSweep_FROM_DATA(
 
             J_vals = []
             rho_vals = []
+            obj_vals = []
 
             for run_idx in range(runs_per_N):
                 print(
@@ -677,24 +680,31 @@ def NsimSweep_FROM_DATA(
 
                 J_vals.append(float(infos_ddd["J"]))
                 rho_vals.append(float(infos_ddd["rho"]))
+                obj_vals.append(float(infos_ddd["obj"]))
 
             # Convert to numpy and compute stats
             J_vals = np.asarray(J_vals, dtype=float)
             rho_vals = np.asarray(rho_vals, dtype=float)
+            obj_vals = np.asarray(obj_vals, dtype=float)
 
             J_mean = float(np.mean(J_vals))
             J_std = float(np.std(J_vals, ddof=1)) if len(J_vals) > 1 else 0.0
             rho_mean = float(np.mean(rho_vals))
             rho_std = float(np.std(rho_vals, ddof=1)) if len(rho_vals) > 1 else 0.0
+            obj_mean = float(np.mean(obj_vals))
+            obj_std = float(np.std(obj_vals, ddof=1)) if len(obj_vals) > 1 else 0.0
 
             print(f"[N_sims={N_sims}] J:   mean = {J_mean:.6g}, std = {J_std:.6g}")
             print(f"[N_sims={N_sims}] rho: mean = {rho_mean:.6g}, std = {rho_std:.6g}")
+            print(f"[N_sims={N_sims}] obj: mean = {obj_mean:.6g}, std = {obj_std:.6g}")
 
             agg_N_sims.append(N_sims)
             agg_J_mean.append(J_mean)
             agg_J_std.append(J_std)
             agg_rho_mean.append(rho_mean)
             agg_rho_std.append(rho_std)
+            agg_obj_mean.append(obj_mean)
+            agg_obj_std.append(obj_std)
 
         # ------------------------------------------------------------
         # Build DataFrame & save CSV
@@ -706,6 +716,8 @@ def NsimSweep_FROM_DATA(
                 "J_std": agg_J_std,
                 "rho_mean": agg_rho_mean,
                 "rho_std": agg_rho_std,
+                "obj_mean": agg_obj_mean, 
+                "obj_std": agg_obj_std,
             }
         )
 
@@ -726,6 +738,8 @@ def NsimSweep_FROM_DATA(
         agg_J_std       = data[:, 2]
         agg_rho_mean    = data[:, 3]
         agg_rho_std     = data[:, 4]
+        agg_obj_mean    = data[:, 5]
+        agg_obj_std     = data[:, 6]
 
 
     # ------------------------------------------------------------
@@ -738,6 +752,15 @@ def NsimSweep_FROM_DATA(
     print(
         f"\n[Best J] N_sims = {best_N_J}, "
         f"J_mean = {best_J_mean:.6g}, J_std = {best_J_std:.6g}"
+    )
+
+    # obj: want pos and small std
+    best_N_obj, best_obj_mean, best_obj_std = select_best_N_sims(
+        agg_N_sims, agg_obj_mean, agg_obj_std, prefer_small=True
+    )
+    print(
+        f"\n[Best obj] N_sims = {best_N_obj}, "
+        f"obj_mean = {best_obj_mean:.6g}, obj_std = {best_obj_std:.6g}"
     )
 
     # rho: usually want mean rho < 1 and as small as possible
@@ -801,6 +824,40 @@ def NsimSweep_FROM_DATA(
     fig_J.tight_layout()
 
 
+    # 1) J vs N_sims
+    fig_obj, ax_obj = plt.subplots(figsize=(7, 4))
+    ax_obj.errorbar(
+        agg_N_sims,
+        agg_obj_mean,
+        yerr=agg_obj_std,
+        fmt="o-",
+        capsize=4,
+    )
+    ax_obj.set_xscale("log")
+    ax_obj.set_xlabel("N_sims")
+    ax_obj.set_ylabel("obj (mean ± std)")
+    ax_obj.set_title(f"FROM_DATA=True: obj vs N_sims ({model})")
+    ax_obj.grid(True, alpha=0.3)
+
+    # Mark best obj
+    ax_obj.axvline(best_N_obj, linestyle="--", alpha=0.6)
+    star_obj = ax_obj.scatter([best_N_obj], [best_obj_mean], marker="*", s=120)
+    handles, labels = ax_obj.get_legend_handles_labels()
+
+    best_handle_obj = Line2D(
+        [0], [0],
+        marker="*",
+        linestyle="None",
+        color=star_obj.get_facecolor()[0] if hasattr(star_obj, "get_facecolor") else "C1",
+        label=f"Best N_sims (obj): {best_N_obj}",
+    )
+
+    handles.append(best_handle_obj)
+    labels.append(f"Best N_sims (obj): {best_N_obj}")
+
+    ax_obj.legend(handles, labels, loc="best")
+    fig_obj.tight_layout()
+
     # 2) rho vs N_sims
     fig_rho, ax_rho = plt.subplots(figsize=(7, 4))
     ax_rho.errorbar(
@@ -840,6 +897,7 @@ def NsimSweep_FROM_DATA(
     if save:
         fig_J.savefig(path / f"{model}_J_vs_Nsims_FROM_DATA.pdf")
         fig_rho.savefig(path / f"{model}_rho_vs_Nsims_FROM_DATA.pdf")
+        fig_obj.savefig(path / f"{model}_obj_vs_Nsims_FROM_DATA.pdf")
 
     if plot:
         plt.show()
