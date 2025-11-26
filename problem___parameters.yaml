@@ -10,7 +10,7 @@ params:
   estm_only: 0             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
   non_convex: 0            # if 1 uses YoungSchurNonconvexLikeDROLMI            # VAR ------------------------------ true or false
 
-  model: "independent"                                                          # ("correlated" or "independent")
+  model: "correlated"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   test_Nsims: 0                                                                 # VAR ------------------------------ true or false
 

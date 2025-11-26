@@ -101,7 +101,7 @@ class metric_2_Wasserstein:
 
     def __init__(self,
                  gamma: float,
-                 n: int = None, var: float = None, alpha: float = 1.5, ellipse: bool = False):
+                 n: int = None, var: float = None, alpha: float = 1.5, ellipse: bool = False, AfterBefore: bool = False):
         """
         Parameters
         ----------
@@ -146,16 +146,14 @@ class metric_2_Wasserstein:
         self.time = np.arange(self.T) * self.ts
 
         self.rng = np.random.default_rng()
- 
-        Sigma_raw = self.make_random_spd_around_nom(alpha=alpha)
-        #Sigma_raw = np.array([[0.68999448, 0.52701602],[0.52701602, 1.61000552],])
+        self.ellipse = ellipse
+        self.AfterBefore= AfterBefore
 
+        Sigma_raw = np.array([[0.68999448, 0.52701602],[0.52701602, 1.61000552],]) if self.AfterBefore else self.make_random_spd_around_nom(alpha=alpha)
         self.Sigma_test = self.project_zero_mean_cov_to_ball(Sigma_raw)
 
         self.gamma_estm = None
         self.Sigma_estm = None
-
-        self.ellipse = ellipse
 
 
     # -------------------------------------------------------------------------
@@ -268,7 +266,248 @@ class metric_2_Wasserstein:
         d = self.w2_to_nominal(mu_hat, S_hat)
         return d <= self.gamma + tol
     
+    def _plot_AfterBefore(self, s0, s):
+        """
+        s0, s: arrays of shape (N, d), with d >= 2.
+        First figure: histogram of ||w|| for s0 and s, with mean/std in legend.
+        Second figure: scatter of w[0] vs w[1] for s0 and s.
+        """
+        s0 = np.asarray(s0)
+        s  = np.asarray(s)
 
+        if s0.ndim != 2 or s.ndim != 2:
+            raise ValueError("s0 and s must be 2D arrays (N, d).")
+        if s0.shape[1] < 2 or s.shape[1] < 2:
+            raise ValueError("s0 and s must have at least 2 columns for w[0], w[1].")
+        if s0.shape[0] == 0 or s.shape[0] == 0:
+            raise ValueError("s0 and s must be non-empty.")
+
+        # ---------- Figure 1: distribution of norms ----------
+        r0 = np.linalg.norm(s0, axis=1)
+        r  = np.linalg.norm(s,  axis=1)
+
+        mu0, std0 = float(np.mean(r0)), float(np.std(r0))
+        mu,  std  = float(np.mean(r)),  float(np.std(r))
+
+        r_min = min(r0.min(), r.min())
+        r_max = max(r0.max(), r.max())
+        # avoid degenerate bins
+        if r_max == r_min:
+            r_max = r_min + 1e-6
+        bins = np.linspace(r_min, r_max, 30)
+
+        fig1, ax1 = plt.subplots(figsize=(6, 4))
+        ax1.hist(
+            r0,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            color="lightblue",
+            label=fr"$s_0$: $\mu={mu0:.3g}$, $\sigma={std0:.3g}$",
+        )
+        ax1.hist(
+            r,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            color="lightcoral",
+            label=fr"$s$: $\mu={mu:.3g}$, $\sigma={std:.3g}$",
+        )
+        ax1.set_xlabel(r"$\|w\|$")
+        ax1.set_ylabel("Density")
+        ax1.set_title("Distribution of $s_0$ and $s$")
+        ax1.grid(True, alpha=0.3)
+        ax1.legend()
+
+        # ---------- Figure 2: scatter w[0] vs w[1] ----------
+        fig2, ax2 = plt.subplots(figsize=(6, 5))
+        ax2.scatter(
+            s0[:, 0],
+            s0[:, 1],
+            alpha=0.5,
+            color="lightblue",
+            edgecolors="none",
+            label=r"$s_0$",
+        )
+        ax2.scatter(
+            s[:, 0],
+            s[:, 1],
+            alpha=0.5,
+            color="lightcoral",
+            edgecolors="none",
+            label=r"$s$",
+        )
+        ax2.set_xlabel(r"$w_0$")
+        ax2.set_ylabel(r"$w_1$")
+        ax2.set_title(r"$w_0$ vs $w_1$ for $s_0$ and $s$")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_AfterBefore(self, s0, s, max_dims_hist=6, bins=30, save_path=False):
+        """
+        Plot marginal distributions and 2D scatter for s0 (before) and s (after).
+
+        s0, s : arrays with shape (n_w, T) or (T, n_w). Will be auto-oriented so
+                that shape is (n_w, T), with n_w >= 2.
+        """
+
+        def _prep(W):
+            W = np.asarray(W)
+            if W.ndim != 2:
+                raise ValueError("s0 and s must be 2D arrays.")
+            n0, n1 = W.shape
+            # heuristic: if rows > cols, assume (T, n_w) and transpose
+            if n0 > n1:
+                W = W.T
+            n_w, T = W.shape
+            return W, n_w, T
+
+        W0, n_w0, T0 = _prep(s0)
+        W,  n_w,  T  = _prep(s)
+
+        if n_w0 != n_w:
+            raise ValueError(f"s0 and s must have same number of components. "
+                            f"Got {n_w0} and {n_w}.")
+        if n_w < 1:
+            raise ValueError("Need at least one component.")
+        if n_w < 2:
+            # then the scatter plot makes no sense
+            raise ValueError("Need at least 2 components for w[0] vs w[1] scatter.")
+
+    # --------- statistics for each set ----------
+        # shape: (n_w,)
+        mu0    = np.mean(W0, axis=1)
+        Sigma0 = np.cov(W0, bias=False)
+        std0   = np.sqrt(np.diag(Sigma0))
+
+        mu     = np.mean(W, axis=1)
+        Sigma  = np.cov(W, bias=False)
+        std    = np.sqrt(np.diag(Sigma))
+
+        # --------- Figure 1: univariate marginals, overlapping s0/s ----------
+        n_hist = min(n_w, max_dims_hist)
+        ncols = 3 if n_hist >= 3 else n_hist
+        nrows = int(np.ceil(n_hist / ncols)) if n_hist else 0
+
+        figs = []
+        if n_hist > 0:
+            fig1, axes = plt.subplots(
+                nrows, ncols,
+                figsize=(4.5 * ncols, 3.0 * nrows),
+                squeeze=False
+            )
+
+            for i in range(n_hist):
+                r, c = divmod(i, ncols)
+                ax = axes[r][c]
+
+                xi0 = W0[i, :]
+                xi  = W[i, :]
+
+                # common bin range across s0 and s for component i
+                xmin = min(np.percentile(xi0, 0.5), np.percentile(xi, 0.5))
+                xmax = max(np.percentile(xi0, 99.5), np.percentile(xi, 99.5))
+                if xmax == xmin:
+                    xmax = xmin + 1e-6
+
+                bin_edges = np.linspace(xmin, xmax, bins)
+
+                # histograms (density)
+                ax.hist(
+                    xi0,
+                    bins=bin_edges,
+                    density=True,
+                    alpha=0.5,
+                    edgecolor="none",
+                    color="lightblue",
+                )
+                ax.hist(
+                    xi,
+                    bins=bin_edges,
+                    density=True,
+                    alpha=0.5,
+                    edgecolor="none",
+                    color="lightcoral",
+                )
+
+                xs = np.linspace(xmin, xmax, 400)
+
+                # Gaussian fit for s0
+                if std0[i] > 0:
+                    pdf0 = (1.0 / (np.sqrt(2 * np.pi) * std0[i])) * np.exp(
+                        -0.5 * ((xs - mu0[i]) / std0[i]) ** 2
+                    )
+                    ax.plot(
+                        xs, pdf0,
+                        linewidth=1.8,
+                        color="lightblue",
+                        label=fr"$s_0$: $\mu={mu0[i]:.3g}$, $\sigma={std0[i]:.3g}$"
+                )
+
+                # Gaussian fit for s
+                if std[i] > 0:
+                    pdf = (1.0 / (np.sqrt(2 * np.pi) * std[i])) * np.exp(
+                        -0.5 * ((xs - mu[i]) / std[i]) ** 2
+                    )
+                    ax.plot(
+                        xs, pdf,
+                        linewidth=1.8,
+                        color="lightcoral",
+                        label=fr"$s$: $\mu={mu[i]:.3g}$, $\sigma={std[i]:.3g}$"
+                    )
+
+                ax.set_title(f"w[{i}]")
+                ax.set_ylabel("Density")
+                ax.grid(True, alpha=0.3)
+                ax.legend(fontsize=8)
+
+            # Hide empty subplots
+            for j in range(n_hist, nrows * ncols):
+                r, c = divmod(j, ncols)
+                fig1.delaxes(axes[r][c])
+
+            fig1.suptitle("Empirical marginals of disturbance components (before vs after)")
+            fig1.tight_layout(rect=[0, 0, 1, 0.96])
+            if save_path is not None:
+                fig1.savefig(f"{save_path}__marginals_before_after.png",
+                            dpi=150, bbox_inches="tight")
+            figs.append(fig1)
+
+        # --------- Figure 2: scatter of w[0] vs w[1] ----------
+        fig2, ax2 = plt.subplots(figsize=(6, 5))
+        ax2.scatter(
+            W0[0, :],
+            W0[1, :],
+            alpha=0.5,
+            color="lightblue",
+            edgecolors="none",
+            label=r"$s_0$",
+        )
+        ax2.scatter(
+            W[0, :],
+            W[1, :],
+            alpha=0.5,
+            color="lightcoral",
+            edgecolors="none",
+            label=r"$s$",
+        )
+        ax2.set_xlabel(r"$w[0]$")
+        ax2.set_ylabel(r"$w[1]$")
+        ax2.set_title(r"$w[0]$ vs $w[1]$ (before vs after)")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+
+        fig2.tight_layout()
+        if save_path is not None:
+            fig2.savefig(f"{save_path}__scatter_w0_w1_before_after.png",
+                        dpi=150, bbox_inches="tight")
+        figs.append(fig2)
+        plt.show()
+
+        return tuple(figs)
 
 
     # -------------------------------------------------------------------------
@@ -397,14 +636,17 @@ class metric_2_Wasserstein:
         Sigma_use = self.Sigma_test #if Sigma is None else self.project_zero_mean_cov_to_ball(Sigma)
 
         if self.mode == "independent":
-            s = self._sample_iid_gaussian(T, Sigma_use)
+            s0, s = self._sample_iid_gaussian(T, Sigma_use)
         else:
-            s = self._sample_correlated_gaussian(T, Sigma_use, rho=rho)
+            s0, s = self._sample_correlated_gaussian(T, Sigma_use, rho=rho)
 
         if self.ellipse: 
             #self.plot_samples_with_wasserstein_bounds(s, S)
             self.plot_all_pairs(s, Sigma_use) #self.Sigma_nom)
             plt.show()
+        
+        if self.AfterBefore: 
+            self.plot_AfterBefore(s0, s)
         return s
 
     def _sample_iid_gaussian(self, T: int, Sigma: np.ndarray) -> np.ndarray:
@@ -414,8 +656,8 @@ class metric_2_Wasserstein:
         """
         Sigma = self._spd_correction(Sigma)
         L = cholesky(Sigma)
-        z = self.rng.standard_normal(size=(T, self.n))
-        return z @ L.T
+        z = self.rng.standard_normal(size=(T, Sigma.shape[0]))
+        return z, z @ L.T
 
     def _sample_correlated_gaussian(self,
                                     T: int,
@@ -449,7 +691,7 @@ class metric_2_Wasserstein:
             eps = self.rng.standard_normal(n) @ LQ.T
             w[t + 1] = F @ w[t] + eps
 
-        return w
+        return self.rng.standard_normal(size=(T, n)), w
 
     # -------------------------------------------------------------------------
     #  NEW: estimate gamma (radius) and Pw
@@ -968,11 +1210,11 @@ class Disturbances:
     Thin delegating wrapper. Disturbances.impl holds the real object.
     You can call dist.sample(T=...) regardless of which model you selected.
     """
-    def __init__(self, gamma: float = None, model: str = None, n: int = None, var: float = None, ellipse: bool = None):
+    def __init__(self, gamma: float = None, model: str = None, n: int = None, var: float = None, ellipse: bool = None, AfterBefore: bool = None):
         p   = cfg.get("params", {})
         amb = p.get("ambiguity", {})
         model = amb.get("model", "W2") if model is None else model
-        self.impl = self._select(model, gamma, n, var, ellipse)
+        self.impl = self._select(model, gamma, n, var, ellipse, AfterBefore)
 
         # convenience mirrors so your demo prints work
         self.mode = getattr(self.impl, "mode", model)
@@ -983,7 +1225,7 @@ class Disturbances:
         self.ts = getattr(self.impl, "ts", None)
         self.T = getattr(self.impl, "T", None)
 
-    def _select(self, model: str, gamma: float, n: int, var: float, ellipse: bool):
+    def _select(self, model: str, gamma: float, n: int, var: float, ellipse: bool, AfterBefore: bool):
         if model == "W2":
             if gamma is not None and gamma < 0:
                 raise ValueError("gamma must be nonnegative")
@@ -993,7 +1235,7 @@ class Disturbances:
         if model == "Gaussian":
             return GaussianNoise(n=n, var=var)
         if model == "2W":
-            return metric_2_Wasserstein(gamma=gamma, n=n, var=var, ellipse=ellipse)
+            return metric_2_Wasserstein(gamma=gamma, n=n, var=var, ellipse=ellipse, AfterBefore=AfterBefore)
         raise ValueError(f"Unknown ambiguity model: {model}")
 
     def __getattr__(self, name: str):
@@ -1126,11 +1368,11 @@ class Disturbances:
 
 if __name__ == "__main__":
     model = "2W"
-    n = 2 # None
-    var = 1
+    n, var = 2, 1 # None
+    ellipse, AfterBefore = True, True
 
     # simple test
-    wass = Disturbances(model=model, gamma=0.5, n=n, var=var, ellipse=True)
+    wass = Disturbances(model=model, gamma=0.5, n=n, var=var, ellipse=ellipse, AfterBefore=AfterBefore)
     print(f"{model} initialized: mode={wass.mode}, gamma={wass.gamma}, n={wass.Nw}")
     print(f" Nominal covariance Sigma_nom:\n{wass.Sigma_nom}")
     print(f" Test covariance Sigma_test:\n{wass.Sigma_test}")
@@ -1143,20 +1385,21 @@ if __name__ == "__main__":
     Sigma_nom_estm = 1/(2*w.shape[0]) * ((w.T @ w) + (w.T @ w).T)
     print("Sigma_nom_estm:", Sigma_nom_estm)
 
-    if n > 1:
-        # distribution plots
-        stats = wass.plot_disturbance_distribution(w, bins=40, plot_pairs=True, save_path=None)
-        print("mu:", stats["mu"])
-        print("Sigma:\n", stats["Sigma"])
-          
     if 1:
-        plt.figure()
-        plt.title(f"{wass.mode} samples")
-        #plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
-        plt.plot(t, w)
-        plt.xlabel("Time")
-        plt.grid()
-        plt.show()
+        if n > 1:
+            # distribution plots
+            stats = wass.plot_disturbance_distribution(w, bins=40, plot_pairs=True, save_path=None)
+            print("mu:", stats["mu"])
+            print("Sigma:\n", stats["Sigma"])
+            
+        if 1:
+            plt.figure()
+            plt.title(f"{wass.mode} samples")
+            #plt.plot(t, wass.gamma * np.ones_like(t), 'r--', label="gamma")
+            plt.plot(t, w)
+            plt.xlabel("Time")
+            plt.grid()
+            plt.show()
 
     # plain plug-in estimate
     Sigma_estm = wass.estm_Sigma_nom(w)
