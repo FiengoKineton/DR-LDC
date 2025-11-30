@@ -2,158 +2,14 @@ import json, sys, time, psutil, os, numpy as np, cvxpy as cp, casadi as ca
 import matplotlib.pyplot as plt
 
 from pathlib import Path
+from typing import Dict, Any, List
 from utils___systems import Plant, Plant_cl, Controller, DROLMIResult, Noise
 from utils___matrices import MatricesAPI, recover_deltas, compose_closed_loop, Recover
 from utils___ambiguity import Disturbances
 from utils___simulate import Open_Loop, Closed_Loop
+from utils___Nsims_mats import NsimsMatricesAnalyzer, mean_dict, select_representative_run, plot_first3_and_mean
 
 
-
-# === UTILS ===================================================================================== #
-
-def mean_dict(datasets):
-    """Elementwise mean over a list of dataset dicts with identical shapes."""
-    out = {}
-    T = min(d["meta"]["T"] for d in datasets)
-    keys = ["X","U","Y","Z","X_next"]
-    for k in keys:
-        arrs = []
-        for d in datasets:
-            A = d[k]
-            arrs.append(A[..., :T-1] if k in {"X_reg","X_next"} else A[..., :T])
-        out[k] = np.stack(arrs, axis=0).mean(axis=0)
-    out["meta"] = {**datasets[0]["meta"], "T": T, "N": len(datasets)}
-    return out
-
-def select_representative_run(datasets, keys=("X","U","Y","Z","X_next"), weights=None):
-    """
-    Choose the medoid (most representative) dataset across the given keys.
-    Returns a dict with aligned X,U,Y,Z,X_next from that single seed.
-    """
-    if not datasets:
-        raise ValueError("datasets is empty")
-
-    # 1) Align horizons
-    T_min = min(d["meta"]["T"] for d in datasets)
-    Teff      = T_min
-    Teff_next = T_min - 1
-    if Teff_next <= 0:
-        raise ValueError("Need T >= 2 to align X_next")
-
-    # 2) Stack aligned arrays
-    stacks = {}
-    for k in keys:
-        if k == "X_next":
-            stacks[k] = np.stack([d[k][..., :Teff_next] for d in datasets], axis=0)   # (N, n, T-1)
-        else:
-            stacks[k] = np.stack([d[k][..., :Teff]      for d in datasets], axis=0)   # (N, n, T)
-
-    N = next(iter(stacks.values())).shape[0]
-    if weights is None:
-        weights = {k: 1.0 for k in keys}
-
-    # 3) Per-key scaling so no single key dominates (Frobenius mean per seed)
-    def fro_scale(S):  # S shape: (N, ...)
-        return np.mean([np.linalg.norm(S[i]) for i in range(S.shape[0])]) + 1e-12
-
-    scales = {k: fro_scale(S) for k, S in stacks.items()}
-
-    # 4) Medoid index: minimize total weighted squared distance to others
-    dists = np.zeros(N)
-    for i in range(N):
-        total = 0.0
-        for k, S in stacks.items():
-            Sk = S / scales[k]
-            diff = Sk - Sk[i]              # (N, ...)
-            total += float(weights[k]) * np.sum(diff**2)
-        dists[i] = total
-    i_star = int(np.argmin(dists))
-
-    # 5) Build output using that single, real run (preserves dynamics)
-    meta_sel = dict(datasets[i_star]["meta"])  # copy
-    meta_sel.update({
-        "T": T_min,
-        "N": len(datasets),
-        "selected_index": i_star,
-        "selection": "medoid_over_"+",".join(keys),
-    })
-    out = {
-        "X":      stacks["X"][i_star],                        # (nx, T)
-        "U":      stacks["U"][i_star],                        # (nu, T)
-        "Y":      stacks["Y"][i_star],                        # (ny, T)
-        "Z":      stacks["Z"][i_star],                        # (nz, T)
-        # pad last column so X_next matches T
-        "X_next": np.hstack([stacks["X_next"][i_star], stacks["X_next"][i_star][:, -1][:, None]]),
-        "meta": meta_sel,
-    }
-    return out
-
-def plot_first3_and_mean(datasets, key="X", out=None, title_prefix=None,
-                         show_band=True, symmetric_ylim=True):
-    if not datasets:
-        raise ValueError("datasets is empty.")
-
-    # Align horizon for datasets
-    T_min = min(d["meta"]["T"] for d in datasets)
-    use_Tm1 = key in {"X_next", "X_reg"}
-    Teff = T_min - 1 if use_Tm1 else T_min
-    if Teff <= 0:
-        raise ValueError("Effective horizon <= 0; check inputs.")
-
-    # Stack datasets: (N, n, Teff) and get per-dataset row-mean (N, Teff)
-    stack = np.stack([d[key][..., :Teff] for d in datasets], axis=0)
-    per_ds_mean = np.nanmean(stack, axis=1)
-    N = per_ds_mean.shape[0]
-    global_mean = np.nanmean(per_ds_mean, axis=0)
-    global_std  = np.nanstd(per_ds_mean, axis=0, ddof=1) if N > 1 else np.zeros_like(global_mean)
-
-    # Time vector
-    t = datasets[0].get("t", None)
-    t = t[:Teff] if (t is not None and t.shape[-1] >= Teff) else np.arange(Teff)
-
-    # Optional overlay from `out` using the SAME key
-    overlay = None
-    if out is not None and key in out:
-        arr = np.asarray(out[key])
-        overlay = arr if arr.ndim == 1 else np.nanmean(arr, axis=0)
-        # clip/align overlay length to Teff
-        overlay = overlay[:Teff] if overlay.shape[-1] >= Teff else np.pad(
-            overlay, (0, Teff - overlay.shape[-1]), mode="edge"
-        )
-
-    # Y-limits from curves actually shown
-    curves = [per_ds_mean[i] for i in range(min(3, N))] + [global_mean]
-    if overlay is not None:
-        curves.append(overlay)
-    ymin = np.min([np.nanmin(c) for c in curves])
-    ymax = np.max([np.nanmax(c) for c in curves])
-    L = float(max(abs(ymin), abs(ymax))) or 1.0
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
-    axes = axes.flatten()
-
-    def plot_mean(ax, m, title):
-        ax.plot(t, m, label="dataset avg")
-        if show_band:
-            ax.fill_between(t, global_mean - global_std, global_mean + global_std,
-                            alpha=0.2, linewidth=0, label="±1σ (global)")
-        if overlay is not None:
-            ax.plot(t, overlay, linewidth=2.0, label=f"{key} (precomputed)")
-        ax.set_title(title if title else "")
-        ax.set_xlabel("time"); ax.set_ylabel(f"mean({key})")
-        ax.set_ylim((-L, L) if symmetric_ylim else (ymin, ymax))
-        ax.grid(True, alpha=0.3); ax.legend(loc="best")
-
-    for i in range(min(3, N)):
-        plot_mean(axes[i], per_ds_mean[i],
-                  f"{title_prefix+' - ' if title_prefix else ''}{key}: dataset {i+1}")
-
-    plot_mean(axes[3], global_mean,
-              f"{title_prefix+' - ' if title_prefix else ''}{key}: mean over N={N}")
-
-    fig.suptitle(f"{key}: first three dataset means + global{(' + overlay' if overlay is not None else '')}", y=0.98)
-    fig.tight_layout()
-    return fig, axes
 
 # =============================================================================================== #
 
@@ -3065,6 +2921,19 @@ class lmi_pipeline_optim_problem():
         estm_only = bool(params.get("estm_only", 0))
         N_sims = int(params.get("N_sims", 1)) if N_sims is None else N_sims
         non_convex = bool(params.get("non_convex", 0))
+        Nsims_mats = bool(params.get("Nsims_mats", 0))
+
+
+        if Nsims_mats:
+            an = NsimsMatricesAnalyzer(
+                api=api,
+                noise=noise,
+                out_dir="out/EstmMats_Nsims",
+                recompute=False,        # set True if you change estimation logic
+            )
+
+            an.run()  # estimates (or loads), then generates all plots
+            sys.exit(0)
 
         self.proc = psutil.Process(os.getpid())
         self.solve_stats = []

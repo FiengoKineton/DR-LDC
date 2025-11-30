@@ -9,8 +9,9 @@ params:
   old_upd: 0               # if 0 uses Young_Schur_dro_lmi                      # set
   estm_only: 0             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
   non_convex: 0            # if 1 uses YoungSchurNonconvexLikeDROLMI            # VAR ------------------------------ true or false
+  Nsims_mats: 0            # if 1 uses NsimsMatricesAnalyzer                    # VAR ------------------------------ true or false
 
-  model: "correlated"                                                          # ("correlated" or "independent")
+  model: "independent"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   test_Nsims: 0                                                                 # VAR ------------------------------ true or false
 
@@ -19,7 +20,7 @@ params:
   plot: 0                                                                       # VAR ------------------------------ true or false
   inp: 0                                                                        # VAR ------------------------------ true or false
   re_evaluate: 0                                                                # VAR ------------------------------ true or false
-  N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
+  N_sims: 8                                                                     # VAR ------------------------------ int(\geq 1)
 
   ALL: 1                                                                        # VAR ------------------------------ true or false
   COST: 0                                                                       # VAR ------------------------------ true or false
@@ -30,7 +31,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "temp_N01"
+    runID: "temp"
 
   ambiguity:
     model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
