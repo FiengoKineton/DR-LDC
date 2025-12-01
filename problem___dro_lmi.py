@@ -3151,8 +3151,13 @@ class lmi_pipeline_optim_problem():
 
         sim_cost = cl.simulate_Z_cost(Z=sim["Z"], plot=plot)
         self.final_cost = sim_cost["J"]
-        print("\nFinal closed-loop cost J =", self.final_cost)
+        print("\nFinal closed-loop cost J = ", self.final_cost)
         out_cost = out + f"___closed_loop_run_cost.npz"
+
+        sim_snr = cl.simulate_ZW_snr(Z=sim["Z"], W=sim["W"], plot=plot)
+        self.snr = sim_snr["snr_db"]
+        print("\nGlobal SNR = ", self.snr)
+        out_snr = out + f"___closed_loop_snr.npz"
 
         self.rho = rho
         self.lamda = res.lambda_opt
@@ -3178,6 +3183,7 @@ class lmi_pipeline_optim_problem():
                 "trace_Q_Sigma": np.trace(res.Q @ Sigma_nom),
                 "real_Z_mats": real_Z_mats,
                 "N_sims": N_sims,
+                "SNR": self.snr,
             },
             "solver_performance": {
                 "solver": self.solver,
@@ -3198,6 +3204,10 @@ class lmi_pipeline_optim_problem():
                 "nw": Bw.shape[1], 
                 "ny": Cy.shape[0], 
                 "nz": Cz.shape[0],
+            },
+            "initial_conds": {
+                "X": sim["x_0"].tolist(), 
+                "Xc": sim["xc_0"].tolist(), 
             },
             "composite_closed_loop": self.plant_cl_to_dict(plant_cl),
             "Acl_eigenvals": {
@@ -3246,6 +3256,8 @@ class lmi_pipeline_optim_problem():
             print(f"[saved] {out_composite}")
             cl.save_npz(sim_cost, str(out_cost))   
             print(f"[saved] {out_cost}")
+            cl.save_npz(sim_snr, str(out_snr))
+            print(f"[saved] {out_snr}")
             self.save_json(out_json, payload)
             print(f"[saved] {out_json}")
 
@@ -3276,6 +3288,7 @@ class lmi_pipeline_optim_problem():
             "obj": self.obj,
             "solver": self.solver,
             "ratio_violation": self.ratio_violation,
+            "snr": self.snr,
         }
         return infos
 

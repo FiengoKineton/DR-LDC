@@ -154,6 +154,7 @@ class metric_2_Wasserstein:
 
         self.gamma_estm = None
         self.Sigma_estm = None
+        self.percent = set.get("percent", 1)
 
 
     # -------------------------------------------------------------------------
@@ -647,7 +648,7 @@ class metric_2_Wasserstein:
         
         if self.AfterBefore: 
             self.plot_AfterBefore(s0, s)
-        return s
+        return self.percent * s
 
     def _sample_iid_gaussian(self, T: int, Sigma: np.ndarray) -> np.ndarray:
         """

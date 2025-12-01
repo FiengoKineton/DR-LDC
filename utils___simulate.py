@@ -91,7 +91,9 @@ class Closed_Loop():
                             Sigma_w: np.ndarray = None,
                             gamma: float = None,
                             seed: int = 11,
-                            init_cond: str = "zeros"):
+                            init_cond: str = "zeros", 
+                            x_init: np.ndarray = None,
+                            xc_init: np.ndarray = None, ):
         """
         Simulate the interconnection (no composite shortcut) so we can view y, u explicitly.
 
@@ -121,15 +123,19 @@ class Closed_Loop():
         elif init_cond == "from_eig":            
             x = _initial_condition_from_eigenvalues(A)
             xc = _initial_condition_from_eigenvalues(Ac)
-
         elif init_cond == "e1":
             x = np.zeros((nx, 1))
-            x[0, 0] = 1.0
+            x[0, 0] = 0.07
             xc = np.zeros((nxc, 1))
+        elif init_cond == "set": 
+            x = x_init
+            xc = xc_init
         else:   # rand
             rng = np.random.default_rng(seed)
             x = rng.standard_normal((nx, 1))
             xc = rng.standard_normal((nxc, 1))
+        
+        x_0, xc_0 = x, xc
 
         # Precompute a sampling factor for w
         if Sigma_w is not None:
@@ -193,6 +199,7 @@ class Closed_Loop():
         return {
             "X": X, "Xc": Xc, "Y": Y, "U": U, "Z": Z, "W": W,
             "T": T, "nx": nx, "nxc": nxc, "ny": ny, "nu": nu, "nz": nz, "nw": nw, "step": step,
+            "x_0": x_0, "xc_0": xc_0,
         }
     
 
@@ -275,6 +282,131 @@ class Closed_Loop():
             plt.show()
 
         return {"inst": inst, "running": running, "J": J, "T": T}
+
+    def simulate_ZW_snr(self,
+                        Z: np.ndarray,
+                        W: np.ndarray,
+                        plot: bool = True,
+                        eps: float = 1e-12):
+        """
+        Compute Signal-to-Noise Ratio (SNR) between performance output Z and disturbance W,
+        and optionally plot its evolution in time.
+
+        Z: array with shape (nz, T), (T, nz), or (T, nz, N) for N trajectories.
+        Treated as the "signal".
+        W: array with shape (nw, T), (T, nw), or (T, nw, N) for N trajectories.
+        Treated as the "noise" / disturbance.
+        If batched, E[·] is taken as the empirical mean over N.
+
+        SNR is defined as:
+            SNR(t)      = P_signal(t) / P_noise(t)
+            SNR_dB(t)   = 10 log10( SNR(t) )
+        where P_signal(t) = ||z(t)||_2^2, P_noise(t) = ||w(t)||_2^2
+        (with batch-average if N > 1), and the global SNR is
+            SNR_dB = 10 log10( mean_t P_signal(t) / mean_t P_noise(t) ).
+
+        Returns:
+            dict with:
+                'snr_t'     : (T,) SNR(t) (linear scale)
+                'snr_db_t'  : (T,) SNR_dB(t) in dB
+                'snr_db'    : float, global SNR in dB (time-averaged power ratio)
+                'T'         : int, number of timesteps
+        """
+
+        def _normalize_TSZN(arr: np.ndarray, name: str) -> np.ndarray:
+            """
+            Normalize input to shape (T, n, N) or (T, n) if unbatched.
+            Mirrors the orientation logic of simulate_Z_cost.
+            """
+            arr = np.asarray(arr)
+
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)  # (n=1, T)
+
+            if arr.ndim == 2:
+                # Guess orientation using (Tf, ts) as in simulate_Z_cost
+                T_guess = int(round(self.Tf / self.ts))
+                # If first dim looks like time, keep; else transpose
+                if not (arr.shape[0] == T_guess or arr.shape[0] > arr.shape[1]):
+                    arr = arr.T  # now (T, n)
+            elif arr.ndim == 3:
+                # Expect (T, n, N). If it looks like (n, T, N), swap first two axes.
+                if arr.shape[0] < arr.shape[1]:
+                    arr = np.swapaxes(arr, 0, 1)
+            else:
+                raise ValueError(f"{name} must be 1D, 2D, or 3D.")
+
+            return arr
+
+        # Normalize Z and W to (T, n, N?) / (T, n)
+        Z = _normalize_TSZN(Z, "Z")
+        W = _normalize_TSZN(W, "W")
+
+        # Broadcast/batch compatibility check (time dimension must match)
+        if Z.shape[0] != W.shape[0]:
+            raise ValueError(f"Time dimensions differ: Z.shape[0]={Z.shape[0]}, W.shape[0]={W.shape[0]}")
+
+        T = Z.shape[0]
+        t = np.arange(T) * self.ts
+
+        # Ensure both have an explicit batch dimension if needed
+        if Z.ndim == 2:
+            Z_ = Z[..., None]  # (T, nz, 1)
+        else:
+            Z_ = Z             # (T, nz, N)
+
+        if W.ndim == 2:
+            W_ = W[..., None]  # (T, nw, 1)
+        else:
+            W_ = W             # (T, nw, N)
+
+        # Power per time, averaged over batch N
+        # P_signal(t) = E_N[ sum_i Z_i(t)^2 ]
+        # P_noise(t)  = E_N[ sum_j W_j(t)^2 ]
+        signal_power_t = np.mean(np.sum(Z_**2, axis=1), axis=-1)  # (T,)
+        noise_power_t  = np.mean(np.sum(W_**2, axis=1), axis=-1)  # (T,)
+
+        # Avoid division by zero
+        noise_power_t_clipped = np.maximum(noise_power_t, eps)
+
+        # SNR(t) and SNR_dB(t)
+        snr_t = signal_power_t / noise_power_t_clipped
+        snr_db_t = 10.0 * np.log10(snr_t + eps)
+
+        # Global SNR: ratio of mean powers
+        signal_power_mean = float(np.mean(signal_power_t))
+        noise_power_mean  = float(np.mean(noise_power_t_clipped))
+
+        if noise_power_mean <= 0:
+            snr_db = np.inf
+        else:
+            snr_db = float(10.0 * np.log10(signal_power_mean / noise_power_mean))
+
+        if plot:
+            # SNR_dB(t)
+            plt.figure(figsize=(8, 3.2))
+            plt.plot(t, snr_db_t, linewidth=1.5)
+            plt.xlabel("t")
+            plt.ylabel(r"$\mathrm{SNR}(t)\;[\mathrm{dB}]$")
+            plt.title("Instantaneous SNR between Z (signal) and W (disturbance)")
+            plt.grid(True, alpha=0.3)
+
+            # Optional: linear SNR(t) on separate plot (if you care)
+            plt.figure(figsize=(8, 3.2))
+            plt.plot(t, snr_t, linewidth=1.5)
+            plt.xlabel("t")
+            plt.ylabel(r"$\mathrm{SNR}(t)$")
+            plt.title("Instantaneous SNR (linear scale)")
+            plt.grid(True, alpha=0.3)
+
+            plt.show()
+
+        return {
+            "snr_t": snr_t,
+            "snr_db_t": snr_db_t,
+            "snr_db": snr_db,
+            "T": T,
+        }
 
             
 

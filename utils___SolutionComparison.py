@@ -174,11 +174,13 @@ class ResultsComparator:
         Z = _get_first(npz, keys=("z", "Z", "perf", "performance", "outputs_z", "traj_Z"))
         U = _get_first(npz, keys=("u", "U", "input", "inputs", "traj_U"))
         Xc = _get_first(npz, keys=("xc", "x_c", "Xc", "X_c"))
+        W = _get_first(npz, keys=("w", "W"))
 
         Y = _to_time_major(Y)
         Z = _to_time_major(Z)
         U = _to_time_major(U)
         Xc = _to_time_major(Xc)
+        W = _to_time_major(W)
 
         # If time missing, synthesize from X length
         if t is None:
@@ -186,7 +188,7 @@ class ResultsComparator:
 
         # Basic length consistency check; mismatch won’t hard-fail, just warn in logs if you use logging
         T = X.shape[0]
-        for name, arr in (("Y", Y), ("Z", Z), ("U", U), ("Xc", Xc)):
+        for name, arr in (("Y", Y), ("Z", Z), ("U", U), ("Xc", Xc), ("W", W)):
             if arr is not None and arr.shape[0] != T:
                 # Align by truncation to the minimum T to avoid broadcasting disasters.
                 Tmin = min(T, arr.shape[0])
@@ -196,9 +198,10 @@ class ResultsComparator:
                 if Z is not None: Z = Z[:Tmin]
                 if U is not None: U = U[:Tmin]
                 if Xc is not None: Xc = Xc[:Tmin]
+                if W is not None: W = W[:Tmin]
                 break
 
-        return t, X, Y, Z, U, Xc
+        return t, X, Y, Z, U, Xc, W
 
     @staticmethod
     def _plot_overlay_states(t, XM, XD, l, ts: float, title: str, save: bool, save_path: str):
@@ -410,6 +413,54 @@ class ResultsComparator:
         overall["nrmse_overall"] = overall["nrmse_mean"]
         return overall
     
+    def _load_snr_npz(self, path):
+        """
+        Robustly load {snr_t, snr_db_t, snr_db, T} from an .npz created via np.savez
+        from simulate_ZW_snr.
+
+        Expected canonical format:
+            np.savez(path,
+                    snr_t=snr_t,
+                    snr_db_t=snr_db_t,
+                    snr_db=snr_db,
+                    T=T)
+
+        Fallback:
+            - A single object array containing a dict with those fields.
+        """
+        d = np.load(path, allow_pickle=True)
+        keys = set(d.files)
+
+        expected_main = {"snr_t", "snr_db_t"}
+        if not expected_main.issubset(keys):
+            # Fallback: maybe it's a single object (dict) inside
+            obj = d[d.files[0]].item()
+            snr_t = np.asarray(obj["snr_t"])
+            snr_db_t = np.asarray(obj["snr_db_t"])
+            snr_db = float(obj.get("snr_db",
+                                10.0 * np.log10(
+                                    np.mean(snr_t) if np.all(snr_t > 0) else 1.0
+                                )))
+            T = int(obj.get("T", snr_t.shape[0]))
+            return {"snr_t": snr_t, "snr_db_t": snr_db_t, "snr_db": snr_db, "T": T}
+
+        # Canonical case: each field saved as its own array
+        snr_t = np.asarray(d["snr_t"])
+        snr_db_t = np.asarray(d["snr_db_t"])
+
+        if "snr_db" in keys:
+            snr_db = float(d["snr_db"])
+        else:
+            # recompute global SNR if needed
+            # (assumes snr_t > 0 almost everywhere)
+            snr_db = float(10.0 * np.log10(np.mean(snr_t)))
+
+        if "T" in keys:
+            T = int(d["T"])
+        else:
+            T = int(snr_t.shape[0])
+
+        return {"snr_t": snr_t, "snr_db_t": snr_db_t, "snr_db": snr_db, "T": T}
 
     def _load_cost_npz(self, path):
         """Robustly load {inst, running, J, T} from an .npz created via np.savez."""
@@ -455,11 +506,56 @@ class ResultsComparator:
         if logy: plt.yscale("log")
         if save: plt.savefig(save_avg, bbox_inches="tight")
 
+    def _plot_overlay_snr_db(self, t, M, D, title, save_path, save: bool = True):
+        """
+        Overlay SNR(t) in dB for two runs (MBD vs DDD).
+
+        M, D are dicts with keys:
+            'snr_db_t' : (T,) SNR(t) in dB
+            'snr_db'   : scalar global SNR in dB
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        def db_to_linear(db: float) -> float:
+            return float(10.0**(db / 10.0))
+
+        M_snr_t = np.asarray(M["snr_db_t"])
+        D_snr_t = np.asarray(D["snr_db_t"])
+        M_db = float(M["snr_db"])
+        D_db = float(D["snr_db"])
+        M_lin = db_to_linear(M_db)
+        D_lin = db_to_linear(D_db)
+
+        plt.figure(figsize=(8, 3.2))
+        plt.plot(
+            t,
+            M_snr_t,
+            label=f"MBD: {M_db:.2f} dB ({M_lin:.2f})",
+            linewidth=1.6,
+        )
+        plt.plot(
+            t,
+            D_snr_t,
+            label=f"DDD: {D_db:.2f} dB ({D_lin:.2f})",
+            linewidth=1.6,
+            linestyle="--",
+        )
+
+        plt.xlabel("t")
+        plt.ylabel(r"$\mathrm{SNR}(t)\;[\mathrm{dB}]$")
+        plt.title(title)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+        if save:
+            plt.savefig(save_path, bbox_inches="tight")
+
 
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
     def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", ID: str = "temp", plot: bool = True, re_evaluate: bool = False,
-                           burn_in: int = 0, normalize: str = None, error_weights: dict = None, init_cond: str = "rand") -> dict:
+                           burn_in: int = 0, normalize: str = None, error_weights: dict = None, init_cond: str = "rand", percent: int = 1) -> dict:
         """
         Compare MBD vs DDD for the SAME method ('lmi' or 'baseline').
 
@@ -488,6 +584,8 @@ class ResultsComparator:
         k_ddd = run_dir / f"{base}_DDD___closed_loop_run_cost.npz"
         c_mbd = run_dir / f"{base}_MBD___closed_loop_composite.npz"
         c_ddd = run_dir / f"{base}_DDD___closed_loop_composite.npz"
+        s_mbd = run_dir / f"{base}_MBD___closed_loop_snr.npz"
+        s_ddd = run_dir / f"{base}_DDD___closed_loop_snr.npz"
 
         if not j_mbd.exists() or not j_ddd.exists():
             raise FileNotFoundError(f"Missing JSON(s): {j_mbd} or {j_ddd}")
@@ -644,7 +742,7 @@ class ResultsComparator:
         kpis_M, kpis_D = {}, {}
         if z_mbd.exists():
             dataM = np.load(z_mbd, allow_pickle=True)
-            _, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
+            _, XM, YM, ZM, UM, XcM, *_ = self._npz_extract_states(dataM)
             kpis_M = {
                 "x":  self._stream_stats(XM, "x"),
                 "xc": self._stream_stats(XcM, "xc"),
@@ -654,7 +752,7 @@ class ResultsComparator:
             }
         if z_ddd.exists():
             dataD = np.load(z_ddd, allow_pickle=True)
-            _, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
+            _, XD, YD, ZD, UD, XcD, *_ = self._npz_extract_states(dataD)
             kpis_D = {
                 "x":  self._stream_stats(XD, "x"),
                 "xc": self._stream_stats(XcD, "xc"),
@@ -744,8 +842,8 @@ class ResultsComparator:
             if not re_evaluate:
                 dataM = np.load(z_mbd)
                 dataD = np.load(z_ddd)
-                t, XM, YM, ZM, UM, XcM = self._npz_extract_states(dataM)
-                _, XD, YD, ZD, UD, XcD = self._npz_extract_states(dataD)
+                t, XM, YM, ZM, UM, XcM, WM = self._npz_extract_states(dataM)
+                _, XD, YD, ZD, UD, XcD, WD = self._npz_extract_states(dataD)
             else:
                 # Re-simulate both
                 cl = Closed_Loop()
@@ -754,8 +852,8 @@ class ResultsComparator:
                 print("simulating closed loop of DDD...")
                 sim_d = cl.simulate_closed_loop(plant=p_DDD, ctrl=c_DDD, Sigma_w=SigmaD, gamma=gamD, init_cond=init_cond)
                 t = sim_m["step"]
-                XM = sim_m["X"]; XcM = sim_m["Xc"]; UM = sim_m["U"]; YM = sim_m["Y"]; ZM = sim_m["Z"]
-                XD = sim_d["X"]; XcD = sim_d["Xc"]; UD = sim_d["U"]; YD = sim_d["Y"]; ZD = sim_d["Z"]
+                XM = sim_m["X"]; XcM = sim_m["Xc"]; UM = sim_m["U"]; YM = sim_m["Y"]; ZM = sim_m["Z"]; WM = sim_m["W"]
+                XD = sim_d["X"]; XcD = sim_d["Xc"]; UD = sim_d["U"]; YD = sim_d["Y"]; ZD = sim_d["Z"]; WD = sim_d["W"]
 
                 """print("plotting MDB...")
                 cl.plot_timeseries(sim_m)
@@ -779,6 +877,9 @@ class ResultsComparator:
             title = f"{method.upper()} closed-loop: perf. outputs (MBD vs DDD)"
             save_path = run_dir / f"{base}_overlay_perf_outputs.pdf"
             self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
+            title = f"{method.upper()} closed-loop: disturbances at {percent}% (MBD vs DDD)"
+            save_path = run_dir / f"{base}_overlay_distrubance.pdf"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), WM, WD, "w", self.ts, title, save=self.save, save_path=save_path)
             if plot: plt.show()
 
         else:
@@ -854,6 +955,47 @@ class ResultsComparator:
             if plot: plt.show()
         else:
             print("\n[warn] Missing cost NPZ for one/both runs; skipping cost overlays.")
+
+
+        # ======================= SNR OVERLAY (MBD vs DDD) ======================= #
+        if s_mbd.exists() and s_ddd.exists():
+            if not re_evaluate:
+                SM = self._load_snr_npz(s_mbd)
+                SD = self._load_snr_npz(s_ddd)
+            else:
+                cl = Closed_Loop()
+                print("simulating SNR of MBD (Z vs W)...")
+                SM = cl.simulate_ZW_snr(Z=ZM, W=WM, plot=plot)
+
+                print("simulating SNR of DDD (Z vs W)...")
+                SD = cl.simulate_ZW_snr(Z=ZD, W=WD, plot=plot)
+
+                # Save fresh npz if you want persistence
+                if self.save:
+                    np.savez(s_mbd, **SM)
+                    np.savez(s_ddd, **SD)
+
+            # Align time horizons
+            T_snr = min(SM["T"], SD["T"])
+            t_snr = np.arange(T_snr) * self.ts
+
+            title_snr = f"{method.upper()} SNR: Z vs W at {percent}% (MBD vs DDD)"
+            save_snr  = run_dir / f"{base}_overlay_snr_ZW_dB.pdf"
+
+            self._plot_overlay_snr_db(
+                t_snr,
+                {"snr_db_t": SM["snr_db_t"][:T_snr], "snr_db": SM["snr_db"]},
+                {"snr_db_t": SD["snr_db_t"][:T_snr], "snr_db": SD["snr_db"]},
+                title_snr,
+                save_snr,
+                save=self.save,
+            )
+            if plot:
+                plt.show()
+        else:
+            print("\n[warn] Missing SNR NPZ for one/both runs; skipping SNR overlays.")
+
+        
 
         # Assemble report
         report = {

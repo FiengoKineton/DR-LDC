@@ -49,6 +49,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     _old = bool(p.get("old_upd", 1))
     _estm = bool(p.get("estm_only", 0))
     _nonConvex = bool(p.get("non_convex", 0))
+    _percent = int(p.get("ambiguity", {}).get("percent", 1)*100)
     
 
     # ----------------------------------------------------------------------
@@ -100,7 +101,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     # ----------------------------------------------------------------------
     if _comp:
         cmp = ResultsComparator(out_root=out, save=_save, ts=_ts)
-        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond)
+        return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond, percent=_percent)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
         out = out / f"{_method}" / f"run_{_runID}"
@@ -188,6 +189,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
     v_MBD, v_DDD = [], []
     o_MBD, o_DDD = [], []
     p_MBD, p_DDD = [], []
+    n_MBD, n_DDD = [], []
 
     out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")
     out = out / "MutipleRunsEvaluation"
@@ -219,6 +221,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             v_mbd = infos_mbd["ratio_violation"]
             p_mbd = 1 if infos_mbd["solver"] in ["MOSEK", "mosek"] else 0
             o_mbd = infos_mbd["obj"]
+            n_mbd = infos_mbd["snr"]
 
             c_MBD.append(c_mbd)
             l_MBD.append(l_mbd)
@@ -229,6 +232,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             v_MBD.append(v_mbd)
             p_MBD.append(p_mbd)
             o_MBD.append(o_mbd)
+            n_MBD.append(n_mbd)
 
             infos_ddd, *_ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=False, COST=COST)
             c_ddd = infos_ddd["J"]
@@ -240,6 +244,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             v_ddd = infos_ddd["ratio_violation"]
             p_ddd = 1 if infos_ddd["solver"] in ["MOSEK", "mosek"] else 0
             o_ddd = infos_ddd["obj"]
+            n_ddd = infos_ddd["snr"]
 
             c_DDD.append(c_ddd)
             l_DDD.append(l_ddd)
@@ -250,6 +255,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             v_DDD.append(v_ddd)
             p_DDD.append(p_ddd)
             o_DDD.append(o_ddd)
+            n_DDD.append(n_ddd)
 
             if r_ddd > 1.0:
                 k += 1
@@ -292,6 +298,8 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
         p_DDD = np.array(p_DDD, dtype=float)        
         o_MBD = np.array(o_MBD, dtype=float)
         o_DDD = np.array(o_DDD, dtype=float)
+        n_MBD = np.array(n_MBD, dtype=float)
+        n_DDD = np.array(n_DDD, dtype=float)
 
         # ------------------------------------------------------------------
         # SAVE TO CSV (one file for MBD, one for DDD)
@@ -300,8 +308,8 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
         # In case some runs failed on one side, truncate to common length
         n_mbd = len(c_MBD)
         n_ddd = len(c_DDD)
-        n_common_mbd = min(n_mbd, len(l_MBD), len(r_MBD), len(t_MBD), len(a_MBD), len(s_MBD))
-        n_common_ddd = min(n_ddd, len(l_DDD), len(r_DDD), len(t_DDD), len(a_DDD), len(s_DDD))
+        n_common_mbd = min(n_mbd, len(l_MBD), len(r_MBD), len(t_MBD), len(a_MBD), len(s_MBD), len(n_MBD))
+        n_common_ddd = min(n_ddd, len(l_DDD), len(r_DDD), len(t_DDD), len(a_DDD), len(s_DDD), len(n_DDD))
 
         # MBD table: [run, J, lambda, rho, time, attempts, stress]
         mbd_data = np.column_stack([
@@ -315,6 +323,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             v_MBD[:n_common_mbd],
             o_MBD[:n_common_mbd],
             p_MBD[:n_common_mbd],
+            n_MBD[:n_common_mbd],
         ])
 
         # DDD table
@@ -329,6 +338,7 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             v_DDD[:n_common_ddd],
             o_DDD[:n_common_ddd],
             p_DDD[:n_common_ddd],
+            n_DDD[:n_common_ddd],
         ])
 
         if save:
@@ -381,6 +391,8 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
             o_DDD = ddd_data[:, 8]
             p_MBD = mbd_data[:, 9]
             p_DDD = ddd_data[:, 9]
+            n_MBD = mbd_data[:, 10]
+            n_DDD = ddd_data[:, 10]
         except Exception as e:
             use = False
 
@@ -544,11 +556,13 @@ def MutipleRunsEvaluation(p, gamma: float = 0.5, COST: bool = True, N: int = Non
         v_n, v_m, v_d = analyze_and_plot_metric(v_MBD, v_DDD, "ratio_violation", model, path, save, N_runs=N)
         o_n, o_m, o_d = analyze_and_plot_metric(o_MBD, o_DDD, "objective", model, path, save, N_runs=N)
         p_n, p_m, p_d = analyze_and_plot_metric(p_MBD, p_DDD, "solver", model, path, save, N_runs=N)
+        n_n, n_m, n_d = analyze_and_plot_metric(n_MBD, n_DDD, "snr", model, path, save, N_runs=N)
 
         metrics.extend([
             (v_n, v_m, v_d),
             (o_n, o_m, o_d),
             (p_n, p_m, p_d),
+            (n_n, n_m, n_d),
         ])
 
     rows = []
@@ -914,6 +928,7 @@ def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
         ("obj",             "Objective"),
         ("lamda",           "λ"),
         ("rho",             "ρ"),
+        ("snr",             "SNR [dB]"),
         ("time",            "Time [s]"),
         ("attempts",        "Attempts"),
         ("stress",          "Stress"),
@@ -975,7 +990,7 @@ if __name__ == "__main__":
             main(gamma=gamma)
     else: 
         if not bool(p.get("test_Nsims", 0)):
-            MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=10)
+            MutipleRunsEvaluation(p=p, gamma=gamma, COST=COST, N=100)
         else: 
             COST = True
             N_sims_values = [

@@ -6,21 +6,21 @@ params:
   solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")
 
   approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
-  old_upd: 0               # if 0 uses Young_Schur_dro_lmi                      # set
-  estm_only: 0             # if 1 uses Estm_dro_lmi                             # VAR ------------------------------ true or false
-  non_convex: 0            # if 1 uses YoungSchurNonconvexLikeDROLMI            # VAR ------------------------------ true or false
-  Nsims_mats: 0            # if 1 uses NsimsMatricesAnalyzer                    # VAR ------------------------------ true or false
+  old_upd: 0              # if 0 uses Young_Schur_dro_lmi                       # set
+  estm_only: 1            # if 1 uses Estm_dro_lmi                              # VAR ------------------------------ true or false
+  non_convex: 0           # if 1 uses YoungSchurNonconvexLikeDROLMI             # VAR ------------------------------ true or false
+  Nsims_mats: 0           # if 1 uses NsimsMatricesAnalyzer                     # VAR ------------------------------ true or false
 
   model: "independent"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
-  test_Nsims: 0                                                                 # VAR ------------------------------ true or false
+  test_Nsims: 0                                                                 # if COST is 1 and (if 0 runs MutipleRunsEvaluation else NsimSweep_FROM_DATA)
 
   comp: 0                                                                       # VAR ------------------------------ true or false
   save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
   inp: 0                                                                        # VAR ------------------------------ true or false
   re_evaluate: 0                                                                # VAR ------------------------------ true or false
-  N_sims: 8                                                                     # VAR ------------------------------ int(\geq 1)
+  N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
 
   ALL: 1                                                                        # VAR ------------------------------ true or false
   COST: 0                                                                       # VAR ------------------------------ true or false
@@ -31,7 +31,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "temp"
+    runID: "SNR"
 
   ambiguity:
     model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
@@ -39,11 +39,12 @@ params:
     fixGamma: 1                                                                 # set | may be var (true or false)
     Sigma_nom: [[1.0, 0.0], [0.0, 1.0]]                                         # set
     var: 1                                                                      # set
+    percent: 1.00                                                               # VAR ------------------------------ \in {0, 1}
 
   simulation:
     ts: 0.05                                                                    # set
     TotTime: 100                                                                # set
-    init_cond: "from_eig"                                                       # VAR ------------------------------ ("zeros", "rand", "e1", "from_eig")
+    init_cond: "e1"                                                             # VAR ------------------------------ ("zeros", "rand", "e1", "from_eig")
 
   ident:
     use_bc: 0                                                                   # set | not used yet
