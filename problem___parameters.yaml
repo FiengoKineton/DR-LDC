@@ -15,14 +15,14 @@ params:
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   test_Nsims: 0                                                                 # if COST is 1 and (if 0 runs MutipleRunsEvaluation else NsimSweep_FROM_DATA)
 
-  comp: 0                                                                       # VAR ------------------------------ true or false
+  comp: 1                                                                       # VAR ------------------------------ true or false
   save: 1                                                                       # VAR ------------------------------ true or false
   plot: 0                                                                       # VAR ------------------------------ true or false
   inp: 0                                                                        # VAR ------------------------------ true or false
-  re_evaluate: 0                                                                # VAR ------------------------------ true or false
+  re_evaluate: 1                                                                # VAR ------------------------------ true or false
   N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
 
-  ALL: 1                                                                        # VAR ------------------------------ true or false
+  ALL: 0                                                                        # VAR ------------------------------ true or false
   COST: 0                                                                       # VAR ------------------------------ true or false
   SNR: 0                                                                        # set
 
