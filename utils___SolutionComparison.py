@@ -210,7 +210,7 @@ class ResultsComparator:
         T = min(XM.shape[0], XD.shape[0])
         XM, XD = XM[:T], XD[:T]
         t = (np.arange(T) if len(t) != T else t[:T]) * ts
-        nx = XM.shape[1] if XM.ndim == 2 else 1
+        nx = min(XM.shape[1], XD.shape[1]) if XM.ndim == 2 else 1
         if XM.ndim == 1:
             XM = XM.reshape(-1, 1)
             XD = XD.reshape(-1, 1)

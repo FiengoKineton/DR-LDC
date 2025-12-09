@@ -1911,18 +1911,18 @@ class Young_Schur_dro_lmi:
         cons += [self._posdef(blkPs)] + [self._posdef(Ps)]
 
 
-        P_bar = P - (self.sigma_s + self.sigma_p) * self.beta_E
-        cons += [self._posdef(P_bar)] 
+        P_bar = P #- (self.sigma_s + self.sigma_p) * self.beta_E
+        #cons += [self._posdef(P_bar)] 
         
 
         # NOTE: I switched Ps and P_bar position, I did the calculus for P_bar in (1,1) and Ps in (2,2)-(4,4) but MOSEK doen't break if those are switched
 
         if self.model == "correlated": 
             blk = cp.bmat([
-                [-P_bar,                   self._Z(2*nx, nw),  self._Z(2*nx, nw),      A.T,                C.T                 ],
+                [-P_bar,                self._Z(2*nx, nw),  self._Z(2*nx, nw),      A.T,                C.T                 ],
                 [ self._Z(nw, 2*nx),   -lam*self._I(nw),    lam*self._I(nw),        B.T,                D.T                 ],
                 [ self._Z(nw, 2*nx),    lam*self._I(nw),   -Q - lam*self._I(nw),    self._Z(nw, 2*nx),  self._Z(nw, nz)     ],
-                [  A,                   B,                  self._Z(2*nx, nw),     -Ps,              self._Z(2*nx, nz)   ],
+                [  A,                   B,                  self._Z(2*nx, nw),     -Ps,                 self._Z(2*nx, nz)   ],
                 [  C,                   D,                  self._Z(nz, nw),        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
@@ -1930,8 +1930,8 @@ class Young_Schur_dro_lmi:
 
         elif self.model == "independent":
             blk1 = cp.bmat([
-                [-Ps,       A.T,                C.T                 ],
-                [ A,       -P_bar,              self._Z(2*nx, nz)   ],
+                [-P_bar,    A.T,                C.T                 ],
+                [ A,       -Ps,                 self._Z(2*nx, nz)   ],
                 [ C,        self._Z(nz, 2*nx), -self._I(nz)         ],
             ])
 
@@ -3022,7 +3022,7 @@ class lmi_pipeline_optim_problem():
                             dro = Young_Schur_dro_lmi(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, N_sims=N_sims,
                                     api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta, real_Z_mats=real_Z_mats)
                             
-                            res, P, Sigma_nom, other, num_violations = dro.run()
+                            res, plant, Sigma_nom, other, num_violations = dro.run()
 
                             problem_params = {
                                 "Methodology": "YoungSchur",
@@ -3033,7 +3033,7 @@ class lmi_pipeline_optim_problem():
                                 "non_convex": False,
                             }
                             
-                        A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
+                        A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = plant
                         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
                         ADD = True
                     
