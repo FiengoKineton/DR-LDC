@@ -1287,6 +1287,7 @@ class Young_Schur_dro_lmi:
                  Bw_mode: str = "known_cov", real_Z_mats: bool = False, 
                  aug_mode: str = "std", eval_from_ol: bool = True, estm_noise: bool = False,
                  reg_fro: bool = False, reg_beta: bool = True, new: bool = True,
+                 estm_with_bounds: bool = False,
                  ):
 
         Bw_mode = "proj" if estm_noise else Bw_mode
@@ -1300,6 +1301,7 @@ class Young_Schur_dro_lmi:
 
         self.reg_fro, self.reg_beta, self.reg_vect = reg_fro, reg_beta, vals[2]
         self.new = new
+        self.estm_with_bounds = estm_with_bounds
 
 
 
@@ -1373,6 +1375,42 @@ class Young_Schur_dro_lmi:
         elif which == "t":
             return self.vars["tK"], self.vars["tL"], self.vars["tY"], self.vars["tX"], self.vars["tM"], self.vars["tN"]#, self.vars["tP"]
 
+    def get_dataset(self, N_sims: int):
+        op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=N_sims)
+        return op.datasets
+
+    def controllability_matrix(self, A, B, T):
+        """
+        Build the finite-horizon controllability matrix:
+        [A^{T-1}B, A^{T-2}B, ..., B]
+
+        Parameters
+        ----------
+        A : (nx, nx)
+        B : (nx, nu)
+        T : int
+
+        Returns
+        -------
+        C_T : (nx, T*nu)
+        """
+        C_blocks = []
+
+        A_power = np.eye(A.shape[0])
+        powers = [A_power]
+
+        # Precompute powers of A up to A^{T-1}
+        for _ in range(1, T):
+            A_power = A_power @ A
+            powers.append(A_power)
+
+        # Build blocks: A^{T-1}B ... B
+        for k in reversed(range(T)):
+            C_blocks.append(powers[k] @ B)
+
+        C_T = np.hstack(C_blocks)
+        return C_T
+
 
     # ============================================================================ #
 
@@ -1445,8 +1483,8 @@ class Young_Schur_dro_lmi:
             X_, X, U_, Y_, Z_ = data.get_data()
 
         else:
-            op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=self.N_sims)
-            datasets = op.datasets
+            datasets = self.get_dataset(N_sims=self.N_sims)
+            if self.estm_with_bounds: self.full_dataset = datasets
 
             avg = self.select_representative_run(datasets) if self.N_sims!=1 else datasets
             X_, U_, Y_, Z_, X = avg["X"], avg["U"], avg["Y"], avg["Z"], avg["X_next"]
@@ -1484,20 +1522,87 @@ class Young_Schur_dro_lmi:
     # ============================================================================ #
 
     def estm_mats(self): 
+        nx, nu, T = self.dims["nx"], self.dims["nu"], self.dims["T"]
         X_, U_, X, Y_, Z_ = self.get_data()
-        nx, nu = self.dims["nx"], self.dims["nu"]
-
         Dx = np.vstack([X_, U_])
-        Ox = X @ self._pseudo_inv(Dx)
-        Ax, Bu = Ox[:, :nx], Ox[:, nx:nx+nu]
 
-        R = X - (Ax @ X_ + Bu @ U_)
-        self.c = R @ self._pseudo_inv(Dx)
-        self.c_a = np.sqrt(nx/(nx+nu)) * self.c
-        self.c_b = np.sqrt(nu/(nx+nu)) * self.c
+        if not self.estm_with_bounds:
+            Ox = X @ self._pseudo_inv(Dx)
+            Ax, Bu = Ox[:, :nx], Ox[:, nx:nx+nu]
 
-        Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
-        W_ = self._pseudo_inv(Bw) @ R
+            R = X - (Ax @ X_ + Bu @ U_)
+            self.c = R @ self._pseudo_inv(Dx)
+            self.c_a = np.sqrt(nx/(nx+nu)) * self.c
+            self.c_b = np.sqrt(nu/(nx+nu)) * self.c
+
+            Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
+            W_ = self._pseudo_inv(Bw) @ R
+
+
+        else: 
+            delta = 0.05
+            N_sims_new = int(np.floor(8 * (nx + nu) + 16 * np.log(4/delta)))
+            full_datasets = self.get_dataset(N_sims=N_sims_new)
+
+            S1 = np.zeros((nx, nx+nu), dtype=float)
+            S2 = np.zeros((nx+nu, nx+nu), dtype=float)
+            for data in full_datasets:
+                X_reg = np.asarray(data["X_reg"], dtype=float)
+                U_reg = np.asarray(data["U_reg"], dtype=float)
+                X_next = np.asarray(data["X_next"], dtype=float)
+
+                Phi = np.vstack([X_reg, U_reg])
+                S1 += X_next @ Phi.T
+                S2 += Phi @ Phi.T
+            
+            S2 += self.eps * np.eye(nx + nu)
+            Theta = S1 @ np.linalg.inv(S2)
+            Ax, Bu = Theta[:, :nx], Theta[:, nx:]
+
+            sum_r, sum_u = np.zeros((nx,T), dtype=float), 0.0
+            count_r, count_u = 0, 0
+
+            for data in full_datasets:
+                X_reg = np.asarray(data["X_reg"], dtype=float)
+                U_reg = np.asarray(data["U_reg"], dtype=float)
+                X_next = np.asarray(data["X_next"], dtype=float)
+
+                R_i = X_next - (Ax @ X_reg + Bu @ U_reg)
+                sum_r += R_i
+                count_r += 1
+
+                U_c = U_reg - np.mean(U_reg, axis=1, keepdims=True)
+                sum_u += np.sum(U_c**2)
+                count_u += U_c.shape[1]
+
+            R = sum_r / max(count_r, 1) 
+            Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
+            W_ = self._pseudo_inv(Bw) @ R
+
+            W_c = W_ - np.mean(W_, axis=1, keepdims=True)
+            sigma_U = np.sqrt(sum_u / max(count_u, 1) + self.eps)
+            sigma_W = np.sqrt(np.sum(W_c**2) / max(W_c.shape[1], 1) + self.eps)
+
+            G_T = self.controllability_matrix(Ax, Bu, T)
+            F_T = self.controllability_matrix(Ax, np.eye(nx), T)
+
+            M = sigma_U * (G_T @ G_T.T) + sigma_W * (F_T @ F_T.T)
+            eigvals = np.linalg.eigvalsh(M)
+            lambda_min = max(eigvals[0], self.eps)
+
+            const = 16 * sigma_W *  np.sqrt((nx+2*nu)/N_sims_new * np.log(36/delta))
+
+            self.c_a = const / np.sqrt(lambda_min)
+            self.c_b = const / sigma_U
+            self.N_sims_new = N_sims_new
+
+            print(f"Estimated Bw with nw={nw} using {N_sims_new} simulations (delta={delta})")
+            print(f"sigma_U = {sigma_U}, sigma_W = {sigma_W}, lambda_min = {lambda_min}")
+            print(f"beta_a = {self.c_a}, beta_b = {self.c_b}")
+            print(f"Ax: {Ax}, Bu: {Bu}")
+            input("...")
+
+            Cz, Dzw, Dzu, Cy, Dyw = self.api.build_out_matrices(nw=nw)
 
         if self.estm_noise:
             d = Disturbances(n=nw)
@@ -1834,19 +1939,23 @@ class Young_Schur_dro_lmi:
         nx, nu, nw, _, nz = self.get_dims()    
 
         # ------ Build C_e ------------------------------ #
-        kappa_A = np.linalg.norm(self.c_a, 2)
-        kappa_B = np.linalg.norm(self.c_b, 2)
-        c_y     = np.linalg.norm(self.mats["Cy"], 2)
+        try:
+            kappa_A = np.linalg.norm(self.c_a, 2)
+            kappa_B = np.linalg.norm(self.c_b, 2)
+        except:
+            kappa_A = self.c_a
+            kappa_B = self.c_b
+        c_y = np.linalg.norm(self.mats["Cy"], 2)
 
-        tY_hi, tM_hi, tN_hi, tX_hi = 0.9, 0.13, 0.36, 2.8e5
+        tY_hi, tM_hi, tN_hi, tX_hi = 0.9, 0.13, 0.36, 2.8#e5
 
         e11 = kappa_A * tY_hi + kappa_B * tM_hi 
         e12 = kappa_A + kappa_B * tN_hi  * c_y
         e22 = tX_hi  * kappa_A
 
         gamma_E = e11**2 + e12**2 + e22**2
-        beta_E_np = gamma_E * self._I(2*self.c.shape[0])
-        #self.c_e = cp.Constant(beta_E_np)
+        beta_E_np = gamma_E * self._I(P.shape[0])
+        self.c_e = cp.Constant(beta_E_np)
         # ----------------------------------------------- #
 
 
@@ -1911,8 +2020,8 @@ class Young_Schur_dro_lmi:
         cons += [self._posdef(blkPs)] + [self._posdef(Ps)]
 
 
-        P_bar = P #- (self.sigma_s + self.sigma_p) * self.beta_E
-        #cons += [self._posdef(P_bar)] 
+        P_bar = P - (self.sigma_s + self.sigma_p) * self.beta_E
+        cons += [self._posdef(P_bar)] 
         
 
         # NOTE: I switched Ps and P_bar position, I did the calculus for P_bar in (1,1) and Ps in (2,2)-(4,4) but MOSEK doen't break if those are switched
@@ -2107,7 +2216,7 @@ class Young_Schur_dro_lmi:
             
             D = (DeltaA, DeltaB)
             E = (EAA, EAB)
-            B = (self.beta, self.beta_a, self.beta_b, self.beta_A.value, self.beta_B.value)
+            B = (self.beta, self.beta_a, self.beta_b, self.beta_A.value, self.beta_B.value, self.c_a, self.c_b, self.c_e.value if self.c_e is not None else None)
             S = (self.s_A.value, self.s_B.value)
             T = None if self.new else (self.tau_A.value, self.tau_B.value)
             R = (self.obj.value, self.reg.value, self.reg_t.value, self.reg_a.value, self.reg_b.value)
@@ -3019,10 +3128,17 @@ class lmi_pipeline_optim_problem():
                                 }        
                         else:
                             real_Z_mats = False
-                            dro = Young_Schur_dro_lmi(vals=(upd, FROM_DATA, vect, augmented, inp), model=model, N_sims=N_sims,
-                                    api=api, noise=noise, reg_fro=reg_fro, reg_beta=reg_beta, real_Z_mats=real_Z_mats)
+                            estm_with_bounds = bool(params.get("estm_with_bounds", 0))
+                            dro = Young_Schur_dro_lmi(
+                                                    vals=(upd, FROM_DATA, vect, augmented, inp), 
+                                                    model=model, N_sims=N_sims,
+                                                    api=api, noise=noise, 
+                                                    reg_fro=reg_fro, reg_beta=reg_beta, real_Z_mats=real_Z_mats,
+                                                    estm_with_bounds=estm_with_bounds,
+                                                    )
                             
                             res, plant, Sigma_nom, other, num_violations = dro.run()
+                            if estm_with_bounds: N_sims = dro.N_sims_new
 
                             problem_params = {
                                 "Methodology": "YoungSchur",

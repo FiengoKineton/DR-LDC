@@ -900,6 +900,7 @@ class Open_Loop():
             "Y": Y_aligned,             # shape (ny, T)
             "Z": Z_aligned,             # shape (nz, T)
             "X_reg": X_reg,             # shape (nx, T-1)
+            "U_reg": U[:, :-1],         # shape (nu, T-1)
             "X_next": X_next,           # shape (nx, T-1)
             "W": W,                     # shape (nw, T)
             "R": R,                     # residual proxy, shape (nx, T-1)

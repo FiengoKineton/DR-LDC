@@ -10,8 +10,9 @@ params:
   estm_only: 0            # if 1 uses Estm_dro_lmi                              # VAR ------------------------------ true or false
   non_convex: 0           # if 1 uses YoungSchurNonconvexLikeDROLMI             # VAR ------------------------------ true or false
   Nsims_mats: 0           # if 1 uses NsimsMatricesAnalyzer                     # VAR ------------------------------ true or false
+  estm_with_bounds: 1
 
-  model: "correlated"                                                          # ("correlated" or "independent")
+  model: "independent"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
   test_Nsims: 0                                                                 # if COST is 1 and (if 0 runs MutipleRunsEvaluation else NsimSweep_FROM_DATA)
 
@@ -31,7 +32,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "TEMP"
+    runID: "w_bounds"
 
   ambiguity:
     model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
