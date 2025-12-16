@@ -1541,7 +1541,7 @@ class Young_Schur_dro_lmi:
 
         else: 
             delta = 0.05
-            N_sims_new = int(np.floor(8 * (nx + nu) + 16 * np.log(4/delta)))
+            N_sims_new = int(np.floor(8 * (nx + nu) + 16 * np.log(4/delta))) + 1
             full_datasets = self.get_dataset(N_sims=N_sims_new)
 
             S1 = np.zeros((nx, nx+nu), dtype=float)
@@ -1579,9 +1579,9 @@ class Young_Schur_dro_lmi:
             Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
             W_ = self._pseudo_inv(Bw) @ R
 
-            W_c = W_ - np.mean(W_, axis=1, keepdims=True)
+            R_c = R - np.mean(R, axis=1, keepdims=True)
             sigma_U = np.sqrt(sum_u / max(count_u, 1) + self.eps)
-            sigma_W = np.sqrt(np.sum(W_c**2) / max(W_c.shape[1], 1) + self.eps)
+            sigma_W = np.sqrt(np.sum(R_c**2) / max(R_c.shape[1], 1) + self.eps)
 
             G_T = self.controllability_matrix(Ax, Bu, T)
             F_T = self.controllability_matrix(Ax, np.eye(nx), T)
@@ -1599,7 +1599,7 @@ class Young_Schur_dro_lmi:
             print(f"Estimated Bw with nw={nw} using {N_sims_new} simulations (delta={delta})")
             print(f"sigma_U = {sigma_U}, sigma_W = {sigma_W}, lambda_min = {lambda_min}")
             print(f"beta_a = {self.c_a}, beta_b = {self.c_b}")
-            print(f"Ax: {Ax}, Bu: {Bu}")
+            print(f"Ax: {Ax}, Bu: {Bu}, Bw: {Bw}")
             input("...")
 
             Cz, Dzw, Dzu, Cy, Dyw = self.api.build_out_matrices(nw=nw)
