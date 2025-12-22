@@ -7,6 +7,8 @@ Formulas for Data-driven Control: stabilization, optimality and robustness
 https://pure.tue.nl/ws/portalfiles/portal/345125383/1777033-Graduation_Project_Final_Report.pdf
 
 
+### Static Output Feedback (unfeasible bc meno grado di liberta a ciclo chiuso)
+
 --------------------------------------------------------------------------------------------------------------------------------
 
 
