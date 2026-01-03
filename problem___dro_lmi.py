@@ -1287,7 +1287,7 @@ class Young_Schur_dro_lmi:
                  Bw_mode: str = "known_cov", real_Z_mats: bool = False, 
                  aug_mode: str = "std", eval_from_ol: bool = True, estm_noise: bool = False,
                  reg_fro: bool = False, reg_beta: bool = True, new: bool = True,
-                 estm_with_bounds: bool = False,
+                 estm_with_bounds: bool = True,
                  ):
 
         Bw_mode = "proj" if estm_noise else Bw_mode
@@ -1582,6 +1582,8 @@ class Young_Schur_dro_lmi:
             R_c = R - np.mean(R, axis=1, keepdims=True)
             sigma_U = np.sqrt(sum_u / max(count_u, 1) + self.eps)
             sigma_W = np.sqrt(np.sum(R_c**2) / max(R_c.shape[1], 1) + self.eps)
+            sigma_u = np.sqrt(sigma_U)
+            sigma_w = np.sqrt(sigma_W)
 
             G_T = self.controllability_matrix(Ax, Bu, T)
             F_T = self.controllability_matrix(Ax, np.eye(nx), T)
@@ -1590,14 +1592,14 @@ class Young_Schur_dro_lmi:
             eigvals = np.linalg.eigvalsh(M)
             lambda_min = max(eigvals[0], self.eps)
 
-            const = 16 * sigma_W *  np.sqrt((nx+2*nu)/N_sims_new * np.log(36/delta))
+            const = 16 * sigma_w *  np.sqrt((nx+2*nu)/N_sims_new * np.log(36/delta))
 
-            self.c_a = const / np.sqrt(lambda_min)
-            self.c_b = const / sigma_U
+            self.c_a = const / sigma_w #np.sqrt(lambda_min)
+            self.c_b = const / sigma_u
             self.N_sims_new = N_sims_new
 
             print(f"Estimated Bw with nw={nw} using {N_sims_new} simulations (delta={delta})")
-            print(f"sigma_U = {sigma_U}, sigma_W = {sigma_W}, lambda_min = {lambda_min}")
+            print(f"sigma_u = {sigma_u}, sigma_w = {sigma_w}, lambda_min = {lambda_min}")
             print(f"beta_a = {self.c_a}, beta_b = {self.c_b}")
             print(f"Ax: {Ax}, Bu: {Bu}, Bw: {Bw}")
             input("...")
