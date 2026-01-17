@@ -519,7 +519,10 @@ class MatricesAPI():
         if ptype == "explicit":
             A = np.array(plant_cfg["A_mat"], dtype=float)
             Bu = np.array(plant_cfg["Bu_mat"], dtype=float)
-            Bw = np.array(plant_cfg["Bw_mat"], dtype=float)
+            if plant_cfg["Bw_mode"] != "ident": 
+                Bw = np.array(plant_cfg["Bw_mat"], dtype=float)
+            else: 
+                Bw = np.array([[1,0],[1,0],[1,0],[1,0]], dtype=float)  # Temporary fix for identity disturbance model
             if A.shape != (nx, nx) or Bu.shape != (nx, nu) or Bw.shape != (nx, nw):
                 raise ValueError("Explicit matrices do not match (nx,nu,nw) in YAML.")
             return A, Bu, Bw

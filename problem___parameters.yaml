@@ -1,19 +1,19 @@
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
-  upd: 1                                                                        # set
   use_set_out_mats: 0                                                           # set | may be var (true or false)
   solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")
 
   approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
   old_upd: 0              # if 0 uses Young_Schur_dro_lmi                       # set
   estm_only: 0            # if 1 uses Estm_dro_lmi                              # VAR ------------------------------ true or false
-  non_convex: 0           # if 1 uses YoungSchurNonconvexLikeDROLMI             # VAR ------------------------------ true or false
+  non_convex: 1           # if 1 uses WFL                                       # VAR ------------------------------ true or false
   Nsims_mats: 0           # if 1 uses NsimsMatricesAnalyzer                     # VAR ------------------------------ true or false
   estm_with_bounds: 1
 
   model: "independent"                                                          # ("correlated" or "independent")
   FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
+  upd: 1                                                                        # set
   test_Nsims: 0                                                                 # if COST is 1 and (if 0 runs MutipleRunsEvaluation else NsimSweep_FROM_DATA)
 
   comp: 0                                                                       # VAR ------------------------------ true or false
@@ -59,6 +59,7 @@ params:
     Bu_mat: [[0.3,0.0],[0.0,0.3],[0.1,-0.2],[0.0,0.1]]                          # set
     Bw_mat: [[1,0],[0,1],[0,0],[0,0]]                                           # set
 
+    Bw_mode: ident                                                              # set | may be var (ident or specified)
     type: PaperLike                                                             # set
     seed: 42                                                                    # set
     A: {eig_min: 0.7, eig_max: 0.95}                                            # set  
