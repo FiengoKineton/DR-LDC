@@ -2408,8 +2408,8 @@ class lmi_pipeline_optim_problem():
 
                 else: 
                     real_Z_mats = True
-                    Bw_mode = params.get("plant", {}).get("Bw_mode", "ident")
-                    dro = WFL(vals=(upd, FROM_DATA, vect, augmented, inp, Bw_mode), 
+                    dro = WFL(vals=(upd, FROM_DATA, vect, augmented, inp), 
+                              Bw_type = params.get("plant", {}).get("Bw_mode", "ident"),
                               model=model, N_sims=N_sims,
                               api=api, noise=noise, reg_fro=reg_fro, 
                               real_Z_mats=real_Z_mats)

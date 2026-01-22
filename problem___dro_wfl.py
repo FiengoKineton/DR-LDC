@@ -37,18 +37,18 @@ class WFL_nonConvex:
                  vals: tuple, model: str,
                  api, noise,
                  rho: float = 1e-2, eps: float = 1e-6, N_sims: int = 1,
-                 Bw_mode: str = "known_cov",
+                 Bw_mode: str = "known_cov", Bw_type: str = "ident",
                  real_Z_mats: bool = True,
                  aug_mode: str = "std",
                  eval_from_ol: bool = True,
                  estm_noise: bool = False,
                  reg_fro: bool = False):
         
-        Bw_mode = "proj" if estm_noise else Bw_mode
+        Bw_mode = "proj" #if estm_noise else Bw_mode
 
         self.api = api
         self.eps, self.rho, self.N_sims = eps, rho, N_sims
-        self.model, self.Bw_mode, self.vals = model, vals[5], vals
+        self.model, self.Bw_mode, self.vals, self.Bw_type = model, Bw_mode, vals, Bw_type
         self.real_perf_mats = real_Z_mats
         self.augmented = vals[3]
         self.aug_mode = aug_mode
@@ -128,11 +128,7 @@ class WFL_nonConvex:
                 self.dims["nz"])
 
     def get_mats(self):
-        return (self.mats["Ax"],
-                self.mats["Bw"],
-                self.mats["Bu"],
-                self.mats["Cy"],
-                self.mats["Dyw"],
+        return (self.mats["Bw"],
                 self.mats["Cz"],
                 self.mats["Dzw"],
                 self.mats["Dzu"])
@@ -255,7 +251,11 @@ class WFL_nonConvex:
 
         R = X - (Ax @ X_ + Bu @ U_)
 
-        Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
+        if self.Bw_type == "ident":
+            *_, Bw = self.api.build_AB_from_yaml()
+            nw = Bw.shape[1]
+        else: 
+            Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
         W_ = self._pseudo_inv(Bw) @ R
 
         if self.estm_noise:
@@ -356,7 +356,8 @@ class WFL_nonConvex:
     # ------------------------------------------------------------------
     def build_var(self):
         nx, nu, nw, ny, nz = self.get_dims()
-        Ax, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = self.get_mats()
+        Bw, Cz, _, Dzu = self.get_mats()
+        Bw, Cz, Dzu = ca.DM(Bw), ca.DM(Cz), ca.DM(Dzu)
 
         cas = ca.SX  # <--- use SX, not MX
 
@@ -374,34 +375,48 @@ class WFL_nonConvex:
                     idx += 1
             return M
 
-        vX = symm_var("X", nx)
-        vY = symm_var("Y", nx)
-        vQ = symm_var("Q", nw)
 
+        # Controller
         Ac = cas.sym("Ac", nx, nx)
         Bc = cas.sym("Bc", nx, ny)
         Cc = cas.sym("Cc", nu, nx)
         Dc = cas.sym("Dc", nu, ny)
+
+        Mc = cas.blockcat([
+            [Ac, Bc],
+            [Cc, Dc]
+        ])
+
+
+        # Decision variables
+        vX = symm_var("X", nx)
+        vY = symm_var("Y", nx)
+        vQ = symm_var("Q", nw)
 
         K  = cas.sym("K", nx, nx)
         L  = cas.sym("L", nx, ny)
         M  = cas.sym("M", nu, nx)
         N  = cas.sym("N", nu, ny)
 
-        lam = cas.sym("lam", 1)
-        Mp = cas.sym("Mp", nx+ny, nx+nu)
-        Mc = cas.blockcat([
-            [Ac, Bc],
-            [Cc, Dc]
-        ])
 
         X = full_sym(vX, nx)
         Y = full_sym(vY, nx)
         Q = full_sym(vQ, nw)
+        lam = cas.sym("lam", 1)
 
         Ix  = ca.DM(np.eye(nx))
         Iw  = ca.DM(np.eye(nw))
         Iz  = ca.DM(np.eye(nz))
+
+        P = ca.blockcat([[Y,  Ix],
+                        [Ix,  X ]])
+        P_aug = ca.blockcat([
+            [P,                         ca.DM(self._Z(2*nx, nz))],
+            [ca.DM(self._Z(nz, 2*nx)),  Iz]
+        ])
+
+        # Closed-loop matrices
+        Mp = cas.sym("Mp", nx+ny, nx+nu)
 
         Ax = self.psi_1 @ Mp @ self.psi_2
         Bu = self.psi_1 @ Mp @ self.psi_3
@@ -427,63 +442,19 @@ class WFL_nonConvex:
         M = P_aug @ Mcl
 
 
-        AxDM  = ca.DM(Ax)
-        BuDM  = ca.DM(Bu)
-        BwDM  = ca.DM(Bw)
-        CyDM  = ca.DM(Cy)
-        DywDM = ca.DM(Dyw)
-        CzDM  = ca.DM(Cz)
-        DzuDM = ca.DM(Dzu)
-        DzwDM = ca.DM(Dzw)
-
-        P = ca.blockcat([[Y,  Ix],
-                        [Ix,  X ]])
-        P_aug = ca.blockcat([
-            [P,                         ca.DM(self._Z(2*nx, nz))],
-            [ca.DM(self._Z(nz, 2*nx)),  Iz]
-        ])
-
-        A_nom = ca.blockcat([
-            [AxDM @ Y + BuDM @ M,       AxDM + BuDM @ N @ CyDM],
-            [K,                        X @ AxDM + L @ CyDM]
-        ])
-
-        B = ca.blockcat([
-            [BwDM + BuDM @ N @ DywDM],
-            [X @ BwDM + L @ DywDM]
-        ])
-
-        C = ca.blockcat([
-            [CzDM @ Y + DzuDM @ M, CzDM + DzuDM @ N @ CyDM]
-        ])
-
-        D = DzwDM + DzuDM @ N @ DywDM
-
-        Zxx = ca.DM(np.zeros((nx, nx)))
-
-        E_A = ca.blockcat([
-            [DeltaA @ Y, DeltaA     ],
-            [Zxx,        X @ DeltaA ]
-        ])
-        E_B = ca.blockcat([
-            [DeltaB @ M, DeltaB @ N @ CyDM],
-            [Zxx,        Zxx             ]
-        ])
-
-        E      = E_A + E_B
-        A_true = A_nom + E
-
         self.cas_vars = {
+            # decision variables
             "vX": vX, "vY": vY, "vQ": vQ,
-            "X": X, "Y": Y, "Q": Q,
+            "X": X, "Y": Y, 
             "K": K, "L": L, "M": M, "N": N,
-            "DeltaA": DeltaA, "DeltaB": DeltaB,
-            "lam": lam,
-            "P": P,
-            "A_nom": A_nom,
-            "B": B, "C": C, "D": D,
-            "E": E, "A_true": A_true,
-            "Iw": Iw, "Iz": Iz,
+            "lam": lam, "Q": Q,
+            "P": P, "P_aug": P_aug,
+            # closed-loop mats
+            "Ax": Ax, "Bu": Bu, "Cy": Cy,
+            "A": A, "B": B, "C": C, "D": D,
+            "Mcl": Mcl, "M": M, "Mp": Mp, "Mc": Mc,
+            # controller
+            "Ac": Ac, "Bc": Bc, "Cc": Cc, "Dc": Dc,
         }
 
     def build_selectors(self):
@@ -493,14 +464,14 @@ class WFL_nonConvex:
         Oxy, Oux, O2xw, Oz2x = self._Z(nx, ny), self._Z(nu, nx), self._Z(2*nx, nw), self._I(nz, 2*nx)
         Oxu = Oux.T; Oyx = Oxy.T; Ow2x = O2xw.T; O2xz = Oz2x.T
         
-        self.Psi_w = np.block([[O2xw], [Iw]])
-        self.Psi_2x = np.block([[I2x], [Ow2x]])
-        self.Psi_z = np.block([[I2x], [Oz2x]])
+        self.Psi_w = ca.DM(np.block([[O2xw], [Iw]]))
+        self.Psi_2x = ca.DM(np.block([[I2x], [Ow2x]]))
+        self.Psi_z = ca.DM(np.block([[I2x], [Oz2x]]))
 
-        self.psi_1 = np.block([[Ix, Oxy]])
-        self.psi_2 = np.block([[Ix], [Oux]])
-        self.psi_3 = np.block([[Oxu], [Iu]])
-        self.psi_4 = np.block([[Oyx, Iy]])
+        self.psi_1 = ca.DM(np.block([[Ix, Oxy]]))
+        self.psi_2 = ca.DM(np.block([[Ix], [Oux]]))
+        self.psi_3 = ca.DM(np.block([[Oxu], [Iu]]))
+        self.psi_4 = ca.DM(np.block([[Oyx, Iy]]))
 
 
 
@@ -509,40 +480,27 @@ class WFL_nonConvex:
     # ------------------------------------------------------------------
     def build_con(self):
         nx, _, nw, _, nz = self.get_dims()
-        Nchi = 2 * nx
 
         cv = self.cas_vars
-        P      = cv["P"]
+        P_aug  = cv["P_aug"]
         Q      = cv["Q"]
         lam    = cv["lam"]
-        A_true = cv["A_true"]
-        B      = cv["B"]
-        C      = cv["C"]
-        D      = cv["D"]
-        Iw     = cv["Iw"]
-        Iz     = cv["Iz"]
-        DeltaA = cv["DeltaA"]
-        DeltaB = cv["DeltaB"]
+        Mcl    = cv["Mcl"]
 
         eps = self.eps
-
-        Z_chi_w = ca.DM(np.zeros((Nchi, nw)))
-        Z_w_chi = ca.DM(np.zeros((nw, Nchi)))
-        Z_chi_z = ca.DM(np.zeros((Nchi, nz)))
-        Z_z_chi = ca.DM(np.zeros((nz, Nchi)))
-        Z_w_z   = ca.DM(np.zeros((nw, nz)))
-        Z_z_w   = ca.DM(np.zeros((nz, nw)))
+        I_w = ca.DM(self._I(nw))
+        I_xw = ca.DM(self._I(2*nx + nw))
+        Z_zw = ca.DM(self._Z(nz, nw))
+        Z_wxz = ca.DM(self._Z(nw, 2*nx+nz))
 
         g_list = []
 
         # ---------- kernel(s) ----------
         if self.model == "correlated":
             Xi = ca.blockcat([
-                [-P,          Z_chi_w,         Z_chi_w,         A_true.T,   C.T],
-                [Z_w_chi,    -lam * Iw,        lam * Iw,        B.T,        D.T],
-                [Z_w_chi,     lam * Iw,       -Q - lam * Iw,    Z_w_chi,    Z_w_z],
-                [A_true,      B,               Z_chi_w,        -P,          Z_chi_z],
-                [C,           D,               Z_z_w,           Z_z_chi,   -Iz]
+                [-P_aug @ (I_xw + (lam-1)*self.Psi_w@self.Psi_w.T), lam*self.Psi_w, (P_aug @ Mcl).T ],
+                [lam*self.Psi_w.T,                                  -Q -lam*I_w,    Z_wxz           ],
+                [P_aug @ Mcl,                                       Z_zw,           -P_aug          ]
             ])
             eig_Xi = ca.eig_symbolic(Xi)          # Xi is SX → OK
             min_eig_Xi = ca.mmin(eig_Xi)
@@ -552,9 +510,8 @@ class WFL_nonConvex:
         elif self.model == "independent":
             # Xi1
             Xi1 = ca.blockcat([
-                [-P,        A_true.T,     C.T      ],
-                [A_true,   -P,            Z_chi_z  ],
-                [C,         Z_z_chi,     -Iz      ]
+                [-self.Psi_z.T @ P_aug @ self.Psi_z,    (P_aug @ Mcl @ self.Psi_2x).T   ],
+                [P_aug @ Mcl @ self.Psi_2x,             -P_aug                          ]
             ])
             eig_Xi1 = ca.eig_symbolic(Xi1)
             min_eig_Xi1 = ca.mmin(eig_Xi1)
@@ -563,10 +520,9 @@ class WFL_nonConvex:
 
             # Xi2
             Xi2 = ca.blockcat([
-                [-lam * Iw,          lam * Iw,          B.T,        D.T],
-                [ lam * Iw,    -Q - lam * Iw,          Z_w_chi,    Z_w_z],
-                [ B,                 Z_chi_w,         -P,          Z_chi_z],
-                [ D,                 Z_z_w,           Z_z_chi,    -Iz]
+                [-lam * I_w,                lam * I_w,          (P_aug @ Mcl @ self.Psi_w).T    ],
+                [ lam * I_w,                -Q - lam * I_w,     Z_wxz                           ],
+                [ P_aug @ Mcl @ self.Psi_w, Z_wxz.T,            -P_aug                          ]
             ])
             eig_Xi2 = ca.eig_symbolic(Xi2)
             min_eig_Xi2 = ca.mmin(eig_Xi2)
@@ -576,13 +532,9 @@ class WFL_nonConvex:
         else:
             raise ValueError("model must be 'correlated' or 'independent'")
 
-        # Frobenius bounds on DeltaA, DeltaB
-        g_DA = ca.sumsqr(DeltaA) - self.beta_A**2
-        g_DB = ca.sumsqr(DeltaB) - self.beta_B**2
-        g_list.extend([g_DA, g_DB])
 
         # PSD-ish on P, Q: lambda_min >= eps
-        eig_P = ca.eig_symbolic(P)
+        eig_P = ca.eig_symbolic(P_aug)
         eig_Q = ca.eig_symbolic(Q)
         min_eig_P = ca.mmin(eig_P)
         min_eig_Q = ca.mmin(eig_Q)
