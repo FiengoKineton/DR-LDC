@@ -36,7 +36,8 @@ class WFL_nonConvex:
     def __init__(self,
                  vals: tuple, model: str,
                  api, noise,
-                 rho: float = 1e-2, eps: float = 1e-6, N_sims: int = 1,
+                 rho: float = 1e-2, eps: float = 1e-6, 
+                 N_sims: int = 1, L: int = 10,
                  Bw_mode: str = "known_cov", Bw_type: str = "ident",
                  real_Z_mats: bool = True,
                  aug_mode: str = "std",
@@ -47,7 +48,8 @@ class WFL_nonConvex:
         Bw_mode = "proj" #if estm_noise else Bw_mode
 
         self.api = api
-        self.eps, self.rho, self.N_sims = eps, rho, N_sims
+        self.eps, self.rho = eps, rho
+        self.N_sims, self.L = N_sims, L
         self.model, self.Bw_mode, self.vals, self.Bw_type = model, Bw_mode, vals, Bw_type
         self.real_perf_mats = real_Z_mats
         self.augmented = vals[3]
@@ -98,6 +100,7 @@ class WFL_nonConvex:
     def run(self):
         self.simulate_()
         self.estm_mats()
+        self.build_Phi()
         self.build_var()
         self.build_con()
         self.build_obj()
@@ -373,19 +376,7 @@ class WFL_nonConvex:
                     M[i, j] = v[idx]
                     M[j, i] = v[idx]
                     idx += 1
-            return M
-
-
-        # Controller
-        Ac = cas.sym("Ac", nx, nx)
-        Bc = cas.sym("Bc", nx, ny)
-        Cc = cas.sym("Cc", nu, nx)
-        Dc = cas.sym("Dc", nu, ny)
-
-        Mc = cas.blockcat([
-            [Ac, Bc],
-            [Cc, Dc]
-        ])
+            return M        
 
 
         # Decision variables
@@ -415,13 +406,30 @@ class WFL_nonConvex:
             [ca.DM(self._Z(nz, 2*nx)),  Iz]
         ])
 
-        # Closed-loop matrices
+        # Plant
         Mp = cas.sym("Mp", nx+ny, nx+nu)
 
         Ax = self.psi_1 @ Mp @ self.psi_2
         Bu = self.psi_1 @ Mp @ self.psi_3
         Cy = self.psi_4 @ Mp @ self.psi_2
 
+        # Controller
+        Ac, Bc, Cc, Dc, Mc, *_ = self.build_Mc_from_XYKLmn(Ax, Bu, Cy, X, Y, K, L, M, N)
+
+        # Controller - relaxed
+        """
+        Ac = cas.sym("Ac", nx, nx)
+        Bc = cas.sym("Bc", nx, ny)
+        Cc = cas.sym("Cc", nu, nx)
+        Dc = cas.sym("Dc", nu, ny)
+
+        Mc = cas.blockcat([
+            [Ac, Bc],
+            [Cc, Dc]
+        ])
+        #"""
+
+        # Closed-loop matrices
         A = ca.blockcat([
             [Ax + Bu @ Dc @ Cy,     Bu @ Cc],
             [Bc @ Cy,               Ac]
@@ -452,12 +460,12 @@ class WFL_nonConvex:
             # closed-loop mats
             "Ax": Ax, "Bu": Bu, "Cy": Cy,
             "A": A, "B": B, "C": C, "D": D,
-            "Mcl": Mcl, "M": M, "Mp": Mp, "Mc": Mc,
+            "M": M, "Mcl": Mcl, "Mp": Mp, "Mc": Mc,
             # controller
             "Ac": Ac, "Bc": Bc, "Cc": Cc, "Dc": Dc,
         }
 
-    def build_selectors(self):
+    def build_Phi(self):
         nx, nu, nw, ny, nz = self.get_dims()
 
         Ix, Iu, Iy, Iw, Iz, I2x = self._I(nx), self._I(nu), self._I(ny), self._I(nw), self._I(nz), self._I(2*nx)
@@ -473,6 +481,274 @@ class WFL_nonConvex:
         self.psi_3 = ca.DM(np.block([[Oxu], [Iu]]))
         self.psi_4 = ca.DM(np.block([[Oyx, Iy]]))
 
+    def build_Mc_from_XYKLmn(self, Ax, Bu, Cy, X, Y, K, Lvar, Mvar, Nvar):
+        """
+        Ax: (nx,nx), Bu: (nx,nu), Cy: (ny,nx)  (all casadi SX)
+        X,Y: (nx,nx) symmetric decision variables (SX expressions)
+        K: (nx,nx), Lvar: (nx,ny), Mvar: (nu,nx), Nvar: (nu,ny) decision variables (SX)
+        Returns: Ac,Bc,Cc,Dc,Mc as SX expressions
+        """
+
+        def symmetrize(S, eps=1e-9):
+            n = S.size1()
+            return 0.5*(S + S.T) + eps*ca.SX.eye(n)
+
+        def chol_lower_from_casadi(S):
+            """
+            CasADi's chol() convention can differ by backend.
+            Many builds return an upper-triangular R s.t. S = R.T @ R.
+            We convert to a lower L s.t. S = L @ L.T by setting L = R.T.
+            If your chol already returns lower, then L = chol(S) is fine.
+            """
+            R = ca.chol(S)     # typically upper
+            L = R.T            # lower candidate
+            return L
+        
+        nx = X.size1()
+        # S = I - X Y must be PD
+        S = ca.SX.eye(nx) - X @ Y
+        S = symmetrize(S, eps=self.eps)
+
+        # Cholesky factorization S = L L^T
+        L = chol_lower_from_casadi(S)  # (nx,nx) lower triangular (intended)
+
+        # Inverses via linear solves (more stable than explicit inv)
+        I = ca.SX.eye(nx)
+        Linv = ca.solve(L, I)          # L^{-1}
+        LinvT = Linv.T                 # L^{-\top}
+
+        # Core affine pieces
+        T1 = Mvar - Nvar @ Cy @ Y      # (nu,nx)
+        T2 = Lvar - X @ Bu @ Nvar      # (nx,ny)
+
+        Dc = Nvar
+        Cc = T1 @ LinvT                # (nu,nx)
+        Bc = Linv @ T2                 # (nx,ny)
+
+        # Ac = L^{-1} [K - XAxY - LC_yY - XBu(M - NC_yY)] L^{-\top}
+        mid = (K
+            - X @ Ax @ Y
+            - Lvar @ Cy @ Y
+            - X @ Bu @ T1)          # (nx,nx)
+        Ac = Linv @ mid @ LinvT
+
+        Mc = ca.blockcat([[Ac, Bc],
+                        [Cc, Dc]])
+        return Ac, Bc, Cc, Dc, Mc, S, L
+
+
+
+    # ============================================================
+    # WFL: build one-step "Hankel" stacks from self.data
+    # ============================================================
+
+    @staticmethod
+    def _block_hankel(D: np.ndarray, L: int) -> np.ndarray:
+        """
+        Build block Hankel H_L(D) from data D of shape (d, T).
+        Returns shape (d*L, T-L+1).
+        """
+        if D.ndim != 2:
+            raise ValueError("D must be 2D with shape (d, T).")
+        d, T = D.shape
+        if L < 1:
+            raise ValueError("L must be >= 1.")
+        if T < L:
+            raise ValueError(f"Need T >= L. Got T={T}, L={L}.")
+        N = T - L + 1
+        H = np.zeros((d * L, N))
+        for i in range(L):
+            H[i*d:(i+1)*d, :] = D[:, i:i+N]
+        return H
+
+    def build_wfl_hankels(self, L: int = 1, use_z: bool = False):
+        """
+        Builds true block-Hankel matrices of depth L from self.data.
+
+        Uses:
+          self.data["X_"]: (nx, T)  = x_0..x_{T-1}
+          self.data["U_"]: (nu, T)  = u_0..u_{T-1}
+          self.data["Y_"]: (ny, T)  = y_0..y_{T-1}
+          self.data["X"] : (nx, T)  = x_1..x_T  (aligned with X_)
+          (optional) self.data["Z_"]: (nz, T)
+
+        For L=1, this reduces to simple stacking.
+        For L>1, it builds:
+          Hx  = H_L(X_)             shape (nx*L, N)
+          Hu  = H_L(U_)             shape (nu*L, N)
+          Hy  = H_L(Y_)             shape (ny*L, N)
+          Hx+ = H_L(X)              shape (nx*L, N)
+        where N = T - L + 1.
+
+        Stores to self.wfl:
+          self.wfl["L"], ["Hx"], ["Hu"], ["Hy"], ["Hx_plus"], and stacked Xp, Xf.
+
+        Returns:
+          Xp = [Hx; Hu]             shape ((nx+nu)*L, N)
+          Xf = [Hx_plus; Hy]        shape ((nx+ny)*L, N)
+          (optional) Hz = H_L(Z_)   shape (nz*L, N)
+        """
+        X_ = self.data["X_"]
+        U_ = self.data["U_"]
+        Y_ = self.data["Y_"]
+        Xp1 = self.data["X"]     # x^+ aligned (x_1..x_T)
+
+        # Basic checks
+        if not (X_.ndim == U_.ndim == Y_.ndim == Xp1.ndim == 2):
+            raise ValueError("X_,U_,Y_,X must be 2D arrays (dim, T).")
+        nx, T = X_.shape
+        nu, Tu = U_.shape
+        ny, Ty = Y_.shape
+        nx2, Tx = Xp1.shape
+        if not (Tu == Ty == Tx == T):
+            raise ValueError("Time length mismatch between X_,U_,Y_,X.")
+        if nx2 != nx:
+            raise ValueError("X has inconsistent state dimension vs X_.")
+
+        # True block Hankels
+        Hx      = self._block_hankel(X_,  L)
+        Hu      = self._block_hankel(U_,  L)
+        Hy      = self._block_hankel(Y_,  L)
+        Hx_plus = self._block_hankel(Xp1, L)
+
+        Xp = np.vstack([Hx, Hu])
+        Xf = np.vstack([Hx_plus, Hy])
+
+        self.wfl = getattr(self, "wfl", {})
+        self.wfl.update({
+            "L": L,
+            "Hx": Hx,
+            "Hu": Hu,
+            "Hy": Hy,
+            "Hx_plus": Hx_plus,
+            "Xp": Xp,
+            "Xf": Xf,
+            "T": T,
+            "N": Xp.shape[1],
+        })
+
+        if use_z:
+            Z_ = self.data.get("Z_")
+            if Z_ is None:
+                raise ValueError("use_z=True but self.data['Z_'] is missing.")
+            Hz = self._block_hankel(Z_, L)
+            self.wfl["Hz"] = Hz
+            return Xp, Xf, Hz
+
+        return Xp, Xf
+
+    def wfl_rank_info(self, rcond: float = 1e-10):
+        """
+        Simple rank + conditioning report for Xp (useful to sanity-check data richness).
+        Requires build_wfl_hankels() called first, or will build it.
+        """
+        if not hasattr(self, "wfl") or "Xp" not in self.wfl:
+            self.build_wfl_hankels(use_z=False)
+
+        Xp = self.wfl["Xp"]
+        U, s, Vt = np.linalg.svd(Xp, full_matrices=False)
+        rank = int(np.sum(s > rcond * s[0])) if s.size else 0
+        smin = float(s[-1]) if s.size else 0.0
+        smax = float(s[0]) if s.size else 0.0
+        return {"rank": rank, "smax": smax, "smin": smin, "cond_est": (smax / max(smin, 1e-30))}
+
+    def define_M_wfl_cvxpy(self,
+                           L: int = 1,
+                           w_set: str = "l2_ball",
+                           eps_w: float = 1e-2,
+                           Q: np.ndarray = None,
+                           per_column: bool = True):
+        """
+        Builds WFL set constraints using block Hankels of depth L:
+            Xf = Mp Xp + W, with columns w_i in W-set.
+
+        Returns CVXPY variables Mp, W and constraint list.
+        Stores them under self.wfl["cvxpy"].
+        """
+        # Ensure Hankels exist
+        if not hasattr(self, "wfl") or self.wfl.get("L", None) != L:
+            self.build_wfl_hankels(L=L, use_z=False)
+
+        Xp = self.wfl["Xp"]
+        Xf = self.wfl["Xf"]
+        n_in, N = Xp.shape
+        n_out, N2 = Xf.shape
+        if N2 != N:
+            raise ValueError("Xp and Xf must have same number of columns.")
+
+        Mp = cp.Variable((n_out, n_in))
+        W  = cp.Variable((n_out, N))
+        constraints = [Xf == Mp @ Xp + W]
+
+        if w_set == "l2_ball":
+            if per_column:
+                for i in range(N):
+                    constraints.append(cp.norm(W[:, i], 2) <= eps_w)
+            else:
+                constraints.append(cp.norm(W, "fro") <= eps_w)
+
+        elif w_set == "fro_ball":
+            constraints.append(cp.norm(W, "fro") <= eps_w)
+
+        elif w_set == "ellipsoid":
+            if Q is None:
+                raise ValueError("w_set='ellipsoid' requires Q with shape (n_out, n_out).")
+            Q = np.asarray(Q)
+            if Q.shape != (n_out, n_out):
+                raise ValueError(f"Q must be {(n_out, n_out)}, got {Q.shape}.")
+            Qinv = np.linalg.inv(Q)
+            if not per_column:
+                raise ValueError("Ellipsoid should be imposed per-column. Set per_column=True.")
+            for i in range(N):
+                constraints.append(cp.quad_form(W[:, i], Qinv) <= 1.0)
+        else:
+            raise ValueError(f"Unknown w_set='{w_set}'")
+
+        self.wfl.setdefault("cvxpy", {})
+        self.wfl["cvxpy"].update({
+            "L": L, "Mp": Mp, "W": W, "constraints": constraints,
+            "w_set": w_set, "eps_w": eps_w
+        })
+        return Mp, W, constraints
+
+    def select_one_Mp_in_Mwfl(self,
+                              L: int = 1,
+                              w_set: str = "l2_ball",
+                              eps_w: float = 1e-2,
+                              Q: np.ndarray = None,
+                              objective: str = "min_fro",
+                              Mp_prior: np.ndarray = None,
+                              lam_prior: float = 1e-2,
+                              solver: str = None,
+                              verbose: bool = False):
+        """
+        Solve a convex program to pick one Mp from the WFL set.
+        """
+        Mp, W, cons = self.define_M_wfl_cvxpy(L=L, w_set=w_set, eps_w=eps_w, Q=Q, per_column=True)
+
+        if objective == "min_fro":
+            obj = cp.Minimize(cp.norm(Mp, "fro"))
+        elif objective == "prior":
+            if Mp_prior is None:
+                raise ValueError("objective='prior' requires Mp_prior.")
+            Mp_prior = np.asarray(Mp_prior)
+            if Mp_prior.shape != Mp.shape:
+                raise ValueError(f"Mp_prior shape {Mp_prior.shape} must match Mp shape {Mp.shape}.")
+            obj = cp.Minimize(cp.sum_squares(Mp - Mp_prior) + lam_prior * cp.sum_squares(W))
+        else:
+            raise ValueError(f"Unknown objective='{objective}'")
+
+        prob = cp.Problem(obj, cons)
+        prob.solve(solver=solver, verbose=verbose)
+
+        sol = {
+            "status": prob.status,
+            "objective_value": prob.value,
+            "Mp": None if Mp.value is None else Mp.value,
+            "W": None if W.value is None else W.value,
+        }
+        self.wfl["cvxpy"]["solution"] = sol
+        return sol
 
 
     # ------------------------------------------------------------------
@@ -801,3 +1077,103 @@ class WFL_nonConvex:
 
 # =============================================================================================== #
 
+
+
+if __name__ == "__main__":
+
+    # ------------------------------------------------------------
+    # 1) Instantiate required objects (placeholders explained)
+    # ------------------------------------------------------------
+
+    # vals is whatever your pipeline already uses
+    # e.g. vals = (upd, FROM_DATA, ..., augmented, inp)
+    vals = (
+        True,       # upd (example)
+        True,       # FROM_DATA
+        None,       # whatever else your code expects
+        False,      # augmented
+        False       # inp
+    )
+    model = "independent"  # or "correlated"
+
+
+    # api must be your MatricesAPI / system interface
+    api = MatricesAPI()
+
+    # noise must be an instance with attributes gamma, var, Sigma_nom
+    noise = Noise(
+        n=2,
+        avrg=0,
+        gamma=0.5,
+        var=1.0,
+        Sigma_nom=np.eye(2)   # adapt dimension if needed
+    )
+
+    # ------------------------------------------------------------
+    # 2) Create WFL object
+    # ------------------------------------------------------------
+
+    wfl = WFL_nonConvex(
+        vals=vals,
+        api=api,
+        model=model,
+        noise=noise,
+        N_sims=1,
+        eval_from_ol=True   # important: populate self.data via simulate_()
+    )
+
+    # ------------------------------------------------------------
+    # 3) Run the data generation
+    # ------------------------------------------------------------
+
+    wfl.simulate_()   # <-- THIS is mandatory before Hankels
+
+    # Sanity check
+    print("Available data keys:", wfl.data.keys())
+    # must include: X_, U_, X, Y_
+
+    # ------------------------------------------------------------
+    # 4) Build TRUE block Hankels (depth L)
+    # ------------------------------------------------------------
+
+    L = 10
+    Xp, Xf = wfl.build_wfl_hankels(L=L)
+
+    print("Xp shape:", Xp.shape)
+    print("Xf shape:", Xf.shape)
+
+    # ------------------------------------------------------------
+    # 5) Define the WFL set as constraints
+    # ------------------------------------------------------------
+
+    Mp, W, cons = wfl.define_M_wfl_cvxpy(
+        L=L,
+        w_set="l2_ball",
+        eps_w=1e-2
+    )
+
+    print(f"Defined M_WFL with {len(cons)} constraints")
+
+    # ------------------------------------------------------------
+    # 6) Select one representative Mp ∈ M_WFL
+    # ------------------------------------------------------------
+
+    sol = wfl.select_one_Mp_in_Mwfl(
+        L=L,
+        w_set="l2_ball",
+        eps_w=1e-2,
+        objective="min_fro",
+        solver="MOSEK",    # or "SCS" if MOSEK not available
+        verbose=True
+    )
+
+    # ------------------------------------------------------------
+    # 7) Extract result
+    # ------------------------------------------------------------
+
+    if sol["status"] not in ("optimal", "optimal_inaccurate"):
+        raise RuntimeError(f"WFL selection failed: {sol['status']}")
+
+    Mp_hat = sol["Mp"]
+
+    print("Mp_hat shape:", Mp_hat.shape)
