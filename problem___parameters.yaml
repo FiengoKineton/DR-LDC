@@ -32,7 +32,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "temp"
+    runID: "wfl"
 
   ambiguity:
     model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]
