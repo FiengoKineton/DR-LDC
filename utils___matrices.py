@@ -522,7 +522,7 @@ class MatricesAPI():
             if plant_cfg["Bw_mode"] != "ident": 
                 Bw = np.array(plant_cfg["Bw_mat"], dtype=float)
             else: 
-                Bw = np.array([[1,0],[1,0],[1,0],[1,0]], dtype=float)  # Temporary fix for identity disturbance model
+                Bw = np.array([[1,0],[1,0],[1,0],[1,0],[1,0],[1,0],[1,0]], dtype=float)  # Temporary fix for identity disturbance model
             if A.shape != (nx, nx) or Bu.shape != (nx, nu) or Bw.shape != (nx, nw):
                 raise ValueError("Explicit matrices do not match (nx,nu,nw) in YAML.")
             return A, Bu, Bw
@@ -544,7 +544,11 @@ class MatricesAPI():
 
         A = _stable_A_random(nx, eig_min, eig_max, rng)
         Bu = _random_full((nx, nu), Bu_scale, rng)
-        Bw = _random_orthonormal_columns(nx, Bw_rank, Bw_scale, rng)
+        if plant_cfg["Bw_mode"] != "ident":
+            Bw = _random_orthonormal_columns(nx, Bw_rank, Bw_scale, rng)
+        else: 
+            Bw = np.array([[1,0],[1,0],[1,0],[1,0],[1,0],[1,0],[1,0]], dtype=float)
+
 
         # If requested Bw has fewer columns than nw, pad with zeros to match declared nw
         if Bw.shape[1] < nw:
@@ -1059,6 +1063,8 @@ class MatricesAPI():
 
         # Consider scaling of random noise
         Bw = Bw/np.sqrt(dt)
+        Bw = np.array([[1,0],[1,0],[1,0],[1,0],[1,0],[1,0],[1,0]], dtype=float)
+        
 
         Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
         Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nx, ny=ny, nu=nu)
