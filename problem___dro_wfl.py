@@ -1311,9 +1311,9 @@ if __name__ == "__main__":
     # 2. Build Optimization Problem
     wfl.build_Phi() # Structural matrices (psi_1, etc.)
     wfl.build_var() # Variables (now includes Mp, g, w)
+    wfl.build_reg() # Regularization (if any)
     wfl.build_con() # Constraints (LMI + WFL consistency)
     """wfl.build_obj() # Objective
-    wfl.build_reg() # Regularization (if any)
 
     
     # ------------------------------------------------------------
