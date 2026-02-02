@@ -1063,7 +1063,7 @@ class MatricesAPI():
 
         # Consider scaling of random noise
         Bw = Bw/np.sqrt(dt)
-        Bw = np.array([[1,0],[1,0],[1,0],[1,0],[1,0],[1,0],[1,0]], dtype=float)
+        #Bw = np.array([[1,0],[1,0],[1,0],[1,0],[1,0],[1,0],[1,0]], dtype=float)
         
 
         Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()

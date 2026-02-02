@@ -12,7 +12,7 @@ from utils___Nsims_mats import NsimsMatricesAnalyzer, mean_dict, select_represen
 
 
 class WFL:
-    def __init__(self, *args, **kwargs):
+    def __new__(cls, *args, **kwargs):
         return WFL_nonConvex(*args, **kwargs)
 
 
@@ -79,15 +79,60 @@ class WFL_nonConvex:
     def _sym(self, M: np.ndarray):
         return 0.5 * (M + M.T) + self.eps * self._I(M.shape[0])
 
-    def _negdef(self, M: cp.Expression, strict: bool = True):
-        if strict:
-            return M << -self.eps * self._I(M.shape[0], M.shape[1])
-        return M << 0
+    def _negdef(self, matrix, name):
+            """
+            CasADi equivalent of 'matrix << -eps*I'
+            Enforces Negative Definiteness via Cholesky decomposition.
+            """
+            n = matrix.shape[0]
+            
+            # 1. Create auxiliary variable L (Lower Triangular)
+            n_L = n * (n + 1) // 2
+            L_sym = ca.SX.sym(f"L_{name}", n_L)
+            
+            # Register it so solve_prb optimizes it
+            if not hasattr(self, "aux_vars"): self.aux_vars = []
+            self.aux_vars.append(L_sym)
+            
+            # 2. Reconstruct L matrix from vector
+            L = ca.SX.zeros(n, n)
+            idx = 0
+            for i in range(n):
+                for j in range(i + 1):
+                    L[i, j] = L_sym[idx]
+                    idx += 1
+                    
+            # 3. Return the Equality Constraint
+            # M + eps*I = -L*L.T  <==>  M + eps*I + L*L.T = 0
+            return ca.vec(matrix + L @ L.T + self.eps * ca.DM.eye(n))
 
-    def _posdef(self, M: cp.Expression, strict: bool = True):
-        if strict:
-            return M >> self.eps * self._I(M.shape[0], M.shape[1])
-        return M >> 0
+    def _posdef(self, matrix, name):
+            """
+            CasADi equivalent of 'matrix >> eps*I'
+            Enforces Positive Definiteness via Cholesky decomposition.
+            Constraint: matrix - L*L.T - eps*I = 0
+            """
+            n = matrix.shape[0]
+            
+            # 1. Create auxiliary variable L (Lower Triangular)
+            n_L = n * (n + 1) // 2
+            L_sym = ca.SX.sym(f"L_{name}", n_L)
+            
+            # Register it so solve_prb optimizes it
+            if not hasattr(self, "aux_vars"): self.aux_vars = []
+            self.aux_vars.append(L_sym)
+            
+            # 2. Reconstruct L matrix from vector
+            L = ca.SX.zeros(n, n)
+            idx = 0
+            for i in range(n):
+                for j in range(i + 1):
+                    L[i, j] = L_sym[idx]
+                    idx += 1
+                    
+            # 3. Return the Equality Constraint
+            # M = L*L.T + eps*I  <==>  M - L*L.T - eps*I = 0
+            return ca.vec(matrix - (L @ L.T + self.eps * ca.DM.eye(n)))
 
     def _val(self, m):
         if m is None:
@@ -760,8 +805,8 @@ class WFL_nonConvex:
         lam    = cv["lam"]
         Mcl    = cv["Mcl"]
         Mp     = cv["Mp"]
+        PMcl   = cv["PMcl"]
 
-        eps = self.eps
         I_w = ca.DM(self._I(nw))
         I_xw = ca.DM(self._I(2*nx + nw))
         Z_zw = ca.DM(self._Z(nz, nw))
@@ -797,162 +842,48 @@ class WFL_nonConvex:
         # The constraint is valid for the specific trajectory defined by g.
         g_data_consistency = lhs - rhs
         g_list.append(g_data_consistency) # == 0
-        print("check_point_1")
 
 
         # ---------- kernel(s) ----------
         if self.model == "correlated":
             Xi = ca.blockcat([
-                [-P_aug @ (I_xw + (lam-1)*self.Psi_w@self.Psi_w.T), lam*self.Psi_w, (P_aug @ Mcl).T ],
-                [lam*self.Psi_w.T,                                  -Q -lam*I_w,    Z_wxz           ],
-                [P_aug @ Mcl,                                       Z_zw,           -P_aug          ]
+                [-P_aug @ (I_xw + (lam-1)*self.Psi_w@self.Psi_w.T), lam*self.Psi_w, (PMcl).T],
+                [lam*self.Psi_w.T,                                  -Q -lam*I_w,    Z_wxz   ],
+                [PMcl,                                              Z_zw,           -P_aug  ]
             ])
-            eig_Xi = ca.eig_symbolic(Xi)          # Xi is SX → OK
-            min_eig_Xi = ca.mmin(eig_Xi)
-            g_Xi = min_eig_Xi + eps               # <= 0
-            g_list.append(g_Xi)
+            #g_list.append(ca.mmax(ca.eig_symbolic(Xi)) + self.eps) # <= 0
+            g_list.append(self._negdef(Xi, "Xi"))
 
         elif self.model == "independent":
             # Xi1
             Xi1 = ca.blockcat([
-                [-self.Psi_z.T @ P_aug @ self.Psi_z,    (P_aug @ Mcl @ self.Psi_2x).T   ],
-                [P_aug @ Mcl @ self.Psi_2x,             -P_aug                          ]
+                [-self.Psi_z.T @ P_aug @ self.Psi_z,    (PMcl @ self.Psi_2x).T   ],
+                [PMcl @ self.Psi_2x,                    -P_aug                   ]
             ])
-            eig_Xi1 = ca.eig_symbolic(Xi1)
-            min_eig_Xi1 = ca.mmin(eig_Xi1)
-            g_Xi1 = min_eig_Xi1 + eps
-            g_list.append(g_Xi1)
+
 
             # Xi2
             Xi2 = ca.blockcat([
-                [-lam * I_w,                lam * I_w,          (P_aug @ Mcl @ self.Psi_w).T    ],
-                [ lam * I_w,                -Q - lam * I_w,     Z_wxz                           ],
-                [ P_aug @ Mcl @ self.Psi_w, Z_wxz.T,            -P_aug                          ]
+                [-lam * I_w,                lam * I_w,          (PMcl @ self.Psi_w).T   ],
+                [ lam * I_w,                -Q - lam * I_w,     Z_wxz                   ],
+                [ PMcl @ self.Psi_w,        Z_wxz.T,            -P_aug                  ]
             ])
-            eig_Xi2 = ca.eig_symbolic(Xi2)
-            min_eig_Xi2 = ca.mmin(eig_Xi2)
-            g_Xi2 = min_eig_Xi2 + eps
-            g_list.append(g_Xi2)
 
+
+            # ca.mman or ca.mmin?
+            g_list.append(self._negdef(Xi1, "Xi1")) # <= 0
+            g_list.append(self._negdef(Xi2, "Xi2")) # <= 0
         else:
             raise ValueError("model must be 'correlated' or 'independent'")
         
-        print("check_point_2")
-
-
-        # PSD-ish on P, Q: lambda_min >= eps
-        eig_P = ca.eig_symbolic(P_aug)
-        eig_Q = ca.eig_symbolic(Q)
-        min_eig_P = ca.mmin(eig_P)
-        min_eig_Q = ca.mmin(eig_Q)
-        g_P = eps - min_eig_P
-        g_Q = eps - min_eig_Q
-        g_list.extend([g_P, g_Q])
-
-        # lambda >= 0 (bounded in solve_prb)
-        g_lam = lam
-        g_list.append(g_lam)
-        print("check_point_3")
-
-        g = ca.vertcat(*g_list)
-        self.cas_con = {"g": g, "g_list": g_list}
-
-    def _build_con(self):
-        cv = self.cas_vars
-        eps = self.eps
-        g_list = []
-
-        # 1. Retrieve WFL Data
-        # Xp = [Hx; Hu], Xf = [Hx+; Hy]
-        Xp_dm = ca.DM(self.wfl["Xp"])
-        Xf_dm = ca.DM(self.wfl["Xf"])
-        
-        Mp = cv["Mp"]
-        g_vec = cv["g_wfl"]
-        w_mat = cv["w_wfl"]
-
-        # 2. Willems' Fundamental Lemma Constraint (Eq 2.14 / 2.16)
-        # [Hx+; Hy] * g = Mp * [Hx; Hu] * g + w
-        # We calculate the residual and force it to zero
-        wfl_lhs = Xf_dm @ g_vec
-        wfl_rhs = (Mp @ Xp_dm @ g_vec) + ca.vec(w_mat) # Vectorize w_mat if treated as vector column-wise
-        
-        # Note: In the paper, w is column-wise noise. 
-        # Here we enforce: Xf[:, i] = Mp @ Xp[:, i] + w[:, i]
-        # Efficient Implementation:
-        resid = Xf_dm - (Mp @ Xp_dm) # This is the "w" matrix implied by Mp
-        # We constrain the explicit decision variable w_mat to equal this residual
-        g_wfl_equality = ca.vec(w_mat - resid) 
-        # Actually, simpler: The paper formulation says w must exist in W.
-        # We can just define w = Xf - Mp*Xp directly in the cost or norm constraint
-        # without an explicit equality constraint if we treat w as dependent.
-        # BUT, the paper includes 'g' as a variable to re-weight data.
-        # Eq 2.14: [Hx+; Hy]g = Mp[Hx; Hu]g + w. 
-        # This implies we are looking for a linear combination 'g' that explains the model.
-        
-        # Implementation of Eq 390 (Page 17):
-        lhs = Xf_dm @ g_vec
-        rhs = (Mp @ Xp_dm @ g_vec) + ca.sum2(w_mat) # Simplified interpretation
-        # Let's stick strictly to 2.14: 
-        # The constraint is valid for the specific trajectory defined by g.
-        g_data_consistency = lhs - rhs
-        g_list.append(g_data_consistency) # == 0
-
-        # 3. Noise Bound (w in W)
-        # Assuming Frobenius norm bound or L2 per column
-        # ||w|| <= epsilon
-        w_norm = ca.norm_fro(w_mat)
-        # We can add this as a hard constraint or regularizer. 
-        # The paper (Eq 2.18) suggests regularizing w in the objective.
-        # If hard constraint:
-        # g_list.append(w_norm - self.eps_w) # <= 0
-
-        # 4. LMI Constraints (Distributionally Robust)
-        # We use the PMcl matrix constructed in build_var
-        PMcl = cv["PMcl"]
-        P_aug = cv["P_aug"]
-        Q = cv["Q"]
-        lam = cv["lam"]
-        
-        nx, _, nw, _, nz = self.get_dims()
-        
-        # Construct the large LMI block (Independent Model - Eq 123 in PDF)
-        # Matrix Xi1
-        Psi_z = self.Psi_z
-        Psi_2x = self.Psi_2x
-        
-        # Block 1: Quadratic Stability / Performance
-        # [ -P_aug ... ]
-        # Note: We use the definition from the code snippet provided in prompt (source 391)
-        # But adapted for CasADi symbolics
-        
-        Xi1 = ca.blockcat([
-            [-Psi_z.T @ P_aug @ Psi_z,      (PMcl @ Psi_2x).T],
-            [ PMcl @ Psi_2x,                -P_aug]
-        ])
-        
-        # Block 2: Robustness to Noise
-        Psi_w = self.Psi_w
-        I_w = ca.DM(np.eye(nw))
-        Z_wxz = ca.DM(np.zeros((nw, 2*nx + nz)))
-        
-        Xi2 = ca.blockcat([
-            [-lam * I_w,        lam * I_w,          (PMcl @ Psi_w).T],
-            [ lam * I_w,        -Q - lam * I_w,     Z_wxz],
-            [ PMcl @ Psi_w,     Z_wxz.T,            -P_aug]
-        ])
-
-        # Enforce Negative Definiteness via eigenvalues
-        # (Soft constraint or barrier is better for IPOPT, but max_eig < -eps works)
-        g_list.append(ca.mmax(ca.eig_symbolic(Xi1)) + self.eps) # <= 0
-        g_list.append(ca.mmax(ca.eig_symbolic(Xi2)) + self.eps) # <= 0
         
         # Positive Definite constraints (P > 0, Q > 0, lam > 0)
-        g_list.append(self.eps - ca.mmin(ca.eig_symbolic(P_aug))) # <= 0
-        g_list.append(self.eps - ca.mmin(ca.eig_symbolic(Q)))     # <= 0
+        g_list.append(self._posdef(P_aug, "P_aug")) # <= 0
+        g_list.append(self._posdef(Q, "Q")) # <= 0
         g_list.append(-lam) # <= 0
 
         self.cas_con = {"g": ca.vertcat(*g_list), "g_list": g_list}
+
 
     # ------------------------------------------------------------------
     # OBJECTIVE & REG
@@ -995,6 +926,7 @@ class WFL_nonConvex:
 
             self.cas_reg = self.rho * reg
 
+
     # ------------------------------------------------------------------
     # SOLVE: IPOPT Call & Result Unpacking
     # ------------------------------------------------------------------
@@ -1002,11 +934,8 @@ class WFL_nonConvex:
         cv = self.cas_vars
         nx, nu, nw, ny, nz = self.get_dims()
 
-        # 1. Flatten variables into the single optimization vector 'x'
-        # Order must match exactly what was defined in build_var / solve_prb setup
-        # Structure: vX, vY, vQ, lam, K, L, M, N, Mp, g, w
-        
-        # Dimensions for vectorization
+        # 1. Standard Variables Vectorization (x0 calculation)
+        # ----------------------------------------------------
         n_vX = nx * (nx + 1) // 2
         n_vY = nx * (nx + 1) // 2
         n_vQ = nw * (nw + 1) // 2
@@ -1019,15 +948,9 @@ class WFL_nonConvex:
         n_g = self.wfl["N"]
         n_w = (nx + ny) * self.wfl["N"]
 
-        # 2. Define Initial Guesses (x0)
-        # Using Identity/Zeros for LMI vars is standard.
-        # CRITICAL: Mp must be initialized with the Least Squares estimate to help IPOPT.
-        
         # Helper to vectorize matrices column-major (standard for CasADi)
         def vec(mat): return np.array(mat).flatten('F')
         def vecsym(mat): # extract triu elements for symmetric vars
-            # Note: This must match the explicit loop used in build_var "symm_var"
-            # Since we used a simple list creation there, we replicate it:
             vals = []
             m = np.triu(mat)
             for i in range(len(mat)):
@@ -1039,37 +962,74 @@ class WFL_nonConvex:
         x0_X = vecsym(np.eye(nx))
         x0_Y = vecsym(np.eye(nx))
         x0_Q = vecsym(np.eye(nw))
-        x0_lam = np.array([1.0]) # Start with positive lambda
+        x0_lam = np.array([1.0]) 
         
-        x0_K = vec(np.eye(nx))      # Identity controller state matrix often works
+        x0_K = vec(np.eye(nx))
         x0_L = vec(np.zeros((nx, ny)))
         x0_M = vec(np.zeros((nu, nx)))
         x0_N = vec(np.zeros((nu, ny)))
 
         # WFL Vars Init
-        # Mp_init was stored in cas_vars during build_var (it's the LS estimate)
         Mp_est = np.block([
             [cv["Ax_init"], cv["Bu_init"]],
             [cv["Cy_init"], np.zeros((ny, nu))]
         ])
         x0_Mp = vec(Mp_est)
-        x0_g = np.zeros(n_g) # g=0 is valid (implies zero trajectory)
+        x0_g = np.zeros(n_g)
         x0_w = np.zeros(n_w)
 
-        x0 = np.concatenate([
+        # Concatenate Main x0
+        x0_main = np.concatenate([
             x0_X, x0_Y, x0_Q, x0_lam, 
             x0_K, x0_L, x0_M, x0_N, 
             x0_Mp, x0_g, x0_w
         ])
 
+        # 2. Auxiliary Variables Init (L matrices for Cholesky lifting)
+        # ------------------------------------------------------------
+        # We need to initialize the L matrices to Identity (safe guess).
+        # Initializing them to 0 causes singular gradients.
+        x0_aux_list = []
+        
+        if hasattr(self, "aux_vars"):
+            for aux in self.aux_vars:
+                # Calculate matrix dimension 'n' from vector length 'N'
+                # Length = n(n+1)/2  =>  n^2 + n - 2*Length = 0
+                N_len = aux.shape[0]
+                n = int((-1 + np.sqrt(1 + 8 * N_len)) / 2)
+
+                # Initialize L as Identity matrix (Diagonal=1, others=0)
+                L_init = np.eye(n)
+                
+                # Extract elements in the exact order created by _negdef/_posdef
+                # (Iterate rows, then cols up to diagonal)
+                vals = []
+                for i in range(n):
+                    for j in range(i + 1):
+                        vals.append(L_init[i, j])
+                x0_aux_list.append(np.array(vals))
+
+        x0_aux = np.concatenate(x0_aux_list) if x0_aux_list else np.array([])
+        
+        # FULL x0
+        x0 = np.concatenate([x0_main, x0_aux])
+
+
         # 3. Setup Solver
-        # Objective and Constraints were built in build_obj/build_con
-        # "g" in cas_con contains all inequality/equality constraints
-        vars_cas = ca.vertcat(
+        # ----------------------------------------------------
+        # Define Symbolic Vector 'x' for NLP
+        vars_main = ca.vertcat(
             cv["vX"], cv["vY"], cv["vQ"], cv["lam"],
             ca.vec(cv["K"]), ca.vec(cv["L"]), ca.vec(cv["M"]), ca.vec(cv["N"]),
             ca.vec(cv["Mp"]), cv["g_wfl"], ca.vec(cv["w_wfl"])
         )
+        
+        # Append Auxiliary Variables to the symbolic vector
+        # THIS WAS THE MISSING PART CAUSING THE ERROR
+        if hasattr(self, "aux_vars"):
+            vars_cas = ca.vertcat(vars_main, *self.aux_vars)
+        else:
+            vars_cas = vars_main
         
         nlp = {
             'x': vars_cas,
@@ -1083,32 +1043,27 @@ class WFL_nonConvex:
             "ipopt.print_level": 5, 
             "ipopt.tol": 1e-4,
             "ipopt.acceptable_tol": 1e-3,
-            # "ipopt.hessian_approximation": "limited-memory" # Uncomment if Hessian is too expensive
         }
         
         self.solver_obj = ca.nlpsol("solver", "ipopt", nlp, opts)
 
         # 4. Solve
-        # All constraints in g_list were formulated as <= 0 or == 0
-        # Specifically: WFL consistency is == 0, others (eigenvalues) are <= 0
-        # We need to distinguish equality constraints if we mixed them.
-        # In build_con, we appended the WFL equality first? 
-        # Let's verify standard: usually build_con appends everything as ONE vector.
-        # If your build_con puts everything as <= 0, we use ubg=0.
-        # **Correction**: The WFL constraint [Xf]g - Mp[Xp]g - w = 0 is an EQUALITY.
-        # CasADi distinguishes via lbg == ubg.
+        # ----------------------------------------------------
+        # All Lifted LMI constraints are EQUALITIES (== 0).
+        # All WFL constraints are EQUALITIES (== 0).
+        # Trust Region is INEQUALITY (<= 0).
+        # Lambda is INEQUALITY (<= 0).
         
-        # Assumption: The provided build_con code put the equality first or we treat all as <= 0?
-        # To be safe with the 'Final Algorithm' snippet, let's assume we treat the 
-        # WFL consistency as soft-penalty or handled implicitly.
-        # IF strictly enforced:
-        lbg = np.full(self.cas_con["g"].shape[0], -np.inf)
+        lbg = np.zeros(self.cas_con["g"].shape[0])
         ubg = np.zeros(self.cas_con["g"].shape[0])
         
-        # Note: If you appended g_data_consistency (equality) first in build_con, 
-        # you must set lbg[indices] = 0 for those rows. 
-        # For this implementation, assuming all are inequalities (<=0) or handled by the solver.
+        # Manually relax bounds for known inequalities.
+        # Index 0 is Trust Region (always appended first in build_con)
+        lbg[0] = -np.inf 
         
+        # Last index is Lambda (always appended last in build_con)
+        lbg[-1] = -np.inf
+
         res = self.solver_obj(x0=x0, lbg=lbg, ubg=ubg)
         
         self.status = self.solver_obj.stats()["return_status"]
@@ -1116,8 +1071,10 @@ class WFL_nonConvex:
         self.obj_val = float(res["f"])
         self.sol_x = res["x"].full().flatten()
 
-        # 5. Store unpacked numeric values for pack_outs
-        # We parse the sol_x vector back into dictionary using the sizes known above
+        # 5. Store unpacked numeric values
+        # ----------------------------------------------------
+        # We only need to unpack the "main" variables. 
+        # The aux variables (at the end of sol_x) can be ignored.
         idx = 0
         def eat(n): nonlocal idx; out = self.sol_x[idx:idx+n]; idx += n; return out
         
@@ -1133,6 +1090,10 @@ class WFL_nonConvex:
         self.res_vals["Mp"] = eat(n_Mp).reshape((nx + ny, nx + nu), order='F')
         self.res_vals["g_wfl"] = eat(n_g)
         self.res_vals["w_wfl"] = eat(n_w).reshape((nx + ny, self.wfl["N"]), order='F')
+        
+        # We stop eating here. The rest of self.sol_x contains the optimized L factors,
+        # which we don't need for the controller reconstruction.
+
 
     # ------------------------------------------------------------------
     # PACK OUTS: Convert Results to Output Object
@@ -1313,9 +1274,10 @@ if __name__ == "__main__":
     wfl.build_var() # Variables (now includes Mp, g, w)
     wfl.build_reg() # Regularization (if any)
     wfl.build_con() # Constraints (LMI + WFL consistency)
-    """wfl.build_obj() # Objective
+    wfl.build_obj() # Objective
+    wfl.solve_prb() # Solve with IPOPT
 
-    
+    """
     # ------------------------------------------------------------
     # 3) Run the data generation
     # ------------------------------------------------------------
