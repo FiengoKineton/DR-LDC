@@ -37,7 +37,7 @@ class WFL_nonConvex:
                  vals: tuple, model: str,
                  api, noise,
                  rho: float = 1e-2, eps: float = 1e-6, 
-                 N_sims: int = 1, L: int = 10,
+                 N_sims: int = 1, L: int = 1,
                  Bw_mode: str = "known_cov", Bw_type: str = "ident",
                  real_Z_mats: bool = True,
                  aug_mode: str = "std",
@@ -784,39 +784,21 @@ class WFL_nonConvex:
         
         Mp = cv["Mp"]
         g_vec = cv["g_wfl"]
-        w_mat = cv["w_wfl"]
 
         # 2. Willems' Fundamental Lemma Constraint (Eq 2.14 / 2.16)
         # [Hx+; Hy] * g = Mp * [Hx; Hu] * g + w
         # We calculate the residual and force it to zero
-        wfl_lhs = Xf_dm @ g_vec
-        wfl_rhs = (Mp @ Xp_dm @ g_vec) + ca.vec(w_mat) # Vectorize w_mat if treated as vector column-wise
-        
-        # Note: In the paper, w is column-wise noise. 
-        # Here we enforce: Xf[:, i] = Mp @ Xp[:, i] + w[:, i]
-        # Efficient Implementation:
-        resid = Xf_dm - (Mp @ Xp_dm) # This is the "w" matrix implied by Mp
-        # We constrain the explicit decision variable w_mat to equal this residual
-        g_wfl_equality = ca.vec(w_mat - resid) 
-        # Actually, simpler: The paper formulation says w must exist in W.
-        # We can just define w = Xf - Mp*Xp directly in the cost or norm constraint
-        # without an explicit equality constraint if we treat w as dependent.
-        # BUT, the paper includes 'g' as a variable to re-weight data.
-        # Eq 2.14: [Hx+; Hy]g = Mp[Hx; Hu]g + w. 
-        # This implies we are looking for a linear combination 'g' that explains the model.
+
         
         # Implementation of Eq 390 (Page 17):
         lhs = Xf_dm @ g_vec
-        rhs = (Mp @ Xp_dm @ g_vec) + ca.sum2(w_mat) # Simplified interpretation
+        rhs = (Mp @ Xp_dm @ g_vec) #+ ca.sum2(w_mat) # Simplified interpretation
         # Let's stick strictly to 2.14: 
         # The constraint is valid for the specific trajectory defined by g.
         g_data_consistency = lhs - rhs
         g_list.append(g_data_consistency) # == 0
+        print("check_point_1")
 
-        # 3. Noise Bound (w in W)
-        # Assuming Frobenius norm bound or L2 per column
-        # ||w|| <= epsilon
-        w_norm = ca.norm_fro(w_mat)
 
         # ---------- kernel(s) ----------
         if self.model == "correlated":
@@ -854,6 +836,8 @@ class WFL_nonConvex:
 
         else:
             raise ValueError("model must be 'correlated' or 'independent'")
+        
+        print("check_point_2")
 
 
         # PSD-ish on P, Q: lambda_min >= eps
@@ -868,6 +852,7 @@ class WFL_nonConvex:
         # lambda >= 0 (bounded in solve_prb)
         g_lam = lam
         g_list.append(g_lam)
+        print("check_point_3")
 
         g = ca.vertcat(*g_list)
         self.cas_con = {"g": g, "g_list": g_list}

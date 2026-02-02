@@ -880,7 +880,7 @@ class Open_Loop():
 
         # PE sanity check
         cond, svals = pe_check(X_reg, U[:, :-1])
-        print(f"[PE] cond( D D^T ) = {cond:.2e}   rank={np.sum(svals>1e-10)}/{nx+nu}")
+        print(f"\t[PE] cond( D D^T ) = {cond:.2e}   rank={np.sum(svals>1e-10)}/{nx+nu}")
         if np.sum(svals>1e-10) == nx + nu:
             PE = True
         else:
