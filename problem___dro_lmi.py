@@ -2425,7 +2425,7 @@ class lmi_pipeline_optim_problem():
                         "non_convex": non_convex,
                         "N_sims": N_sims,
                     }
-                        
+
                     A, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu = P
                     plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
                     ADD = True

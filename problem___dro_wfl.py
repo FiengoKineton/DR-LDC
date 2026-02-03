@@ -79,65 +79,57 @@ class WFL_nonConvex:
     def _sym(self, M: np.ndarray):
         return 0.5 * (M + M.T) + self.eps * self._I(M.shape[0])
 
-    def _negdef(self, matrix, name):
-            """
-            CasADi equivalent of 'matrix << -eps*I'
-            Enforces Negative Definiteness via Cholesky decomposition.
-            """
-            n = matrix.shape[0]
-            
-            # 1. Create auxiliary variable L (Lower Triangular)
-            n_L = n * (n + 1) // 2
-            L_sym = ca.SX.sym(f"L_{name}", n_L)
-            
-            # Register it so solve_prb optimizes it
-            if not hasattr(self, "aux_vars"): self.aux_vars = []
-            self.aux_vars.append(L_sym)
-            
-            # 2. Reconstruct L matrix from vector
-            L = ca.SX.zeros(n, n)
-            idx = 0
-            for i in range(n):
-                for j in range(i + 1):
-                    L[i, j] = L_sym[idx]
-                    idx += 1
-                    
-            # 3. Return the Equality Constraint
-            # M + eps*I = -L*L.T  <==>  M + eps*I + L*L.T = 0
-            return ca.vec(matrix + L @ L.T + self.eps * ca.DM.eye(n))
-
-    def _posdef(self, matrix, name):
-            """
-            CasADi equivalent of 'matrix >> eps*I'
-            Enforces Positive Definiteness via Cholesky decomposition.
-            Constraint: matrix - L*L.T - eps*I = 0
-            """
-            n = matrix.shape[0]
-            
-            # 1. Create auxiliary variable L (Lower Triangular)
-            n_L = n * (n + 1) // 2
-            L_sym = ca.SX.sym(f"L_{name}", n_L)
-            
-            # Register it so solve_prb optimizes it
-            if not hasattr(self, "aux_vars"): self.aux_vars = []
-            self.aux_vars.append(L_sym)
-            
-            # 2. Reconstruct L matrix from vector
-            L = ca.SX.zeros(n, n)
-            idx = 0
-            for i in range(n):
-                for j in range(i + 1):
-                    L[i, j] = L_sym[idx]
-                    idx += 1
-                    
-            # 3. Return the Equality Constraint
-            # M = L*L.T + eps*I  <==>  M - L*L.T - eps*I = 0
-            return ca.vec(matrix - (L @ L.T + self.eps * ca.DM.eye(n)))
-
     def _val(self, m):
         if m is None:
             return None
         return float(m) if np.isscalar(m) else m
+
+
+    # ------------------------------------------------------------------
+    # HELPERS (Cholesky Lifting)
+    # ------------------------------------------------------------------
+    def _negdef(self, matrix, name):
+        """
+        Enforces matrix < -eps*I via Cholesky decomposition.
+        Constraint: matrix + L*L.T + eps*I = 0
+        """
+        n = matrix.shape[0]
+        n_L = n * (n + 1) // 2
+        L_sym = ca.SX.sym(f"L_{name}", n_L)
+        
+        if not hasattr(self, "aux_vars"): self.aux_vars = []
+        self.aux_vars.append(L_sym)
+        
+        # Reconstruct L
+        L = ca.SX.zeros(n, n)
+        idx = 0
+        for i in range(n):
+            for j in range(i + 1):
+                L[i, j] = L_sym[idx]
+                idx += 1
+                
+        return ca.vec(matrix + L @ L.T + self.eps * ca.DM.eye(n))
+
+    def _posdef(self, matrix, name):
+        """
+        Enforces matrix > eps*I via Cholesky decomposition.
+        Constraint: matrix - L*L.T - eps*I = 0
+        """
+        n = matrix.shape[0]
+        n_L = n * (n + 1) // 2
+        L_sym = ca.SX.sym(f"L_{name}", n_L)
+        
+        if not hasattr(self, "aux_vars"): self.aux_vars = []
+        self.aux_vars.append(L_sym)
+        
+        L = ca.SX.zeros(n, n)
+        idx = 0
+        for i in range(n):
+            for j in range(i + 1):
+                L[i, j] = L_sym[idx]
+                idx += 1
+                
+        return ca.vec(matrix - (L @ L.T + self.eps * ca.DM.eye(n)))
 
     # ------------------------------------------------------------------
     # PUBLIC ENTRY
@@ -160,7 +152,7 @@ class WFL_nonConvex:
         self.pack_outs()
         
         return (self.outs,
-                self.get_mats(),
+                self.get_plant(),
                 self.Sigma_nom,
                 self.others,
                 (self.violations, self.total_constraints))
@@ -205,6 +197,14 @@ class WFL_nonConvex:
                     self.vars.get("tX", 0.0),
                     self.vars.get("tM", 0.0),
                     self.vars.get("tN", 0.0))
+
+    def get_plant(self):
+        Bw, Cz, Dzw, Dzu = self.get_mats()
+        Ax = self.others["Ax_opt"]
+        Bu = self.others["Bu_opt"]
+        Cy = self.others["Cy_opt"]
+        Dyw = self.others["Dyw"]
+        return (Ax, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu)
 
     # ------------------------------------------------------------------
     # OPEN-LOOP SIMULATION + MEDOID (identico al tuo, accorciato)
@@ -409,7 +409,7 @@ class WFL_nonConvex:
     # ------------------------------------------------------------------
     # VARIABILI
     # ------------------------------------------------------------------
-    def build_var(self):
+    def _build_var(self):
         nx, nu, nw, ny, nz = self.get_dims()
         Bw_init, Cz_init, _, Dzu_init = self.get_mats()
         
@@ -504,6 +504,99 @@ class WFL_nonConvex:
             "P_aug": P_aug, "Mcl": Mcl, "PMcl": PMcl, "Mc": Mc,
             "Ac": Ac, "Bc": Bc, "Cc": Cc, "Dc": Dc,
             # Init guesses
+            "Ax_init": Ax_init, "Bu_init": Bu_init, "Cy_init": Cy_init
+        }
+
+    def build_var(self):
+        nx, nu, nw, ny, nz = self.get_dims()
+        Bw_init, Cz_init, _, Dzu_init = self.get_mats()
+        
+        # Initial guesses from LS for Mp priors
+        Ax_init = self.mats["Ax"]
+        Bu_init = self.mats["Bu"]
+        Cy_init = self.mats["Cy"]
+
+        cas = ca.SX 
+
+        # --- Decision Variables ---
+        def symm_var(name, n): return cas.sym(name, n * (n + 1) // 2)
+        def full_sym(v, n):
+            M = cas.zeros(n, n)
+            idx = 0
+            for i in range(n):
+                for j in range(i, n):
+                    M[i, j] = v[idx]; M[j, i] = v[idx]; idx += 1
+            return M
+
+        vX, vY, vQ = symm_var("X", nx), symm_var("Y", nx), symm_var("Q", nw)
+        K, L = cas.sym("K", nx, nx), cas.sym("L", nx, ny)
+        M_var, N_var = cas.sym("M", nu, nx), cas.sym("N", nu, ny)
+
+        X, Y, Q = full_sym(vX, nx), full_sym(vY, nx), full_sym(vQ, nw)
+        lam = cas.sym("lam", 1)
+
+        # WFL Variables
+        Mp = cas.sym("Mp", nx + ny, nx + nu)
+        N_samples = self.wfl["N"]
+        g_wfl = cas.sym("g_wfl", N_samples)
+        w_wfl = cas.sym("w_wfl", nx + ny, N_samples)
+
+        # --- 1. Extract Variable Plant Matrices from Mp ---
+        # Ax = psi_1 * Mp * psi_2, etc. (Linear slicing)
+        Ax = self.psi_1 @ Mp @ self.psi_2
+        Bu = self.psi_1 @ Mp @ self.psi_3
+        Cy = self.psi_4 @ Mp @ self.psi_2
+        
+        # Constants / Fixed matrices
+        Bw = ca.DM(Bw_init)
+        Cz = ca.DM(Cz_init)
+        Dzu = ca.DM(Dzu_init)
+        Dzw = ca.DM(self._Z(nz, nw))
+        Dyw = ca.DM(self._Z(ny, nw)) 
+
+        # --- 2. Construct CoV Closed-Loop Matrices (NO INVERSES) ---
+        # A_cov = [ A Y + Bu M,       A + Bu N Cy ]
+        #         [ K,                X A + L Cy  ]
+        r1 = ca.horzcat( Ax @ Y + Bu @ M_var,    Ax + Bu @ N_var @ Cy )
+        r2 = ca.horzcat( K,                      X @ Ax + L @ Cy      )
+        A_cov = ca.vertcat(r1, r2) 
+
+        # B_cov = [ Bw + Bu N Dyw ]  
+        #         [ X Bw + L Dyw  ]
+        b1 = Bw + Bu @ N_var @ Dyw
+        b2 = X @ Bw + L @ Dyw
+        B_cov = ca.vertcat(b1, b2) 
+
+        # C_cov = [ Cz Y + Dzu M,     Cz + Dzu N Cy ]
+        c1 = Cz @ Y + Dzu @ M_var
+        c2 = Cz + Dzu @ N_var @ Cy
+        C_cov = ca.horzcat(c1, c2) 
+
+        # D_cov = Dzw + Dzu N Dyw
+        D_cov = Dzw + Dzu @ N_var @ Dyw 
+
+        # Combine into the single matrix PMcl used in LMIs
+        PMcl = ca.blockcat([
+            [A_cov, B_cov],
+            [C_cov, D_cov]
+        ])
+
+        # Lyapunov Matrix P
+        Ix = ca.DM.eye(nx)
+        Iz = ca.DM.eye(nz)
+        P = ca.blockcat([[Y, Ix], [Ix, X]])
+        
+        # P_aug for the LMI blocks 
+        P_aug = ca.blockcat([
+            [P,                         ca.DM(self._Z(2*nx, nz))],
+            [ca.DM(self._Z(nz, 2*nx)),  Iz]
+        ])
+
+        self.cas_vars = {
+            "vX": vX, "vY": vY, "vQ": vQ, "X": X, "Y": Y, "Q": Q, "lam": lam,
+            "K": K, "L": L, "M": M_var, "N": N_var,
+            "Mp": Mp, "g_wfl": g_wfl, "w_wfl": w_wfl,
+            "PMcl": PMcl, "P_aug": P_aug,
             "Ax_init": Ax_init, "Bu_init": Bu_init, "Cy_init": Cy_init
         }
 
@@ -796,7 +889,7 @@ class WFL_nonConvex:
     # ------------------------------------------------------------------
     # CONSTRAINTS: kernel del paper + bound su DeltaA/DeltaB
     # ------------------------------------------------------------------
-    def build_con(self):
+    def _build_con(self):
         nx, nu, nw, ny, nz = self.get_dims()
 
         cv = self.cas_vars
@@ -884,6 +977,83 @@ class WFL_nonConvex:
 
         self.cas_con = {"g": ca.vertcat(*g_list), "g_list": g_list}
 
+    def build_con(self):
+        nx, nu, nw, ny, nz = self.get_dims()
+        cv = self.cas_vars
+        
+        P_aug = cv["P_aug"]
+        PMcl  = cv["PMcl"] # Using CoV version (Safe)
+        Q     = cv["Q"]
+        lam   = cv["lam"]
+        Mp    = cv["Mp"]
+
+        # Constants
+        eps = self.eps
+        I_w = ca.DM(np.eye(nw))
+        Z_wxz = ca.DM(np.zeros((nw, 2*nx + nz)))
+
+        g_list = []
+
+        # --- 1. Trust Region Constraint ---
+        Mp_prior = ca.DM(np.block([
+            [cv["Ax_init"], cv["Bu_init"]],
+            [cv["Cy_init"], np.zeros((ny, nu))]
+        ]))
+        # ||Mp - Prior|| - delta <= 0
+        delta = 0.05 * ca.norm_fro(Mp_prior)
+        g_trust = ca.norm_fro(Mp - Mp_prior) - delta
+        g_list.append(g_trust) 
+
+        # --- 2. Willems' Lemma (Sliced L=1) ---
+        Xp_full = ca.DM(self.wfl["Xp"])
+        Xf_full = ca.DM(self.wfl["Xf"])
+        
+        # Slice to L=1 to match Mp dimensions
+        n_in, n_out = nx + nu, nx + ny
+        Xp_1step = Xp_full[0:n_in, :]
+        Xf_1step = Xf_full[0:n_out, :]
+        
+        g_vec = cv["g_wfl"]
+        
+        # Residual: Xf*g - Mp*Xp*g
+        # We enforce this equals the noise variable 'w' in the objective implicitly,
+        # OR we can enforce it explicitly here. 
+        # Standard: Xf*g - Mp*Xp*g - w = 0
+        resid = ca.vec((Xf_1step @ g_vec) - (Mp @ Xp_1step @ g_vec))
+        
+        g_list.append(resid) # == 0
+
+
+        # --- 3. LMI Constraints (Lifted) ---
+        
+        if self.model == "independent":
+            # Xi1
+            Xi1 = ca.blockcat([
+                [-self.Psi_z.T @ P_aug @ self.Psi_z,    (PMcl @ self.Psi_2x).T],
+                [ PMcl @ self.Psi_2x,                   -P_aug]
+            ])
+            g_list.append(self._negdef(Xi1, "Xi1"))
+
+            # Xi2
+            Xi2 = ca.blockcat([
+                [-lam * I_w,                lam * I_w,          (PMcl @ self.Psi_w).T],
+                [ lam * I_w,                -Q - lam * I_w,     Z_wxz],
+                [ PMcl @ self.Psi_w,        Z_wxz.T,            -P_aug]
+            ])
+            g_list.append(self._negdef(Xi2, "Xi2"))
+            
+        elif self.model == "correlated":
+             # Use the correlated kernel structure here if needed
+             pass
+
+        # Positive Definite constraints
+        g_list.append(self._posdef(P_aug, "P_aug"))
+        g_list.append(self._posdef(Q, "Q"))
+        
+        # Lambda >= 0  => -lam <= 0
+        g_list.append(-lam) 
+
+        self.cas_con = {"g": ca.vertcat(*g_list), "g_list": g_list}
 
     # ------------------------------------------------------------------
     # OBJECTIVE & REG
@@ -930,7 +1100,7 @@ class WFL_nonConvex:
     # ------------------------------------------------------------------
     # SOLVE: IPOPT Call & Result Unpacking
     # ------------------------------------------------------------------
-    def solve_prb(self):
+    def _solve_prb(self):
         cv = self.cas_vars
         nx, nu, nw, ny, nz = self.get_dims()
 
@@ -984,6 +1154,7 @@ class WFL_nonConvex:
             x0_K, x0_L, x0_M, x0_N, 
             x0_Mp, x0_g, x0_w
         ])
+        print("check 1")
 
         # 2. Auxiliary Variables Init (L matrices for Cholesky lifting)
         # ------------------------------------------------------------
@@ -1014,6 +1185,7 @@ class WFL_nonConvex:
         # FULL x0
         x0 = np.concatenate([x0_main, x0_aux])
 
+        print("check 2")
 
         # 3. Setup Solver
         # ----------------------------------------------------
@@ -1046,6 +1218,7 @@ class WFL_nonConvex:
         }
         
         self.solver_obj = ca.nlpsol("solver", "ipopt", nlp, opts)
+        print("check 3")
 
         # 4. Solve
         # ----------------------------------------------------
@@ -1094,6 +1267,140 @@ class WFL_nonConvex:
         # We stop eating here. The rest of self.sol_x contains the optimized L factors,
         # which we don't need for the controller reconstruction.
 
+    def solve_prb(self):
+        cv = self.cas_vars
+        nx, nu, nw, ny, nz = self.get_dims()
+
+        # 1. Vectorize Variables
+        n_vX = nx * (nx + 1) // 2
+        n_vY = nx * (nx + 1) // 2
+        n_vQ = nw * (nw + 1) // 2
+        n_lam = 1
+        n_K, n_L = nx * nx, nx * ny
+        n_M, n_N = nu * nx, nu * ny
+        n_Mp = (nx + ny) * (nx + nu)
+        n_g = self.wfl["N"]
+        n_w = (nx + ny) * self.wfl["N"]
+
+        def vec(mat): return np.array(mat).flatten('F')
+        def vecsym(mat):
+            vals = []
+            m = np.triu(mat)
+            for i in range(len(mat)):
+                for j in range(i, len(mat)):
+                    vals.append(m[i,j])
+            return np.array(vals)
+
+        # 2. Initial Guesses
+        # FIX: Init X, Y small so I - XY is Positive Definite
+        x0_X = vecsym(np.eye(nx) * 0.1) 
+        x0_Y = vecsym(np.eye(nx) * 0.1)
+        x0_Q = vecsym(np.eye(nw))
+        x0_lam = np.array([1.0]) 
+        
+        x0_K = vec(np.eye(nx))
+        x0_L = vec(np.zeros((nx, ny)))
+        x0_M = vec(np.zeros((nu, nx)))
+        x0_N = vec(np.zeros((nu, ny)))
+
+        Mp_est = np.block([
+            [cv["Ax_init"], cv["Bu_init"]],
+            [cv["Cy_init"], np.zeros((ny, nu))]
+        ])
+        x0_Mp = vec(Mp_est) + 1e-6 * np.random.randn(len(vec(Mp_est)))
+        x0_g = np.zeros(n_g)
+        x0_w = np.zeros(n_w)
+
+        x0_main = np.concatenate([
+            x0_X, x0_Y, x0_Q, x0_lam, 
+            x0_K, x0_L, x0_M, x0_N, 
+            x0_Mp, x0_g, x0_w
+        ])
+
+        # 3. Aux Variables Init (L matrices)
+        x0_aux_list = []
+        if hasattr(self, "aux_vars"):
+            for aux in self.aux_vars:
+                N_len = aux.shape[0]
+                n = int((-1 + np.sqrt(1 + 8 * N_len)) / 2)
+                # Identity guess is safe for Cholesky factors
+                L_init = np.eye(n)
+                vals = []
+                for i in range(n):
+                    for j in range(i + 1):
+                        vals.append(L_init[i, j])
+                x0_aux_list.append(np.array(vals))
+
+        x0_aux = np.concatenate(x0_aux_list) if x0_aux_list else np.array([])
+        x0 = np.concatenate([x0_main, x0_aux])
+
+        # 4. Build NLP
+        vars_main = ca.vertcat(
+            cv["vX"], cv["vY"], cv["vQ"], cv["lam"],
+            ca.vec(cv["K"]), ca.vec(cv["L"]), ca.vec(cv["M"]), ca.vec(cv["N"]),
+            ca.vec(cv["Mp"]), cv["g_wfl"], ca.vec(cv["w_wfl"])
+        )
+        
+        # Include aux vars in optimization vector
+        if hasattr(self, "aux_vars"):
+            vars_cas = ca.vertcat(vars_main, *self.aux_vars)
+        else:
+            vars_cas = vars_main
+        
+        nlp = {'x': vars_cas, 'f': self.cas_obj, 'g': self.cas_con["g"]}
+
+        opts = {
+            "ipopt.max_iter": 500,
+            "ipopt.print_level": 5, 
+            "ipopt.tol": 1e-4,
+            "ipopt.acceptable_tol": 1e-3,
+            "ipopt.mu_init": 0.1, 
+        }
+        
+        self.solver_obj = ca.nlpsol("solver", "ipopt", nlp, opts)
+        print("Solver initialized successfully.")
+
+        # 5. Solve & Bounds
+        lbg = np.zeros(self.cas_con["g"].shape[0])
+        ubg = np.zeros(self.cas_con["g"].shape[0])
+        
+        # Relax specific inequalities
+        # Index 0 is Trust Region (Inequality)
+        lbg[0] = -np.inf  
+        
+        # Last index is Lambda (Inequality -lam <= 0)
+        lbg[-1] = -np.inf 
+
+        # Note: WFL (Index 1) and Lifted LMIs are Equalities, so bounds remain 0.
+
+        try:
+            res = self.solver_obj(x0=x0, lbg=lbg, ubg=ubg)
+        except RuntimeError as e:
+            print(f"Solver Failure: {e}")
+            self.success = False
+            return
+
+        self.status = self.solver_obj.stats()["return_status"]
+        self.success = self.status == "Solve_Succeeded"
+        self.obj_val = float(res["f"])
+        self.sol_x = res["x"].full().flatten()
+
+        # 6. Unpack
+        idx = 0
+        def eat(n): nonlocal idx; out = self.sol_x[idx:idx+n]; idx += n; return out
+        
+        self.res_vals = {}
+        self.res_vals["vX"] = eat(n_vX)
+        self.res_vals["vY"] = eat(n_vY)
+        self.res_vals["vQ"] = eat(n_vQ)
+        self.res_vals["lam"] = eat(n_lam)
+        self.res_vals["K"] = eat(n_K).reshape((nx, nx), order='F')
+        self.res_vals["L"] = eat(n_L).reshape((nx, ny), order='F')
+        self.res_vals["M"] = eat(n_M).reshape((nu, nx), order='F')
+        self.res_vals["N"] = eat(n_N).reshape((nu, ny), order='F')
+        self.res_vals["Mp"] = eat(n_Mp).reshape((nx + ny, nx + nu), order='F')
+        self.res_vals["g_wfl"] = eat(n_g)
+        self.res_vals["w_wfl"] = eat(n_w).reshape((nx + ny, self.wfl["N"]), order='F')
 
     # ------------------------------------------------------------------
     # PACK OUTS: Convert Results to Output Object
@@ -1110,9 +1417,14 @@ class WFL_nonConvex:
                     idx += 1
             return M
 
-        nx, nu, nw, ny, nz = self.get_dims()
-        rv = self.res_vals
-        
+        nx, nu, nw, ny, _ = self.get_dims()
+
+        if not hasattr(self, "res_vals"):
+            self.outs = None
+            return
+
+        rv = self.res_vals   
+
         # Primary Variables
         lam_val = float(rv["lam"][0])
         Q_val = reconstruct_sym(rv["vQ"], nw)
@@ -1124,6 +1436,9 @@ class WFL_nonConvex:
         
         # Optimized Plant (Mp)
         Mp_opt = rv["Mp"]
+
+        Bw, Cz, Dzw, Dzu = self.get_mats()
+        Dyw = np.zeros((ny, nw))  # Assuming no direct feedthrough for disturbance to output
         
         # 2. Extract Optimized System Matrices from Mp
         # Recall: psi_1=[I 0], psi_2=[I; 0], etc. (Simple slicing)
@@ -1134,56 +1449,19 @@ class WFL_nonConvex:
         Cy_opt = Mp_opt[nx:nx+ny, 0:nx]
         # Note: We discard the bottom-right block of Mp as it is usually 0 or irrelevant
         
-        # 3. Reconstruct Controller (Ac, Bc, Cc, Dc) explicitly
-        # We must perform the numeric equivalent of (2.9)-(2.12) using the OPTIMIZED Ax, Bu, Cy
-        # S = I - XY
-        S = np.eye(nx) - X_val @ Y_val
-        
-        # Numerical Factorization (SVD or Cholesky)
-        # The paper suggests S = U Sigma V.T
-        try:
-            U, s, Vt = np.linalg.svd(S)
-            s = np.clip(s, 1e-8, None) # Avoid div by zero
-            sqrt_s = np.sqrt(s)
-            
-            # M_fact = U * sqrt(S), N_fact = V * sqrt(S) -> MN^T = S
-            # Paper notation: U_new, V_new
-            U_new = U @ np.diag(sqrt_s)
-            V_new = Vt.T @ np.diag(sqrt_s) # Vt is V^T, so V is Vt.T
-            
-            U_inv = np.linalg.inv(U_new)
-            V_invT = np.linalg.inv(V_new.T)
-            
-            # Formulas (Eq 2.9 - 2.12)
-            # Dc = N
-            Dc_val = N_val
-            
-            # Cc = (M - N Cy Y) V^{-T}
-            # Note: Using Cy_opt here!
-            Cc_val = (M_val - N_val @ Cy_opt @ Y_val) @ V_invT
-            
-            # Bc = U^{-1} (L - X Bu N)
-            Bc_val = U_inv @ (L_val - X_val @ Bu_opt @ N_val)
-            
-            # Ac = U^{-1} (K - X Ax Y - L Cy Y - X Bu (M - N Cy Y)) V^{-T}
-            # Simplification: T1 = M - N Cy Y -> this is Cc * V^T
-            term_mid = (K_val 
-                       - X_val @ Ax_opt @ Y_val 
-                       - L_val @ Cy_opt @ Y_val 
-                       - X_val @ Bu_opt @ (M_val - N_val @ Cy_opt @ Y_val))
-            
-            Ac_val = U_inv @ term_mid @ V_invT
 
-        except np.linalg.LinAlgError:
-            # Fallback if factorization fails (e.g., S not PD enough)
-            Ac_val, Bc_val, Cc_val, Dc_val = map(lambda x: np.full(x, np.nan), [(nx,nx), (nx,ny), (nu,nx), (nu,ny)])
-
-        # 4. Reconstruct Closed Loop (Abar, etc.) for result check
-        # This represents the "Nominal" closed loop found by the optimizer
-        A_bar = np.block([[Ax_opt + Bu_opt @ Dc_val @ Cy_opt, Bu_opt @ Cc_val],
-                          [Bc_val @ Cy_opt,                   Ac_val]])
-        # B_bar, C_bar, D_bar can be constructed similarly if needed, 
-        # but A_bar is usually sufficient for stability checks.
+        A_bar = np.block([
+            [Ax_opt @ Y_val + Bu_opt @ M_val,   Ax_opt + Bu_opt @ N_val @ Cy_opt ], 
+            [K_val,                             X_val @ Ax_opt + L_val @ Cy_opt]
+        ])
+        B_bar = np.block([
+            [Bw], # + Bu_opt @ N_val @ Dyw], 
+            [X_val @ Bw] # + L_val @ Dyw]
+        ])
+        C_bar = np.block([ 
+            [Cz @ Y_val + Dzu @ M_val,      Cz + Dzu @ N_val @ Cy_opt]
+        ])
+        D_bar = Dzw # + Dzu @ N_val @ Dyw
 
         # 5. Pack into DROLMIResult
         dro = DROLMIResult(
@@ -1197,10 +1475,11 @@ class WFL_nonConvex:
             # We pass the reconstructed CLOSED LOOP matrices here
             Abar=A_bar, 
             # Placeholders for B/C/D bar if not strictly required by your downstream analysis
-            Bbar=np.zeros((2*nx, nw)), 
-            Cbar=np.zeros((nz, 2*nx)), 
-            Dbar=np.zeros((nz, nw)),
-            Tp=None, P=None
+            Bbar=B_bar, 
+            Cbar=C_bar, 
+            Dbar=D_bar,
+            Pbar=np.block([[Y_val, self._I(nx)], [self._I(nx), X_val]]),
+            Tp=None, P=None,
         )
         self.outs = dro
 
@@ -1210,12 +1489,10 @@ class WFL_nonConvex:
             "Mp_opt": Mp_opt,       # The Plant (Ax, Bu, Cy) consistent with data
             "g_wfl": rv["g_wfl"],   # The behavioral coefficients
             "w_wfl": rv["w_wfl"],   # The noise realization
-            "Ac": Ac_val,           # Explicit controller
-            "Bc": Bc_val,
-            "Cc": Cc_val,
-            "Dc": Dc_val,
             "Ax_opt": Ax_opt,       # Convenient access
-            "Bu_opt": Bu_opt
+            "Bu_opt": Bu_opt, 
+            "Cy_opt": Cy_opt,
+            "Dyw": Dyw,
         }
 
 # =============================================================================================== #
