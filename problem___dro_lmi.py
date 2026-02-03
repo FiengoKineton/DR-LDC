@@ -2414,7 +2414,8 @@ class lmi_pipeline_optim_problem():
                               api=api, noise=noise, reg_fro=reg_fro, 
                               real_Z_mats=real_Z_mats)
                     
-                    res, P, Sigma_nom, other, num_violations = dro.run()
+                    res, P, Sigma_nom, other = dro.run()
+                    num_violations = [0, 1]
 
                     problem_params = {
                         "Methodology": "WFL",

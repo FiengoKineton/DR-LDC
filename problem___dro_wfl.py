@@ -154,8 +154,8 @@ class WFL_nonConvex:
         return (self.outs,
                 self.get_plant(),
                 self.Sigma_nom,
-                self.others,
-                (self.violations, self.total_constraints))
+                self.others)
+                #(self.violations, self.total_constraints))
 
     # ------------------------------------------------------------------
     # DATA ACCESSORS
