@@ -1350,7 +1350,7 @@ class WFL_nonConvex:
         nlp = {'x': vars_cas, 'f': self.cas_obj, 'g': self.cas_con["g"]}
 
         opts = {
-            "ipopt.max_iter": 500,
+            "ipopt.max_iter": 5000,
             "ipopt.print_level": 5, 
             "ipopt.tol": 1e-4,
             "ipopt.acceptable_tol": 1e-3,

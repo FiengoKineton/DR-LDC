@@ -6,22 +6,22 @@
     "gamma": 0.5,
     "objective": 14.386063521261573,
     "spectral_radius_Acl": 0.9996543728187575,
-    "Z_cost": 6.632026112120944,
+    "Z_cost": 12.190766356152245,
     "lambda_opt": 19.176102998156598,
     "trace_Q_Sigma": 9.592037771722422,
     "real_Z_mats": true,
     "N_sims": 0,
-    "SNR": -3.0915977366711567
+    "SNR": -0.6207577883100704
   },
   "solver_performance": {
     "solver": "MOSEK",
     "status": "optimal",
     "num_violations": 0,
     "tot_constraints:": 3,
-    "Time_seconds": 0.4618412999989232,
+    "Time_seconds": 0.4230299000000741,
     "attempt": 1,
-    "Total_time": 0.4618412999989232,
-    "stress": 2.4020697152952466
+    "Total_time": 0.4230299000000741,
+    "stress": 2.3269631768341377
   },
   "problem_params": {
     "Methodology": "Baseline",
