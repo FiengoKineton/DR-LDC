@@ -29,10 +29,6 @@ class Utils:
     def _Z(n, m=None):
         m = n if m is None else m
         return np.zeros((n, m))
-
-    @staticmethod
-    def _sym(M: np.ndarray):
-        return 0.5 * (M + M.T) + useful.eps * useful._I(M.shape[0])
     
     @staticmethod
     def _val(m):
@@ -117,6 +113,9 @@ class Utils:
         return H
 
     # ------------------------------------------------------------------
+    def _sym(self, M: np.ndarray):
+        return 0.5 * (M + M.T) + self.eps * self._I(M.shape[0])
+    
     def _pseudo_inv(self, M: np.ndarray):
         return M.T @ np.linalg.inv(M @ M.T + self.eps * self._I(M.shape[0]))
 
