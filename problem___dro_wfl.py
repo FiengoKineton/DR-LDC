@@ -1,215 +1,47 @@
-import json, sys, time, psutil, os, numpy as np, cvxpy as cp, casadi as ca
-import matplotlib.pyplot as plt
-
-from pathlib import Path
-from typing import Dict, Any, List
-from utils___systems import Plant, Plant_cl, Controller, DROLMIResult, Noise
-from utils___matrices import MatricesAPI, recover_deltas, compose_closed_loop, Recover
+import sys, numpy as np, casadi as ca
+from utils___systems import DROLMIResult, Noise
+from utils___matrices import MatricesAPI
 from utils___ambiguity import Disturbances
-from utils___simulate import Open_Loop, Closed_Loop
-from utils___Nsims_mats import NsimsMatricesAnalyzer, mean_dict, select_representative_run, plot_first3_and_mean
+from utils___simulate import Open_Loop
+from scipy.signal import savgol_filter
 
 
+# =============================================================================================== #
 
 class WFL:
     def __new__(cls, *args, **kwargs):
         return WFL_nonConvex(*args, **kwargs)
 
-
 # =============================================================================================== #
 
-class WFL_nonConvex:
-    """
-    Direct data-driven DRO-LMI *senza* la Young–Schur relaxation.
-
-    - Identificazione A_hat, Bu_hat, Bw_hat, Cy_hat, Dyw_hat, Cz_hat, Dzu_hat, Dzw_hat
-      via i tuoi metodi.
-    - Introduce esplicitamente gli errori DeltaA, DeltaB con bound Frobenius
-      (beta_A, beta_B) e costruisce il blocco E come in eq. (B.1).
-    - Usa A_true = A_nom + E nel kernel Xi(A_true, B, C, D) del paper.
-    - Nessun P_bar, Ps, G, H, S, sigma_s, sigma_p.
-    """
+class Utils: 
+    def __init__(self, eps=1e-6):
+        self.eps = eps
+        self.aux_vars = []
 
     # ------------------------------------------------------------------
-    # INIT & helpers
-    # ------------------------------------------------------------------
-    def __init__(self,
-                 vals: tuple, model: str,
-                 api, noise,
-                 rho: float = 1e-2, eps: float = 1e-6, 
-                 N_sims: int = 1, L: int = 1,
-                 Bw_mode: str = "known_cov", Bw_type: str = "ident",
-                 real_Z_mats: bool = True,
-                 aug_mode: str = "std",
-                 eval_from_ol: bool = True,
-                 estm_noise: bool = False,
-                 reg_fro: bool = False):
-        
-        Bw_mode = "proj" #if estm_noise else Bw_mode
-
-        self.api = api
-        self.eps, self.rho = eps, rho
-        self.N_sims, self.L = N_sims, L
-        self.model, self.Bw_mode, self.vals, self.Bw_type = model, Bw_mode, vals, Bw_type
-        self.real_perf_mats = real_Z_mats
-        self.augmented = vals[3]
-        self.aug_mode = aug_mode
-        self.eval_from_ol = eval_from_ol
-        self.estm_noise = estm_noise
-
-        self.gamma = noise.gamma
-        self.var = noise.var
-        self.Sigma_nom = noise.Sigma_nom
-
-        self.inp = vals[4]
-        self.reg_fro = reg_fro
-
-    # basic helpers ----------------------------------------------------
-    def _I(self, n, m=None):
+    @staticmethod
+    def _I(n, m=None):
         m = n if m is None else m
         return np.eye(n, m)
 
-    def _Z(self, n, m=None):
+    @staticmethod
+    def _Z(n, m=None):
         m = n if m is None else m
         return np.zeros((n, m))
 
-    def _pseudo_inv(self, M: np.ndarray):
-        return M.T @ np.linalg.inv(M @ M.T + self.eps * self._I(M.shape[0]))
-
-    def _sym(self, M: np.ndarray):
-        return 0.5 * (M + M.T) + self.eps * self._I(M.shape[0])
-
-    def _val(self, m):
+    @staticmethod
+    def _sym(M: np.ndarray):
+        return 0.5 * (M + M.T) + useful.eps * useful._I(M.shape[0])
+    
+    @staticmethod
+    def _val(m):
         if m is None:
             return None
         return float(m) if np.isscalar(m) else m
 
-
-    # ------------------------------------------------------------------
-    # HELPERS (Cholesky Lifting)
-    # ------------------------------------------------------------------
-    def _negdef(self, matrix, name):
-        """
-        Enforces matrix < -eps*I via Cholesky decomposition.
-        Constraint: matrix + L*L.T + eps*I = 0
-        """
-        n = matrix.shape[0]
-        n_L = n * (n + 1) // 2
-        L_sym = ca.SX.sym(f"L_{name}", n_L)
-        
-        if not hasattr(self, "aux_vars"): self.aux_vars = []
-        self.aux_vars.append(L_sym)
-        
-        # Reconstruct L
-        L = ca.SX.zeros(n, n)
-        idx = 0
-        for i in range(n):
-            for j in range(i + 1):
-                L[i, j] = L_sym[idx]
-                idx += 1
-                
-        return ca.vec(matrix + L @ L.T + self.eps * ca.DM.eye(n))
-
-    def _posdef(self, matrix, name):
-        """
-        Enforces matrix > eps*I via Cholesky decomposition.
-        Constraint: matrix - L*L.T - eps*I = 0
-        """
-        n = matrix.shape[0]
-        n_L = n * (n + 1) // 2
-        L_sym = ca.SX.sym(f"L_{name}", n_L)
-        
-        if not hasattr(self, "aux_vars"): self.aux_vars = []
-        self.aux_vars.append(L_sym)
-        
-        L = ca.SX.zeros(n, n)
-        idx = 0
-        for i in range(n):
-            for j in range(i + 1):
-                L[i, j] = L_sym[idx]
-                idx += 1
-                
-        return ca.vec(matrix - (L @ L.T + self.eps * ca.DM.eye(n)))
-
-    # ------------------------------------------------------------------
-    # PUBLIC ENTRY
-    # ------------------------------------------------------------------
-    def run(self):
-        # 1. Prepare Data & Hankel Matrices
-        self.simulate_()
-        self.estm_mats() # Initial guess for Mp comes from here
-        self.build_wfl_hankels(L=self.L, use_z=False) # Build Hx, Hu, Hy matrices
-        
-        # 2. Build Optimization Problem
-        self.build_Phi() # Structural matrices (psi_1, etc.)
-        self.build_var() # Variables (now includes Mp, g, w)
-        self.build_con() # Constraints (LMI + WFL consistency)
-        self.build_obj() # Objective
-        self.build_reg() # Regularization (if any)
-        
-        # 3. Solve
-        self.solve_prb()
-        self.pack_outs()
-        
-        return (self.outs,
-                self.get_plant(),
-                self.Sigma_nom,
-                self.others)
-                #(self.violations, self.total_constraints))
-
-    # ------------------------------------------------------------------
-    # DATA ACCESSORS
-    # ------------------------------------------------------------------
-    def get_data(self):
-        return (self.data["X_"],
-                self.data["U_"],
-                self.data["X"],
-                self.data["Y_"],
-                self.data["Z_"])
-
-    def get_dims(self):
-        return (self.dims["nx"],
-                self.dims["nu"],
-                self.dims["nw"],
-                self.dims["ny"],
-                self.dims["nz"])
-
-    def get_mats(self):
-        return (self.mats["Bw"],
-                self.mats["Cz"],
-                self.mats["Dzw"],
-                self.mats["Dzu"])
-
-    def get_vars(self, which="main"):
-        if which == "main":
-            return (self.vars["lam"], self.vars["Q"], self.vars["P"])
-        elif which == "inner":
-            return (self.vars["K"], self.vars["L"],
-                    self.vars["Y"], self.vars["X"],
-                    self.vars["M"], self.vars["N"])
-        elif which == "mats":
-            return (self.vars["A_true"], self.vars["B"],
-                    self.vars["C"], self.vars["D"])
-        elif which == "t":
-            return (self.vars.get("tK", 0.0),
-                    self.vars.get("tL", 0.0),
-                    self.vars.get("tY", 0.0),
-                    self.vars.get("tX", 0.0),
-                    self.vars.get("tM", 0.0),
-                    self.vars.get("tN", 0.0))
-
-    def get_plant(self):
-        Bw, Cz, Dzw, Dzu = self.get_mats()
-        Ax = self.others["Ax_opt"]
-        Bu = self.others["Bu_opt"]
-        Cy = self.others["Cy_opt"]
-        Dyw = self.others["Dyw"]
-        return (Ax, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu)
-
-    # ------------------------------------------------------------------
-    # OPEN-LOOP SIMULATION + MEDOID (identico al tuo, accorciato)
-    # ------------------------------------------------------------------
-    def select_representative_run(self, datasets, keys=("X", "U", "Y", "Z", "X_next"),
+    @staticmethod
+    def select_representative_run(datasets, keys=("X", "U", "Y", "Z", "X_next"),
                                   weights=None):
         if not datasets:
             raise ValueError("datasets is empty")
@@ -265,6 +97,115 @@ class WFL_nonConvex:
         }
         return out
 
+    @staticmethod
+    def _block_hankel(D: np.ndarray, L: int) -> np.ndarray:
+        """
+        Build block Hankel H_L(D) from data D of shape (d, T).
+        Returns shape (d*L, T-L+1).
+        """
+        if D.ndim != 2:
+            raise ValueError("D must be 2D with shape (d, T).")
+        d, T = D.shape
+        if L < 1:
+            raise ValueError("L must be >= 1.")
+        if T < L:
+            raise ValueError(f"Need T >= L. Got T={T}, L={L}.")
+        N = T - L + 1
+        H = np.zeros((d * L, N))
+        for i in range(L):
+            H[i*d:(i+1)*d, :] = D[:, i:i+N]
+        return H
+
+    # ------------------------------------------------------------------
+    def _pseudo_inv(self, M: np.ndarray):
+        return M.T @ np.linalg.inv(M @ M.T + self.eps * self._I(M.shape[0]))
+
+    def _negdef(self, matrix, name):        # (Cholesky Lifting)
+        """
+        Enforces matrix < -eps*I via Cholesky decomposition.
+        Constraint: matrix + L*L.T + eps*I = 0
+        """
+        n = matrix.shape[0]
+        n_L = n * (n + 1) // 2
+        L_sym = ca.SX.sym(f"L_{name}", n_L)
+        
+        if not hasattr(self, "aux_vars"): self.aux_vars = []
+        self.aux_vars.append(L_sym)
+        
+        # Reconstruct L
+        L = ca.SX.zeros(n, n)
+        idx = 0
+        for i in range(n):
+            for j in range(i + 1):
+                L[i, j] = L_sym[idx]
+                idx += 1
+                
+        return ca.vec(matrix + L @ L.T + self.eps * ca.DM.eye(n))
+
+    def _posdef(self, matrix, name):        # (Cholesky Lifting)
+        """
+        Enforces matrix > eps*I via Cholesky decomposition.
+        Constraint: matrix - L*L.T - eps*I = 0
+        """
+        n = matrix.shape[0]
+        n_L = n * (n + 1) // 2
+        L_sym = ca.SX.sym(f"L_{name}", n_L)
+        
+        if not hasattr(self, "aux_vars"): self.aux_vars = []
+        self.aux_vars.append(L_sym)
+        
+        L = ca.SX.zeros(n, n)
+        idx = 0
+        for i in range(n):
+            for j in range(i + 1):
+                L[i, j] = L_sym[idx]
+                idx += 1
+                
+        return ca.vec(matrix - (L @ L.T + self.eps * ca.DM.eye(n)))
+
+class Initializer(Utils): 
+    def __init__(self, **kwargs):
+        
+        super().__init__(eps=kwargs.get("eps", 1e-6))
+
+        self.eval_from_ol = kwargs.get("eval_from_ol", True)
+        self.gamma = kwargs.get("gamma", 1.0)
+        self.Sigma_nom = kwargs.get("Sigma_nom", None)
+        self.var = kwargs.get("var", 1.0)
+        self.vals = kwargs.get("vals", None)
+        self.api = kwargs.get("api", None)
+        self.N_sims = kwargs.get("N_sims", 1)
+        self.estm_noise = kwargs.get("estm_noise", False)
+        self.Bw_mode = kwargs.get("Bw_mode", "known_cov")
+        self.Bw_type = kwargs.get("Bw_type", "ident")
+        self.aug_mode = kwargs.get("aug_mode", "std")
+        self.augmented = kwargs.get("augmented", False)
+        self.real_perf_mats = kwargs.get("real_perf_mats", True)
+        self.noiseless = kwargs.get("noiseless", True)
+
+
+    # ------------------------------------------------------------------
+    def get_data(self):
+        return (self.data["X_"],
+                self.data["U_"],
+                self.data["X"],
+                self.data["Y_"],
+                self.data["Z_"])
+
+    def get_dims(self):
+        return (self.dims["nx"],
+                self.dims["nu"],
+                self.dims["nw"],
+                self.dims["ny"],
+                self.dims["nz"])
+    
+    def get_mats(self):
+        return (self.mats["Bw"],
+                self.mats["Cz"],
+                self.mats["Dzw"],
+                self.mats["Dzu"])
+
+    # ------------------------------------------------------------------
     def simulate_(self):
         if not self.eval_from_ol:
             upd, FROM_DATA, *_ = self.vals
@@ -283,6 +224,13 @@ class WFL_nonConvex:
             X_, U_, Y_, Z_, X = (avg["X"], avg["U"],
                                  avg["Y"], avg["Z"],
                                  avg["X_next"])
+        
+        if self.noiseless:
+            X  = savgol_filter(X,  window_length=11, polyorder=3, axis=1)
+            X_ = savgol_filter(X_, window_length=11, polyorder=3, axis=1)
+            Y_ = savgol_filter(Y_, window_length=11, polyorder=3, axis=1)
+            U_ = savgol_filter(U_, window_length=11, polyorder=3, axis=1)
+            Z_ = savgol_filter(Z_, window_length=11, polyorder=3, axis=1)
 
         self.data = {"X": X, "X_": X_, "U_": U_, "Y_": Y_, "Z_": Z_}
         self.dims = {
@@ -293,8 +241,6 @@ class WFL_nonConvex:
             "nz": Z_.shape[0],
         }
 
-    # ------------------------------------------------------------------
-    # IDENTIFICAZIONE + B_w (uguale al tuo, ma calcolo betaA/B/E dal testo)
     # ------------------------------------------------------------------
     def estm_mats(self):
         X_, U_, X, Y_, Z_ = self.get_data()
@@ -310,8 +256,8 @@ class WFL_nonConvex:
             *_, Bw = self.api.build_AB_from_yaml()
             nw = Bw.shape[1]
         else: 
-            Bw, nw, self._residual_anisotropy_weights = self.estm_Bw(R)
-        W_ = self._pseudo_inv(Bw) @ R
+            Bw, nw, _ = self.estm_Bw(R)
+        W_ = self._pseudo_inv(Bw) @ R if not self.noiseless else np.zeros_like(R)
 
         if self.estm_noise:
             d = Disturbances(n=nw)
@@ -338,6 +284,7 @@ class WFL_nonConvex:
                 B_w=Bw, D_vw=Dzw, D_yw=Dyw, var=self.var,
                 Sigma_nom=self.Sigma_nom, N=N)
 
+        """
         # bound beta su [A Bu] come in appendice B (punto 3)
         ss = np.linalg.svd(Dx, compute_uv=False)
         smin = float(ss[-1]) if ss.size else 0.0
@@ -345,6 +292,7 @@ class WFL_nonConvex:
         self.beta = float(beta)
         self.beta_A = beta * np.sqrt(nx / (nx + nu))
         self.beta_B = beta * np.sqrt(nu / (nx + nu))
+        #"""
 
         # salviamo tutto
         self.dims["nw"] = nw
@@ -407,106 +355,234 @@ class WFL_nonConvex:
         return Bw, nw, (U, s, w)
 
     # ------------------------------------------------------------------
-    # VARIABILI
-    # ------------------------------------------------------------------
-    def _build_var(self):
+    def build_Phi(self):
         nx, nu, nw, ny, nz = self.get_dims()
-        Bw_init, Cz_init, _, Dzu_init = self.get_mats()
+
+        Ix, Iu, Iy, Iw, I2x = self._I(nx), self._I(nu), self._I(ny), self._I(nw), self._I(2*nx)
+        Oxy, Oux, O2xw, Oz2x = self._Z(nx, ny), self._Z(nu, nx), self._Z(2*nx, nw), self._I(nz, 2*nx)
+        Oxu = Oux.T; Oyx = Oxy.T; Ow2x = O2xw.T
         
-        # Initial guesses for Plant Matrices (from Least Squares in estm_mats)
-        Ax_init = self.mats["Ax"]
-        Bu_init = self.mats["Bu"]
-        Cy_init = self.mats["Cy"]
+        self.Psi_w = ca.DM(np.block([[O2xw], [Iw]]))
+        self.Psi_2x = ca.DM(np.block([[I2x], [Ow2x]]))
+        self.Psi_z = ca.DM(np.block([[I2x], [Oz2x]]))
 
-        cas = ca.SX 
+        self.psi_1 = ca.DM(np.block([[Ix, Oxy]]))
+        self.psi_2 = ca.DM(np.block([[Ix], [Oux]]))
+        self.psi_3 = ca.DM(np.block([[Oxu], [Iu]]))
+        self.psi_4 = ca.DM(np.block([[Oyx, Iy]]))
 
-        # --- Standard LMI Variables (Same as base class) ---
-        def symm_var(name, n): return cas.sym(name, n * (n + 1) // 2)
-        def full_sym(v, n):
-            M = cas.zeros(n, n)
-            idx = 0
-            for i in range(n):
-                for j in range(i, n):
-                    M[i, j] = v[idx]; M[j, i] = v[idx]; idx += 1
-            return M
+class Constructor(Initializer): 
+    def __init__(self, vals, api, noise, Bw_mode, **kwargs):
+        self.eps = eps = kwargs.get("eps", 1e-6)
+        super().__init__(eps=eps,
+                         eval_from_ol=kwargs.get("eval_from_ol", True), gamma=noise.gamma, N_sims=kwargs.get("N_sims", 1), vals=vals, api=api,
+                         estm_noise=kwargs.get("estm_noise", False), Bw_mode=Bw_mode, Bw_type=kwargs.get("Bw_type", "ident"), Sigma_nom=noise.Sigma_nom, var=noise.var,
+                         aug_mode=kwargs.get("aug_mode", "std"), augmented=vals[3], real_perf_mats = kwargs.get("real_perf_mats", True))
 
-        vX, vY, vQ = symm_var("X", nx), symm_var("Y", nx), symm_var("Q", nw)
-        K, L = cas.sym("K", nx, nx), cas.sym("L", nx, ny)
-        M_var, N_var = cas.sym("M", nu, nx), cas.sym("N", nu, ny) # Renamed to avoid clash with M (closed loop)
+    def build_Mc_from_XYKLmn(self, Ax, Bu, Cy, X, Y, K, Lvar, Mvar, Nvar):
+        """
+        Ax: (nx,nx), Bu: (nx,nu), Cy: (ny,nx)  (all casadi SX)
+        X,Y: (nx,nx) symmetric decision variables (SX expressions)
+        K: (nx,nx), Lvar: (nx,ny), Mvar: (nu,nx), Nvar: (nu,ny) decision variables (SX)
+        Returns: Ac,Bc,Cc,Dc,Mc as SX expressions
+        """
 
-        X, Y, Q = full_sym(vX, nx), full_sym(vY, nx), full_sym(vQ, nw)
-        lam = cas.sym("lam", 1)
+        def symmetrize(S, eps=1e-9):
+            n = S.size1()
+            return 0.5*(S + S.T) + eps*ca.SX.eye(n)
 
-        # --- NEW: WFL Variables ---
-        # 1. Mp: The Plant Matrix Block [Ax Bu; Cy 0]
-        #    We initialize it close to the LS estimate to help IPOPT
-        Mp = cas.sym("Mp", nx + ny, nx + nu)
+        def chol_lower_from_casadi(S):
+            """
+            CasADi's chol() convention can differ by backend.
+            Many builds return an upper-triangular R s.t. S = R.T @ R.
+            We convert to a lower L s.t. S = L @ L.T by setting L = R.T.
+            If your chol already returns lower, then L = chol(S) is fine.
+            """
+            R = ca.chol(S)     # typically upper
+            L = R.T            # lower candidate
+            return L
         
-        # 2. g: The behavioral vector (length = number of data samples in Hankel)
-        N_samples = self.wfl["N"]
-        g_wfl = cas.sym("g_wfl", N_samples)
+        nx = X.size1()
+        # S = I - X Y must be PD
+        S = ca.SX.eye(nx) - X @ Y
+        S = symmetrize(S, eps=self.eps)
 
-        # 3. w: The noise realization in the data equation
-        #    Dimensions match the "Future" stack: [x+; y] -> (nx + ny)
-        w_wfl = cas.sym("w_wfl", nx + ny, N_samples)
+        # Cholesky factorization S = L L^T
+        L = chol_lower_from_casadi(S)  # (nx,nx) lower triangular (intended)
 
-        # --- Extraction of System Matrices from Mp ---
-        # Using the psi matrices defined in the paper (Page 10)
-        # Ax = psi_1 * Mp * psi_2
-        Ax = self.psi_1 @ Mp @ self.psi_2
-        Bu = self.psi_1 @ Mp @ self.psi_3
-        Cy = self.psi_4 @ Mp @ self.psi_2
-        # Note: Bw is typically treated as known/estimated or fixed in this formulation
-        # unless we explicitly include it in Mp, but the paper fixes Bw in Section 2.4.
-        Bw = ca.DM(Bw_init) 
+        # Inverses via linear solves (more stable than explicit inv)
+        I = ca.SX.eye(nx)
+        Linv = ca.solve(L, I)          # L^{-1}
+        LinvT = Linv.T                 # L^{-\top}
 
-        # --- Controller Reconstruction (Symbolic) ---
-        # This maps (X,Y,K,L,M,N) -> (Ac,Bc,Cc,Dc) using the VARIABLE Ax, Bu, Cy
-        Ac, Bc, Cc, Dc, *_ = self.build_Mc_from_XYKLmn(Ax, Bu, Cy, X, Y, K, L, M_var, N_var)
-        Mc = ca.blockcat([[Ac, Bc],[Cc, Dc]])
+        # Core affine pieces
+        T1 = Mvar - Nvar @ Cy @ Y      # (nu,nx)
+        T2 = Lvar - X @ Bu @ Nvar      # (nx,ny)
 
-        # --- Closed Loop Construction ---
-        # Now constructed using the VARIABLE Mp components
-        A_cl = ca.blockcat([
-            [Ax + Bu @ Dc @ Cy,     Bu @ Cc],
-            [Bc @ Cy,               Ac]
-        ])
-        B_cl = ca.blockcat([
-            [Bw],
-            [ca.DM(self._Z(nx, nw))]
-        ])
+        Dc = Nvar
+        Cc = T1 @ LinvT                # (nu,nx)
+        Bc = Linv @ T2                 # (nx,ny)
+
+        # Ac = L^{-1} [K - XAxY - LC_yY - XBu(M - NC_yY)] L^{-\top}
+        mid = (K
+            - X @ Ax @ Y
+            - Lvar @ Cy @ Y
+            - X @ Bu @ T1)          # (nx,nx)
+        Ac = Linv @ mid @ LinvT
+
+        Mc = ca.blockcat([[Ac, Bc],
+                        [Cc, Dc]])
+        return Ac, Bc, Cc, Dc, Mc, S, L
+
+    def build_wfl_hankels(self, L: int = 1, use_z: bool = False):
+        """
+        Builds true block-Hankel matrices of depth L from self.data.
+
+        Uses:
+          self.data["X_"]: (nx, T)  = x_0..x_{T-1}
+          self.data["U_"]: (nu, T)  = u_0..u_{T-1}
+          self.data["Y_"]: (ny, T)  = y_0..y_{T-1}
+          self.data["X"] : (nx, T)  = x_1..x_T  (aligned with X_)
+          (optional) self.data["Z_"]: (nz, T)
+
+        For L=1, this reduces to simple stacking.
+        For L>1, it builds:
+          Hx  = H_L(X_)             shape (nx*L, N)
+          Hu  = H_L(U_)             shape (nu*L, N)
+          Hy  = H_L(Y_)             shape (ny*L, N)
+          Hx+ = H_L(X)              shape (nx*L, N)
+        where N = T - L + 1.
+
+        Stores to self.wfl:
+          self.wfl["L"], ["Hx"], ["Hu"], ["Hy"], ["Hx_plus"], and stacked Xp, Xf.
+
+        Returns:
+          Xp = [Hx; Hu]             shape ((nx+nu)*L, N)
+          Xf = [Hx_plus; Hy]        shape ((nx+ny)*L, N)
+          (optional) Hz = H_L(Z_)   shape (nz*L, N)
+        """
+        X_ = self.data["X_"]
+        U_ = self.data["U_"]
+        Y_ = self.data["Y_"]
+        Xp1 = self.data["X"]     # x^+ aligned (x_1..x_T)
+
+        # Basic checks
+        if not (X_.ndim == U_.ndim == Y_.ndim == Xp1.ndim == 2):
+            raise ValueError("X_,U_,Y_,X must be 2D arrays (dim, T).")
+        nx, T = X_.shape
+        _, Tu = U_.shape
+        _, Ty = Y_.shape
+        nx2, Tx = Xp1.shape
+        if not (Tu == Ty == Tx == T):
+            T = min(T, Tu, Ty, Tx)
+            X_, U_, Y_, Xp1 = X_[:, :T], U_[:, :T], Y_[:, :T], Xp1[:, :T]
+        if nx2 != nx:
+            raise ValueError("X has inconsistent state dimension vs X_.")
+
+        # True block Hankels
+        Hx      = self._block_hankel(X_,  L)
+        Hu      = self._block_hankel(U_,  L)
+        Hy      = self._block_hankel(Y_,  L)
+        Hx_plus = self._block_hankel(Xp1, L)
+
+        Xp = np.vstack([Hx, Hu])
+        Xf = np.vstack([Hx_plus, Hy])
+
+        self.wfl = getattr(self, "wfl", {})
+        self.wfl.update({
+            "L": L,
+            "Hx": Hx,
+            "Hu": Hu,
+            "Hy": Hy,
+            "Hx_plus": Hx_plus,
+            "Xp": Xp,
+            "Xf": Xf,
+            "T": T,
+            "N": Xp.shape[1],
+        })
+
+        if use_z:
+            Z_ = self.data.get("Z_")
+            if Z_ is None:
+                raise ValueError("use_z=True but self.data['Z_'] is missing.")
+            Hz = self._block_hankel(Z_, L)
+            self.wfl["Hz"] = Hz
+            return Xp, Xf, Hz
+
+        return Xp, Xf
+
+# =============================================================================================== #
+
+class WFL_nonConvex(Constructor):
+    
+    def __init__(self, vals, model, api, noise, **kwargs):
         
-        # Output matrices (assuming Cz, Dzu known/fixed for performance spec)
-        Cz, Dzu, Dzw = ca.DM(Cz_init), ca.DM(Dzu_init), ca.DM(self._Z(nz, nw))
-        C_cl = ca.blockcat([
-            [Cz + Dzu @ Dc @ Cy,    Dzu @ Cc]
-        ])
-        D_cl = Dzw # + Dzu @ Dc @ Dyw (Dyw is 0 in substitution)
+        Bw_mode = "proj" if kwargs.get("estm_noise", False) else kwargs.get("Bw_mode", "known_cov")
 
-        Mcl = ca.blockcat([[A_cl, B_cl], [C_cl, D_cl]])
+        self.api = api
+        self.eps, self.rho = kwargs.get("eps", 1e-6), kwargs.get("rho", 1e-2)
+        self.L = kwargs.get("L", 1)
+        self.model = model
+        self.inp = vals[4]
+        self.reg_fro = kwargs.get("reg_fro", False)
 
-        # Lyapunov Matrix P
-        Ix, Iz = ca.DM(np.eye(nx)), ca.DM(np.eye(nz))
-        P = ca.blockcat([[Y, Ix], [Ix, X]])
-        P_aug = ca.blockcat([
-            [P,                         ca.DM(self._Z(2*nx, nz))],
-            [ca.DM(self._Z(nz, 2*nx)),  Iz]
-        ])
+        super().__init__(vals, api, noise, Bw_mode, **kwargs)
+
+    
+    # ------------------------------------------------------------------
+    # PUBLIC ENTRY
+    # ------------------------------------------------------------------
+    def run(self):
+        # 1. Prepare Data & Hankel Matrices
+        self.simulate_()
+        self.estm_mats()
+        self.build_wfl_hankels(L=self.L, use_z=False)
         
-        # Matrix to be checked in LMI: P_aug * Mcl
-        # (This creates the non-convex interactions between Mp and X,Y,K...)
-        PMcl = P_aug @ Mcl
+        # 2. Build Optimization Problem
+        self.build_Phi() # Structural matrices (psi_1, etc.)
+        self.build_var() # Variables (now includes Mp, g, w)
+        self.build_con() # Constraints (LMI + WFL consistency)
+        self.build_obj() # Objective
+        self.build_reg() # Regularization (if any)
+        
+        # 3. Solve
+        self.solve_prb()
+        self.pack_outs()
+        
+        return (self.outs,
+                self.get_plant(),
+                self.Sigma_nom,
+                self.others)
+                #(self.violations, self.total_constraints))
 
-        self.cas_vars = {
-            "vX": vX, "vY": vY, "vQ": vQ, "X": X, "Y": Y, "Q": Q, "lam": lam,
-            "K": K, "L": L, "M": M_var, "N": N_var, "P": P,
-            "Mp": Mp, "g_wfl": g_wfl, "w_wfl": w_wfl,
-            "P_aug": P_aug, "Mcl": Mcl, "PMcl": PMcl, "Mc": Mc,
-            "Ac": Ac, "Bc": Bc, "Cc": Cc, "Dc": Dc,
-            # Init guesses
-            "Ax_init": Ax_init, "Bu_init": Bu_init, "Cy_init": Cy_init
-        }
+    # ------------------------------------------------------------------
+    def get_plant(self):
+        Bw, Cz, Dzw, Dzu = self.get_mats()
+        Ax = self.others["Ax_opt"]
+        Bu = self.others["Bu_opt"]
+        Cy = self.others["Cy_opt"]
+        Dyw = self.others["Dyw"]
+        return (Ax, Bw, Bu, Cy, Dyw, Cz, Dzw, Dzu)
 
+    def get_vars(self, which="main"):
+        if which == "main":
+            return (self.vars["lam"], self.vars["Q"], self.vars["P"])
+        elif which == "inner":
+            return (self.vars["K"], self.vars["L"],
+                    self.vars["Y"], self.vars["X"],
+                    self.vars["M"], self.vars["N"])
+        elif which == "mats":
+            return (self.vars["A_true"], self.vars["B"],
+                    self.vars["C"], self.vars["D"])
+        elif which == "t":
+            return (self.vars.get("tK", 0.0),
+                    self.vars.get("tL", 0.0),
+                    self.vars.get("tY", 0.0),
+                    self.vars.get("tX", 0.0),
+                    self.vars.get("tM", 0.0),
+                    self.vars.get("tN", 0.0))
+
+    # ------------------------------------------------------------------
     def build_var(self):
         nx, nu, nw, ny, nz = self.get_dims()
         Bw_init, Cz_init, _, Dzu_init = self.get_mats()
@@ -600,383 +676,7 @@ class WFL_nonConvex:
             "Ax_init": Ax_init, "Bu_init": Bu_init, "Cy_init": Cy_init
         }
 
-    def build_Phi(self):
-        nx, nu, nw, ny, nz = self.get_dims()
-
-        Ix, Iu, Iy, Iw, Iz, I2x = self._I(nx), self._I(nu), self._I(ny), self._I(nw), self._I(nz), self._I(2*nx)
-        Oxy, Oux, O2xw, Oz2x = self._Z(nx, ny), self._Z(nu, nx), self._Z(2*nx, nw), self._I(nz, 2*nx)
-        Oxu = Oux.T; Oyx = Oxy.T; Ow2x = O2xw.T; O2xz = Oz2x.T
-        
-        self.Psi_w = ca.DM(np.block([[O2xw], [Iw]]))
-        self.Psi_2x = ca.DM(np.block([[I2x], [Ow2x]]))
-        self.Psi_z = ca.DM(np.block([[I2x], [Oz2x]]))
-
-        self.psi_1 = ca.DM(np.block([[Ix, Oxy]]))
-        self.psi_2 = ca.DM(np.block([[Ix], [Oux]]))
-        self.psi_3 = ca.DM(np.block([[Oxu], [Iu]]))
-        self.psi_4 = ca.DM(np.block([[Oyx, Iy]]))
-
-    def build_Mc_from_XYKLmn(self, Ax, Bu, Cy, X, Y, K, Lvar, Mvar, Nvar):
-        """
-        Ax: (nx,nx), Bu: (nx,nu), Cy: (ny,nx)  (all casadi SX)
-        X,Y: (nx,nx) symmetric decision variables (SX expressions)
-        K: (nx,nx), Lvar: (nx,ny), Mvar: (nu,nx), Nvar: (nu,ny) decision variables (SX)
-        Returns: Ac,Bc,Cc,Dc,Mc as SX expressions
-        """
-
-        def symmetrize(S, eps=1e-9):
-            n = S.size1()
-            return 0.5*(S + S.T) + eps*ca.SX.eye(n)
-
-        def chol_lower_from_casadi(S):
-            """
-            CasADi's chol() convention can differ by backend.
-            Many builds return an upper-triangular R s.t. S = R.T @ R.
-            We convert to a lower L s.t. S = L @ L.T by setting L = R.T.
-            If your chol already returns lower, then L = chol(S) is fine.
-            """
-            R = ca.chol(S)     # typically upper
-            L = R.T            # lower candidate
-            return L
-        
-        nx = X.size1()
-        # S = I - X Y must be PD
-        S = ca.SX.eye(nx) - X @ Y
-        S = symmetrize(S, eps=self.eps)
-
-        # Cholesky factorization S = L L^T
-        L = chol_lower_from_casadi(S)  # (nx,nx) lower triangular (intended)
-
-        # Inverses via linear solves (more stable than explicit inv)
-        I = ca.SX.eye(nx)
-        Linv = ca.solve(L, I)          # L^{-1}
-        LinvT = Linv.T                 # L^{-\top}
-
-        # Core affine pieces
-        T1 = Mvar - Nvar @ Cy @ Y      # (nu,nx)
-        T2 = Lvar - X @ Bu @ Nvar      # (nx,ny)
-
-        Dc = Nvar
-        Cc = T1 @ LinvT                # (nu,nx)
-        Bc = Linv @ T2                 # (nx,ny)
-
-        # Ac = L^{-1} [K - XAxY - LC_yY - XBu(M - NC_yY)] L^{-\top}
-        mid = (K
-            - X @ Ax @ Y
-            - Lvar @ Cy @ Y
-            - X @ Bu @ T1)          # (nx,nx)
-        Ac = Linv @ mid @ LinvT
-
-        Mc = ca.blockcat([[Ac, Bc],
-                        [Cc, Dc]])
-        return Ac, Bc, Cc, Dc, Mc, S, L
-
-
-    # ============================================================
-    # WFL: build one-step "Hankel" stacks from self.data
-    # ============================================================
-
-    @staticmethod
-    def _block_hankel(D: np.ndarray, L: int) -> np.ndarray:
-        """
-        Build block Hankel H_L(D) from data D of shape (d, T).
-        Returns shape (d*L, T-L+1).
-        """
-        if D.ndim != 2:
-            raise ValueError("D must be 2D with shape (d, T).")
-        d, T = D.shape
-        if L < 1:
-            raise ValueError("L must be >= 1.")
-        if T < L:
-            raise ValueError(f"Need T >= L. Got T={T}, L={L}.")
-        N = T - L + 1
-        H = np.zeros((d * L, N))
-        for i in range(L):
-            H[i*d:(i+1)*d, :] = D[:, i:i+N]
-        return H
-
-    def build_wfl_hankels(self, L: int = 1, use_z: bool = False):
-        """
-        Builds true block-Hankel matrices of depth L from self.data.
-
-        Uses:
-          self.data["X_"]: (nx, T)  = x_0..x_{T-1}
-          self.data["U_"]: (nu, T)  = u_0..u_{T-1}
-          self.data["Y_"]: (ny, T)  = y_0..y_{T-1}
-          self.data["X"] : (nx, T)  = x_1..x_T  (aligned with X_)
-          (optional) self.data["Z_"]: (nz, T)
-
-        For L=1, this reduces to simple stacking.
-        For L>1, it builds:
-          Hx  = H_L(X_)             shape (nx*L, N)
-          Hu  = H_L(U_)             shape (nu*L, N)
-          Hy  = H_L(Y_)             shape (ny*L, N)
-          Hx+ = H_L(X)              shape (nx*L, N)
-        where N = T - L + 1.
-
-        Stores to self.wfl:
-          self.wfl["L"], ["Hx"], ["Hu"], ["Hy"], ["Hx_plus"], and stacked Xp, Xf.
-
-        Returns:
-          Xp = [Hx; Hu]             shape ((nx+nu)*L, N)
-          Xf = [Hx_plus; Hy]        shape ((nx+ny)*L, N)
-          (optional) Hz = H_L(Z_)   shape (nz*L, N)
-        """
-        X_ = self.data["X_"]
-        U_ = self.data["U_"]
-        Y_ = self.data["Y_"]
-        Xp1 = self.data["X"]     # x^+ aligned (x_1..x_T)
-
-        # Basic checks
-        if not (X_.ndim == U_.ndim == Y_.ndim == Xp1.ndim == 2):
-            raise ValueError("X_,U_,Y_,X must be 2D arrays (dim, T).")
-        nx, T = X_.shape
-        nu, Tu = U_.shape
-        ny, Ty = Y_.shape
-        nx2, Tx = Xp1.shape
-        if not (Tu == Ty == Tx == T):
-            T = min(T, Tu, Ty, Tx)
-            X_, U_, Y_, Xp1 = X_[:, :T], U_[:, :T], Y_[:, :T], Xp1[:, :T]
-        if nx2 != nx:
-            raise ValueError("X has inconsistent state dimension vs X_.")
-
-        # True block Hankels
-        Hx      = self._block_hankel(X_,  L)
-        Hu      = self._block_hankel(U_,  L)
-        Hy      = self._block_hankel(Y_,  L)
-        Hx_plus = self._block_hankel(Xp1, L)
-
-        Xp = np.vstack([Hx, Hu])
-        Xf = np.vstack([Hx_plus, Hy])
-
-        self.wfl = getattr(self, "wfl", {})
-        self.wfl.update({
-            "L": L,
-            "Hx": Hx,
-            "Hu": Hu,
-            "Hy": Hy,
-            "Hx_plus": Hx_plus,
-            "Xp": Xp,
-            "Xf": Xf,
-            "T": T,
-            "N": Xp.shape[1],
-        })
-
-        if use_z:
-            Z_ = self.data.get("Z_")
-            if Z_ is None:
-                raise ValueError("use_z=True but self.data['Z_'] is missing.")
-            Hz = self._block_hankel(Z_, L)
-            self.wfl["Hz"] = Hz
-            return Xp, Xf, Hz
-
-        return Xp, Xf
-
-    def wfl_rank_info(self, rcond: float = 1e-10):
-        """
-        Simple rank + conditioning report for Xp (useful to sanity-check data richness).
-        Requires build_wfl_hankels() called first, or will build it.
-        """
-        if not hasattr(self, "wfl") or "Xp" not in self.wfl:
-            self.build_wfl_hankels(use_z=False)
-
-        Xp = self.wfl["Xp"]
-        U, s, Vt = np.linalg.svd(Xp, full_matrices=False)
-        rank = int(np.sum(s > rcond * s[0])) if s.size else 0
-        smin = float(s[-1]) if s.size else 0.0
-        smax = float(s[0]) if s.size else 0.0
-        return {"rank": rank, "smax": smax, "smin": smin, "cond_est": (smax / max(smin, 1e-30))}
-
-    def define_M_wfl_cvxpy(self,
-                           L: int = 1,
-                           w_set: str = "l2_ball",
-                           eps_w: float = 1e-2,
-                           Q: np.ndarray = None,
-                           per_column: bool = True):
-        """
-        Builds WFL set constraints using block Hankels of depth L:
-            Xf = Mp Xp + W, with columns w_i in W-set.
-
-        Returns CVXPY variables Mp, W and constraint list.
-        Stores them under self.wfl["cvxpy"].
-        """
-        # Ensure Hankels exist
-        if not hasattr(self, "wfl") or self.wfl.get("L", None) != L:
-            self.build_wfl_hankels(L=L, use_z=False)
-
-        Xp = self.wfl["Xp"]
-        Xf = self.wfl["Xf"]
-        n_in, N = Xp.shape
-        n_out, N2 = Xf.shape
-        if N2 != N:
-            raise ValueError("Xp and Xf must have same number of columns.")
-
-        Mp = cp.Variable((n_out, n_in))
-        W  = cp.Variable((n_out, N))
-        constraints = [Xf == Mp @ Xp + W]
-
-        if w_set == "l2_ball":
-            if per_column:
-                for i in range(N):
-                    constraints.append(cp.norm(W[:, i], 2) <= eps_w)
-            else:
-                constraints.append(cp.norm(W, "fro") <= eps_w)
-
-        elif w_set == "fro_ball":
-            constraints.append(cp.norm(W, "fro") <= eps_w)
-
-        elif w_set == "ellipsoid":
-            if Q is None:
-                raise ValueError("w_set='ellipsoid' requires Q with shape (n_out, n_out).")
-            Q = np.asarray(Q)
-            if Q.shape != (n_out, n_out):
-                raise ValueError(f"Q must be {(n_out, n_out)}, got {Q.shape}.")
-            Qinv = np.linalg.inv(Q)
-            if not per_column:
-                raise ValueError("Ellipsoid should be imposed per-column. Set per_column=True.")
-            for i in range(N):
-                constraints.append(cp.quad_form(W[:, i], Qinv) <= 1.0)
-        else:
-            raise ValueError(f"Unknown w_set='{w_set}'")
-
-        self.wfl.setdefault("cvxpy", {})
-        self.wfl["cvxpy"].update({
-            "L": L, "Mp": Mp, "W": W, "constraints": constraints,
-            "w_set": w_set, "eps_w": eps_w
-        })
-        return Mp, W, constraints
-
-    def select_one_Mp_in_Mwfl(self,
-                              L: int = 1,
-                              w_set: str = "l2_ball",
-                              eps_w: float = 1e-2,
-                              Q: np.ndarray = None,
-                              objective: str = "min_fro",
-                              Mp_prior: np.ndarray = None,
-                              lam_prior: float = 1e-2,
-                              solver: str = None,
-                              verbose: bool = False):
-        """
-        Solve a convex program to pick one Mp from the WFL set.
-        """
-        Mp, W, cons = self.define_M_wfl_cvxpy(L=L, w_set=w_set, eps_w=eps_w, Q=Q, per_column=True)
-
-        if objective == "min_fro":
-            obj = cp.Minimize(cp.norm(Mp, "fro"))
-        elif objective == "prior":
-            if Mp_prior is None:
-                raise ValueError("objective='prior' requires Mp_prior.")
-            Mp_prior = np.asarray(Mp_prior)
-            if Mp_prior.shape != Mp.shape:
-                raise ValueError(f"Mp_prior shape {Mp_prior.shape} must match Mp shape {Mp.shape}.")
-            obj = cp.Minimize(cp.sum_squares(Mp - Mp_prior) + lam_prior * cp.sum_squares(W))
-        else:
-            raise ValueError(f"Unknown objective='{objective}'")
-
-        prob = cp.Problem(obj, cons)
-        prob.solve(solver=solver, verbose=verbose)
-
-        sol = {
-            "status": prob.status,
-            "objective_value": prob.value,
-            "Mp": None if Mp.value is None else Mp.value,
-            "W": None if W.value is None else W.value,
-        }
-        self.wfl["cvxpy"]["solution"] = sol
-        return sol
-
-
     # ------------------------------------------------------------------
-    # CONSTRAINTS: kernel del paper + bound su DeltaA/DeltaB
-    # ------------------------------------------------------------------
-    def _build_con(self):
-        nx, nu, nw, ny, nz = self.get_dims()
-
-        cv = self.cas_vars
-        P_aug  = cv["P_aug"]
-        Q      = cv["Q"]
-        lam    = cv["lam"]
-        Mcl    = cv["Mcl"]
-        Mp     = cv["Mp"]
-        PMcl   = cv["PMcl"]
-
-        I_w = ca.DM(self._I(nw))
-        I_xw = ca.DM(self._I(2*nx + nw))
-        Z_zw = ca.DM(self._Z(nz, nw))
-        Z_wxz = ca.DM(self._Z(nw, 2*nx+nz))
-
-        Mp_prior = ca.DM(np.block([
-            [cv["Ax_init"], cv["Bu_init"]],
-            [cv["Cy_init"], np.zeros((ny, nu))]
-        ]))
-
-        g_list = []
-
-        g_trust = ca.norm_fro(Mp - Mp_prior) - 0.05 * ca.norm_fro(Mp_prior)
-        g_list.append(g_trust)
-
-        # 1. Retrieve WFL Data
-        # Xp = [Hx; Hu], Xf = [Hx+; Hy]
-        Xp_dm = ca.DM(self.wfl["Xp"])
-        Xf_dm = ca.DM(self.wfl["Xf"])
-        
-        Mp = cv["Mp"]
-        g_vec = cv["g_wfl"]
-
-        # 2. Willems' Fundamental Lemma Constraint (Eq 2.14 / 2.16)
-        # [Hx+; Hy] * g = Mp * [Hx; Hu] * g + w
-        # We calculate the residual and force it to zero
-
-        
-        # Implementation of Eq 390 (Page 17):
-        lhs = Xf_dm @ g_vec
-        rhs = (Mp @ Xp_dm @ g_vec) #+ ca.sum2(w_mat) # Simplified interpretation
-        # Let's stick strictly to 2.14: 
-        # The constraint is valid for the specific trajectory defined by g.
-        g_data_consistency = lhs - rhs
-        g_list.append(g_data_consistency) # == 0
-
-
-        # ---------- kernel(s) ----------
-        if self.model == "correlated":
-            Xi = ca.blockcat([
-                [-P_aug @ (I_xw + (lam-1)*self.Psi_w@self.Psi_w.T), lam*self.Psi_w, (PMcl).T],
-                [lam*self.Psi_w.T,                                  -Q -lam*I_w,    Z_wxz   ],
-                [PMcl,                                              Z_zw,           -P_aug  ]
-            ])
-            #g_list.append(ca.mmax(ca.eig_symbolic(Xi)) + self.eps) # <= 0
-            g_list.append(self._negdef(Xi, "Xi"))
-
-        elif self.model == "independent":
-            # Xi1
-            Xi1 = ca.blockcat([
-                [-self.Psi_z.T @ P_aug @ self.Psi_z,    (PMcl @ self.Psi_2x).T   ],
-                [PMcl @ self.Psi_2x,                    -P_aug                   ]
-            ])
-
-
-            # Xi2
-            Xi2 = ca.blockcat([
-                [-lam * I_w,                lam * I_w,          (PMcl @ self.Psi_w).T   ],
-                [ lam * I_w,                -Q - lam * I_w,     Z_wxz                   ],
-                [ PMcl @ self.Psi_w,        Z_wxz.T,            -P_aug                  ]
-            ])
-
-
-            # ca.mman or ca.mmin?
-            g_list.append(self._negdef(Xi1, "Xi1")) # <= 0
-            g_list.append(self._negdef(Xi2, "Xi2")) # <= 0
-        else:
-            raise ValueError("model must be 'correlated' or 'independent'")
-        
-        
-        # Positive Definite constraints (P > 0, Q > 0, lam > 0)
-        g_list.append(self._posdef(P_aug, "P_aug")) # <= 0
-        g_list.append(self._posdef(Q, "Q")) # <= 0
-        g_list.append(-lam) # <= 0
-
-        self.cas_con = {"g": ca.vertcat(*g_list), "g_list": g_list}
-
     def build_con(self):
         nx, nu, nw, ny, nz = self.get_dims()
         cv = self.cas_vars
@@ -1056,8 +756,6 @@ class WFL_nonConvex:
         self.cas_con = {"g": ca.vertcat(*g_list), "g_list": g_list}
 
     # ------------------------------------------------------------------
-    # OBJECTIVE & REG
-    # ------------------------------------------------------------------
     def build_obj(self):
         """
         Build the scalar objective in CasADi:
@@ -1078,13 +776,12 @@ class WFL_nonConvex:
         # Total Objective
         self.cas_obj = J_ctrl #+ 1e-2 * J_model
 
+    # ------------------------------------------------------------------
     def build_reg(self):
         """
         Optional regularizer (non-structural, just to tame the search).
         """
-        self.cas_reg = 0.0
-        return
-    
+            
         if self.reg_fro:
             cv = self.cas_vars
             K = cv["K"]; L = cv["L"]; M = cv["M"]; N = cv["N"]
@@ -1095,178 +792,10 @@ class WFL_nonConvex:
                 ca.sumsqr(X) + ca.sumsqr(Y))
 
             self.cas_reg = self.rho * reg
-
+        else: 
+            self.cas_reg = 0.0
 
     # ------------------------------------------------------------------
-    # SOLVE: IPOPT Call & Result Unpacking
-    # ------------------------------------------------------------------
-    def _solve_prb(self):
-        cv = self.cas_vars
-        nx, nu, nw, ny, nz = self.get_dims()
-
-        # 1. Standard Variables Vectorization (x0 calculation)
-        # ----------------------------------------------------
-        n_vX = nx * (nx + 1) // 2
-        n_vY = nx * (nx + 1) // 2
-        n_vQ = nw * (nw + 1) // 2
-        n_lam = 1
-        n_K = nx * nx
-        n_L = nx * ny
-        n_M = nu * nx
-        n_N = nu * ny
-        n_Mp = (nx + ny) * (nx + nu)
-        n_g = self.wfl["N"]
-        n_w = (nx + ny) * self.wfl["N"]
-
-        # Helper to vectorize matrices column-major (standard for CasADi)
-        def vec(mat): return np.array(mat).flatten('F')
-        def vecsym(mat): # extract triu elements for symmetric vars
-            vals = []
-            m = np.triu(mat)
-            for i in range(len(mat)):
-                for j in range(i, len(mat)):
-                    vals.append(m[i,j])
-            return np.array(vals)
-
-        # LMI Vars Init
-        x0_X = vecsym(np.eye(nx))
-        x0_Y = vecsym(np.eye(nx))
-        x0_Q = vecsym(np.eye(nw))
-        x0_lam = np.array([1.0]) 
-        
-        x0_K = vec(np.eye(nx))
-        x0_L = vec(np.zeros((nx, ny)))
-        x0_M = vec(np.zeros((nu, nx)))
-        x0_N = vec(np.zeros((nu, ny)))
-
-        # WFL Vars Init
-        Mp_est = np.block([
-            [cv["Ax_init"], cv["Bu_init"]],
-            [cv["Cy_init"], np.zeros((ny, nu))]
-        ])
-        x0_Mp = vec(Mp_est)
-        x0_g = np.zeros(n_g)
-        x0_w = np.zeros(n_w)
-
-        # Concatenate Main x0
-        x0_main = np.concatenate([
-            x0_X, x0_Y, x0_Q, x0_lam, 
-            x0_K, x0_L, x0_M, x0_N, 
-            x0_Mp, x0_g, x0_w
-        ])
-        print("check 1")
-
-        # 2. Auxiliary Variables Init (L matrices for Cholesky lifting)
-        # ------------------------------------------------------------
-        # We need to initialize the L matrices to Identity (safe guess).
-        # Initializing them to 0 causes singular gradients.
-        x0_aux_list = []
-        
-        if hasattr(self, "aux_vars"):
-            for aux in self.aux_vars:
-                # Calculate matrix dimension 'n' from vector length 'N'
-                # Length = n(n+1)/2  =>  n^2 + n - 2*Length = 0
-                N_len = aux.shape[0]
-                n = int((-1 + np.sqrt(1 + 8 * N_len)) / 2)
-
-                # Initialize L as Identity matrix (Diagonal=1, others=0)
-                L_init = np.eye(n)
-                
-                # Extract elements in the exact order created by _negdef/_posdef
-                # (Iterate rows, then cols up to diagonal)
-                vals = []
-                for i in range(n):
-                    for j in range(i + 1):
-                        vals.append(L_init[i, j])
-                x0_aux_list.append(np.array(vals))
-
-        x0_aux = np.concatenate(x0_aux_list) if x0_aux_list else np.array([])
-        
-        # FULL x0
-        x0 = np.concatenate([x0_main, x0_aux])
-
-        print("check 2")
-
-        # 3. Setup Solver
-        # ----------------------------------------------------
-        # Define Symbolic Vector 'x' for NLP
-        vars_main = ca.vertcat(
-            cv["vX"], cv["vY"], cv["vQ"], cv["lam"],
-            ca.vec(cv["K"]), ca.vec(cv["L"]), ca.vec(cv["M"]), ca.vec(cv["N"]),
-            ca.vec(cv["Mp"]), cv["g_wfl"], ca.vec(cv["w_wfl"])
-        )
-        
-        # Append Auxiliary Variables to the symbolic vector
-        # THIS WAS THE MISSING PART CAUSING THE ERROR
-        if hasattr(self, "aux_vars"):
-            vars_cas = ca.vertcat(vars_main, *self.aux_vars)
-        else:
-            vars_cas = vars_main
-        
-        nlp = {
-            'x': vars_cas,
-            'f': self.cas_obj,
-            'g': self.cas_con["g"]
-        }
-
-        # Ipopt Options
-        opts = {
-            "ipopt.max_iter": 500,
-            "ipopt.print_level": 5, 
-            "ipopt.tol": 1e-4,
-            "ipopt.acceptable_tol": 1e-3,
-        }
-        
-        self.solver_obj = ca.nlpsol("solver", "ipopt", nlp, opts)
-        print("check 3")
-
-        # 4. Solve
-        # ----------------------------------------------------
-        # All Lifted LMI constraints are EQUALITIES (== 0).
-        # All WFL constraints are EQUALITIES (== 0).
-        # Trust Region is INEQUALITY (<= 0).
-        # Lambda is INEQUALITY (<= 0).
-        
-        lbg = np.zeros(self.cas_con["g"].shape[0])
-        ubg = np.zeros(self.cas_con["g"].shape[0])
-        
-        # Manually relax bounds for known inequalities.
-        # Index 0 is Trust Region (always appended first in build_con)
-        lbg[0] = -np.inf 
-        
-        # Last index is Lambda (always appended last in build_con)
-        lbg[-1] = -np.inf
-
-        res = self.solver_obj(x0=x0, lbg=lbg, ubg=ubg)
-        
-        self.status = self.solver_obj.stats()["return_status"]
-        self.success = self.status == "Solve_Succeeded"
-        self.obj_val = float(res["f"])
-        self.sol_x = res["x"].full().flatten()
-
-        # 5. Store unpacked numeric values
-        # ----------------------------------------------------
-        # We only need to unpack the "main" variables. 
-        # The aux variables (at the end of sol_x) can be ignored.
-        idx = 0
-        def eat(n): nonlocal idx; out = self.sol_x[idx:idx+n]; idx += n; return out
-        
-        self.res_vals = {}
-        self.res_vals["vX"] = eat(n_vX)
-        self.res_vals["vY"] = eat(n_vY)
-        self.res_vals["vQ"] = eat(n_vQ)
-        self.res_vals["lam"] = eat(n_lam)
-        self.res_vals["K"] = eat(n_K).reshape((nx, nx), order='F')
-        self.res_vals["L"] = eat(n_L).reshape((nx, ny), order='F')
-        self.res_vals["M"] = eat(n_M).reshape((nu, nx), order='F')
-        self.res_vals["N"] = eat(n_N).reshape((nu, ny), order='F')
-        self.res_vals["Mp"] = eat(n_Mp).reshape((nx + ny, nx + nu), order='F')
-        self.res_vals["g_wfl"] = eat(n_g)
-        self.res_vals["w_wfl"] = eat(n_w).reshape((nx + ny, self.wfl["N"]), order='F')
-        
-        # We stop eating here. The rest of self.sol_x contains the optimized L factors,
-        # which we don't need for the controller reconstruction.
-
     def solve_prb(self):
         cv = self.cas_vars
         nx, nu, nw, ny, nz = self.get_dims()
@@ -1403,8 +932,6 @@ class WFL_nonConvex:
         self.res_vals["w_wfl"] = eat(n_w).reshape((nx + ny, self.wfl["N"]), order='F')
 
     # ------------------------------------------------------------------
-    # PACK OUTS: Convert Results to Output Object
-    # ------------------------------------------------------------------
     def pack_outs(self):
         # 1. Reconstruct Symmetric Matrices from Vectors
         def reconstruct_sym(v, n):
@@ -1496,8 +1023,6 @@ class WFL_nonConvex:
         }
 
 # =============================================================================================== #
-
-
 
 if __name__ == "__main__":
 
@@ -1611,3 +1136,114 @@ if __name__ == "__main__":
 
     print("Mp_hat shape:", Mp_hat.shape)
     #"""
+
+
+    """
+    def wfl_rank_info(self, rcond: float = 1e-10):
+        # Simple rank + conditioning report for Xp (useful to sanity-check data richness).
+        # Requires build_wfl_hankels() called first, or will build it.
+        if not hasattr(self, "wfl") or "Xp" not in self.wfl:
+            self.build_wfl_hankels(use_z=False)
+
+        Xp = self.wfl["Xp"]
+        U, s, Vt = np.linalg.svd(Xp, full_matrices=False)
+        rank = int(np.sum(s > rcond * s[0])) if s.size else 0
+        smin = float(s[-1]) if s.size else 0.0
+        smax = float(s[0]) if s.size else 0.0
+        return {"rank": rank, "smax": smax, "smin": smin, "cond_est": (smax / max(smin, 1e-30))}
+
+    def define_M_wfl_cvxpy(self,
+                           L: int = 1,
+                           w_set: str = "l2_ball",
+                           eps_w: float = 1e-2,
+                           Q: np.ndarray = None,
+                           per_column: bool = True):
+        # Builds WFL set constraints using block Hankels of depth L:
+        #     Xf = Mp Xp + W, with columns w_i in W-set.
+        # 
+        # Returns CVXPY variables Mp, W and constraint list.
+        # Stores them under self.wfl["cvxpy"].
+        # Ensure Hankels exist
+        if not hasattr(self, "wfl") or self.wfl.get("L", None) != L:
+            self.build_wfl_hankels(L=L, use_z=False)
+
+        Xp = self.wfl["Xp"]
+        Xf = self.wfl["Xf"]
+        n_in, N = Xp.shape
+        n_out, N2 = Xf.shape
+        if N2 != N:
+            raise ValueError("Xp and Xf must have same number of columns.")
+
+        Mp = cp.Variable((n_out, n_in))
+        W  = cp.Variable((n_out, N))
+        constraints = [Xf == Mp @ Xp + W]
+
+        if w_set == "l2_ball":
+            if per_column:
+                for i in range(N):
+                    constraints.append(cp.norm(W[:, i], 2) <= eps_w)
+            else:
+                constraints.append(cp.norm(W, "fro") <= eps_w)
+
+        elif w_set == "fro_ball":
+            constraints.append(cp.norm(W, "fro") <= eps_w)
+
+        elif w_set == "ellipsoid":
+            if Q is None:
+                raise ValueError("w_set='ellipsoid' requires Q with shape (n_out, n_out).")
+            Q = np.asarray(Q)
+            if Q.shape != (n_out, n_out):
+                raise ValueError(f"Q must be {(n_out, n_out)}, got {Q.shape}.")
+            Qinv = np.linalg.inv(Q)
+            if not per_column:
+                raise ValueError("Ellipsoid should be imposed per-column. Set per_column=True.")
+            for i in range(N):
+                constraints.append(cp.quad_form(W[:, i], Qinv) <= 1.0)
+        else:
+            raise ValueError(f"Unknown w_set='{w_set}'")
+
+        self.wfl.setdefault("cvxpy", {})
+        self.wfl["cvxpy"].update({
+            "L": L, "Mp": Mp, "W": W, "constraints": constraints,
+            "w_set": w_set, "eps_w": eps_w
+        })
+        return Mp, W, constraints
+
+    def select_one_Mp_in_Mwfl(self,
+                              L: int = 1,
+                              w_set: str = "l2_ball",
+                              eps_w: float = 1e-2,
+                              Q: np.ndarray = None,
+                              objective: str = "min_fro",
+                              Mp_prior: np.ndarray = None,
+                              lam_prior: float = 1e-2,
+                              solver: str = None,
+                              verbose: bool = False):
+        # Solve a convex program to pick one Mp from the WFL set.
+        Mp, W, cons = self.define_M_wfl_cvxpy(L=L, w_set=w_set, eps_w=eps_w, Q=Q, per_column=True)
+
+        if objective == "min_fro":
+            obj = cp.Minimize(cp.norm(Mp, "fro"))
+        elif objective == "prior":
+            if Mp_prior is None:
+                raise ValueError("objective='prior' requires Mp_prior.")
+            Mp_prior = np.asarray(Mp_prior)
+            if Mp_prior.shape != Mp.shape:
+                raise ValueError(f"Mp_prior shape {Mp_prior.shape} must match Mp shape {Mp.shape}.")
+            obj = cp.Minimize(cp.sum_squares(Mp - Mp_prior) + lam_prior * cp.sum_squares(W))
+        else:
+            raise ValueError(f"Unknown objective='{objective}'")
+
+        prob = cp.Problem(obj, cons)
+        prob.solve(solver=solver, verbose=verbose)
+
+        sol = {
+            "status": prob.status,
+            "objective_value": prob.value,
+            "Mp": None if Mp.value is None else Mp.value,
+            "W": None if W.value is None else W.value,
+        }
+        self.wfl["cvxpy"]["solution"] = sol
+        return sol
+    #"""
+
