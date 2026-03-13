@@ -1539,7 +1539,7 @@ class Young_Schur_dro_lmi:
             W_ = self._pseudo_inv(Bw) @ R
 
 
-        else: 
+        else: ########### TRUE BOUNDS-BASED ESTIMATION (with confidence intervals) ######################################
             delta = 0.05
             N_sims_new = int(np.floor(8 * (nx + nu) + 16 * np.log(4/delta))) + 1
             full_datasets = self.get_dataset(N_sims=N_sims_new)
