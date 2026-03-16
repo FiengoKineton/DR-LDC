@@ -1027,7 +1027,7 @@ def Young_dro_lmi(
 
 # =============================================================================================== #
 
-def DeePC_dro_lmi(
+def DeePC_dro_lmi(                      # (Gx, Gy, Gz) written
     api: MatricesAPI,
     #data: Data,
     vals: tuple,
@@ -1279,7 +1279,7 @@ def DeePC_dro_lmi(
 
 # =============================================================================================== #
 
-class Young_Schur_dro_lmi: 
+class Young_Schur_dro_lmi:              # con_old (written) & con_new (written)
     def __init__(self, 
                  vals: tuple, model: str,
                  api: MatricesAPI, noise: Noise, 

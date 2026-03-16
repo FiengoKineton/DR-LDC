@@ -69,13 +69,13 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         if _method=="lmi":
             if _upd:
                 if _nonConvex: 
-                    _method = "lmi-nonConvex"
+                    _method = "lmi-nonConvex"       # WFL
                 elif _estm:
-                    _method = "lmi-estm"
+                    _method = "lmi-estm"            # Estm_dro_lmi
                 elif not _old: 
-                    _method = "lmi-YoungSchur"
+                    _method = "lmi-YoungSchur"      # Young_Schur_dro_lmi
                 else:
-                    _method = "lmi-upd"
+                    _method = "lmi-upd"             # Young_dro_lmi or DeePC_dro_lmi
             else:
                 _method = "lmi"
 
