@@ -1,13 +1,23 @@
+#| Function              |        upd |  FROM_DATA | non_convex | estm_only | old_upd | approach     |
+#| --------------------- | ---------: | ---------: | ---------: | --------: | ------: | ------------ |
+#| `Baseline_dro_lmi`    | `False` or | `False` or |          * |         * |       * | *            |
+#| `DeePC_dro_lmi`       |       True |       True |      False |     False |    True | `"DeePC"`    |
+#| `Young_dro_lmi`       |       True |       True |      False |     False |    True | `!= "DeePC"` |
+#| `Young_Schur_dro_lmi` |       True |       True |      False |     False |   False | *            |
+#| `Estm_dro_lmi`        |       True |       True |      False |      True |       * | *            |
+#| `WFL`                 |       True |       True |       True |         * |       * | *            |
+
+
 params:
   dimensions: {nx: 7, nu: 1, nw: 2, ny: 3}                                      # set
   method: "lmi"                                                                 # set | may be var ("lmi" or "base")
   use_set_out_mats: 0                                                           # set | may be var (true or false)
   solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")
 
-  approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
-  old_upd: 0              # if 0 uses Young_Schur_dro_lmi                       # set
+  approach: "DeePC"                                                              # set | may be var ("DeePC", "Young", "Mats")
+  old_upd: 1              # if 0 uses Young_Schur_dro_lmi                       # set
   estm_only: 0            # if 1 uses Estm_dro_lmi                              # VAR ------------------------------ true or false
-  non_convex: 1           # if 1 uses WFL                                       # VAR ------------------------------ true or false
+  non_convex: 0           # if 1 uses WFL                                       # VAR ------------------------------ true or false
   Nsims_mats: 0           # if 1 uses NsimsMatricesAnalyzer                     # VAR ------------------------------ true or false
   estm_with_bounds: 1
 
@@ -32,7 +42,7 @@ params:
   directories:
     data: "./out/data/session_"                                                 # set
     artifacts: "./out/artifacts/"                                               # set
-    runID: "wfl"
+    runID: "temp"
 
   ambiguity:
     model: "2W"                                                                 # VAR ------------------------------ [2W, W2, zero, Gaussian]

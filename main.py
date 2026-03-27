@@ -58,6 +58,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         _runID = p.get("directories", {}).get("runID", "temp")
         _type = p.get("plant", {}).get("type", "explicit")
         _method = p.get("method", "lmi")
+        _approach = p.get("approach", "DeePC")
 
         if m == "W2":
             _model = p.get("model", "independent")
@@ -75,7 +76,11 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
                 elif not _old: 
                     _method = "lmi-YoungSchur"      # Young_Schur_dro_lmi
                 else:
-                    _method = "lmi-upd"             # Young_dro_lmi or DeePC_dro_lmi
+                    #_method = "lmi-upd"             # Young_dro_lmi or DeePC_dro_lmi (if approach==DeePC)
+                    if _approach=="DeePC":
+                        _method = "lmi-DeePC"
+                    else: 
+                        _method = "lmi-Young"
             else:
                 _method = "lmi"
 
