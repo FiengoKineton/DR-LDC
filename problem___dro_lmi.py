@@ -1246,10 +1246,13 @@ def DeePC_dro_lmi(                      # (Gx, Gy, Gz) written
     violation_values = []
     violations = 0
     for c in cons:
-        v = float(c.violation())
-        violation_values.append(v)
-        print(c, "violation:", c.violation())
-        if v > 1e-6:    violations += 1
+        try: 
+            v = float(c.violation())
+            violation_values.append(v)
+            print(c, "violation:", c.violation())
+            if v > 1e-6:    violations += 1
+        except Exception as e:
+            pass
 
     # Returning solutions -------------
     P_val, Q_val, K_val, L_val, M_val, N_val, X_val, Y_val \
@@ -2321,7 +2324,7 @@ class lmi_pipeline_optim_problem():
                             if approach == "DeePC":
                                 real_Z_mats = False
                                 N_sims = 0
-                                res, P, Sigma_nom, other, num_violations = DeePC_dro_lmi(
+                                res, plant, Sigma_nom, other, num_violations = DeePC_dro_lmi(
                                     api=api,
                                     vals=(upd, FROM_DATA, plot),
                                     noise=noise,
@@ -2337,7 +2340,7 @@ class lmi_pipeline_optim_problem():
                                 }
                             else:
                                 real_Z_mats = False
-                                res, P, Sigma_nom, other, num_violations = Young_dro_lmi(
+                                res, plant, Sigma_nom, other, num_violations = Young_dro_lmi(
                                     api=api,
                                     vals=(upd, FROM_DATA, plot),
                                     noise=noise,

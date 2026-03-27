@@ -124,7 +124,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
                                              FROM_DATA=FROM_DATA, init_cond=_init_cond, disturbance_type=_model, )
 
         if COST or info:
-            return opt._return_final_infos(), _model
+            return opt._return_final_infos(), _model, out
         
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
@@ -622,7 +622,7 @@ def NsimSweep_FROM_DATA(
     COST: bool = True,
     N_sims_values: list[int] | None = None,
     runs_per_N: int = 10,
-):
+    ):
     """
     Sweep N_sims for FROM_DATA=True, run `main` multiple times per value,
     and aggregate mean / std of J and rho.
@@ -921,13 +921,18 @@ def NsimSweep_FROM_DATA(
     if plot:
         plt.show()
 
-def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
-    """
-    Pretty-print a comparison table between MBD and DDD info dicts.
 
-    Expected keys:
-        "J", "lamda", "rho", "time", "attempts", "stress"
+def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict, path: str):
     """
+    Pretty-print AND save a comparison table between MBD and DDD info dicts.
+
+    Args:
+        m: title (e.g., "2W_independent")
+        infos_mbd: dict for MBD
+        infos_ddd: dict for DDD
+        path: full file path (e.g., "results/summary.txt")
+    """
+
     metrics = [
         ("J",               "Cost J"),
         ("obj",             "Objective"),
@@ -942,34 +947,57 @@ def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict):
     ]
 
     def fmt(v):
-        # crude but effective formatter
         if isinstance(v, (int, float)):
             return f"{v:.4g}"
         return str(v)
 
-    print("\n" + "=" * 70)
-    print(f" {m} summary ".center(70, "="))
-    print("=" * 70)
+    # === BUILD STRING ===
+    lines = []
+
+    lines.append("\n" + "=" * 70)
+    lines.append(f" {m} summary ".center(70, "="))
+    lines.append("=" * 70)
 
     header = f"{'Metric':<15}{'MBD':>15}{'DDD':>15}{'DDD - MBD':>15}"
-    print(header)
-    print("-" * 70)
+    lines.append(header)
+    lines.append("-" * 70)
 
     for key, label in metrics:
         v_m = infos_mbd.get(key, None)
         v_d = infos_ddd.get(key, None)
 
-        # difference only if both are numeric
         if isinstance(v_m, (int, float)) and isinstance(v_d, (int, float)):
             diff = v_d - v_m
             diff_str = f"{diff:+.3g}"
         else:
             diff_str = ""
 
-        print(f"{label:<15}{fmt(v_m):>15}{fmt(v_d):>15}{diff_str:>15}")
+        line = f"{label:<15}{fmt(v_m):>15}{fmt(v_d):>15}{diff_str:>15}"
+        lines.append(line)
 
-    print("=" * 70 + "\n")
+    lines.append("=" * 70 + "\n")
 
+    # join everything
+    table_str = "\n".join(lines)
+
+    # === PRINT ===
+    print(table_str)
+
+    # === SAVE TO FILE ===
+    if path is not None:
+        path = path.rstrip("/")
+
+        # remove trailing "_MBD" if present
+        if path.endswith("_MBD"):
+            path = path[:-4]
+
+        # final file path (same directory, just rename)
+        final_path = f"{path}_summary.txt"
+
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+
+        with open(final_path, "w", encoding="utf-8") as f:
+            f.write(table_str)
 
 # ----------------------------------------------------------------------------------
 
@@ -986,11 +1014,11 @@ if __name__ == "__main__":
     if not COST and not bool(p.get("test_Nsims", 0)):
         ALL = bool(p.get("ALL", False))
         if ALL:
-            infos_mbd, m = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL, info=True)
-            infos_ddd, _ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL, info=True)
+            infos_mbd, m, o = main(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL, info=True)
+            infos_ddd, _, _ = main(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL, info=True)
             main(comp=True, gamma=gamma, ALL=ALL)
 
-            print_infos_comparison(m, infos_mbd, infos_ddd)
+            print_infos_comparison(m, infos_mbd, infos_ddd, o)
         else:
             main(gamma=gamma)
     else: 
