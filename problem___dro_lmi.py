@@ -1148,7 +1148,7 @@ def DeePC_dro_lmi(                      # (Gx, Gy, Gz) written
                 mhu_y * (cp.trace((Dy @ Dy.T + ry * I(Dy.shape[0])) @ Gy) - cp.log_det(Gy)) + \
                 mhu_z * (cp.trace((Dz @ Dz.T + rz * I(Dz.shape[0])) @ Gz) - cp.log_det(Gz))
 
-    obj_dro += obj_est
+    obj_dro += obj_est/10
 
     obj = obj_dro + reg
 
@@ -1261,10 +1261,15 @@ def DeePC_dro_lmi(                      # (Gx, Gy, Gz) written
         = _val(A.value), _val(B.value), _val(C.value), _val(D.value)
 
     # Results -------------------------
+    try:
+        value = float(prob.value)
+    except Exception as e:
+        value = None
+    
     dro = DROLMIResult(
         solver=solver,
         status=prob.status,
-        obj_value=float(prob.value),
+        obj_value=value,
         gamma=gamma,
         lambda_opt=_val(lam.value),
         Q=Q_val, X=X_val, Y=Y_val, K=K_val, L=L_val, M=M_val, N=N_val,

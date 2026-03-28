@@ -14,7 +14,7 @@ params:
   use_set_out_mats: 0                                                           # set | may be var (true or false)
   solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")
 
-  approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
+  approach: "DeePC"                                                              # set | may be var ("DeePC", "Young", "Mats")
   old_upd: 1              # if 0 uses Young_Schur_dro_lmi                       # set
   estm_only: 0            # if 1 uses Estm_dro_lmi                              # VAR ------------------------------ true or false
   non_convex: 0           # if 1 uses WFL                                       # VAR ------------------------------ true or false
