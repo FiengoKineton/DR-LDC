@@ -1,4 +1,4 @@
-#| Function              |        upd |  FROM_DATA | non_convex | estm_only | old_upd | approach     |
+#| Function              |  upd (set) |  FROM_DATA | non_convex | estm_only | old_upd | approach     |
 #| --------------------- | ---------: | ---------: | ---------: | --------: | ------: | ------------ |
 #| `Baseline_dro_lmi`    | `False` or | `False` or |          * |         * |       * | *            |
 #| `DeePC_dro_lmi`       |       True |       True |      False |     False |    True | `"DeePC"`    |
@@ -14,15 +14,15 @@ params:
   use_set_out_mats: 0                                                           # set | may be var (true or false)
   solver: "MOSEK"                                                               # set | may bbe var ("MOSEK", "CVXPY", "SCS")
 
-  approach: "DeePC"                                                              # set | may be var ("DeePC", "Young", "Mats")
-  old_upd: 1              # if 0 uses Young_Schur_dro_lmi                       # set
+  approach: "Mats"                                                              # set | may be var ("DeePC", "Young", "Mats")
+  old_upd: 0              # if 0 uses Young_Schur_dro_lmi                       # set
   estm_only: 0            # if 1 uses Estm_dro_lmi                              # VAR ------------------------------ true or false
   non_convex: 0           # if 1 uses WFL                                       # VAR ------------------------------ true or false
   Nsims_mats: 0           # if 1 uses NsimsMatricesAnalyzer                     # VAR ------------------------------ true or false
   estm_with_bounds: 1
 
-  model: "independent"                                                          # ("correlated" or "independent")
-  FROM_DATA: 1                                                                  # VAR ------------------------------ true or false
+  model: "correlated"                                                          # ("correlated" or "independent")
+  FROM_DATA: 1                                                                  # set
   upd: 1                                                                        # set
   test_Nsims: 0                                                                 # if COST is 1 and (if 0 runs MutipleRunsEvaluation else NsimSweep_FROM_DATA)
 

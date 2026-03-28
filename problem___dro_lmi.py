@@ -1044,7 +1044,7 @@ def DeePC_dro_lmi(                      # (Gx, Gy, Gz) written
     model = "independent" implements (2)
     """
     gamma, var = noise.gamma, noise.var
-    upd, FROM_DATA, plot = vals
+    upd, FROM_DATA, _ = vals
 
     data = api.get_system(FROM_DATA=FROM_DATA, gamma=gamma, upd=upd)
     x, x_next, u, y, z = data.get_data()
