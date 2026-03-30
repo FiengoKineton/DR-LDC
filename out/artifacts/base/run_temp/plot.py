@@ -1,6 +1,105 @@
-import os
+import os, sys
 import numpy as np
 import matplotlib.pyplot as plt
+
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[4]
+sys.path.append(str(ROOT))
+from utils___simulate import Closed_Loop
+
+
+
+
+def extract_sim_from_npz(npz_path):
+    """
+    Load only the closed-loop arrays needed by Closed_Loop methods.
+
+    Keeps only:
+        [X, Xc, U, W, Y, Z, T]
+    and reconstructs the dimension metadata needed by plot_timeseries().
+    """
+    data = np.load(npz_path, allow_pickle=True)
+
+    required = ["X", "Xc", "U", "W", "Y", "Z", "T"]
+    missing = [k for k in required if k not in data.files]
+    if missing:
+        raise KeyError(f"Missing required keys in {npz_path}: {missing}")
+
+    sim = {k: np.asarray(data[k]) for k in required}
+
+    # Convert T to plain int if stored as 0-d array
+    sim["T"] = int(np.asarray(sim["T"]).item())
+
+    # Rebuild shape metadata expected by plot_timeseries()
+    sim["nx"]  = sim["X"].shape[1]  if sim["X"].ndim  == 2 else 1
+    sim["nxc"] = sim["Xc"].shape[1] if sim["Xc"].ndim == 2 else 1
+    sim["nu"]  = sim["U"].shape[1]  if sim["U"].ndim  == 2 else 1
+    sim["nw"]  = sim["W"].shape[1]  if sim["W"].ndim  == 2 else 1
+    sim["ny"]  = sim["Y"].shape[1]  if sim["Y"].ndim  == 2 else 1
+    sim["nz"]  = sim["Z"].shape[1]  if sim["Z"].ndim  == 2 else 1
+
+    # Optional step axis for generic plotting/debug
+    sim["step"] = np.arange(sim["T"], dtype=int)
+
+    return sim
+
+
+def run_closed_loop_postprocessing(npz_path, out_dir=None, plot=True, save_timeseries=True):
+    """
+    Load sim from .npz, instantiate Closed_Loop, and call:
+      - plot_timeseries(sim)
+      - simulate_Z_cost(Z=sim["Z"])
+      - simulate_ZW_snr(Z=sim["Z"], W=sim["W"])
+    """
+    sim = extract_sim_from_npz(npz_path)
+
+    cl = Closed_Loop()
+
+    # Important:
+    # simulate_Z_cost() and simulate_ZW_snr() use self.Tf/self.ts internally
+    # to guess orientation in some cases.
+    # So we align Tf with the loaded trajectory length.
+    cl.Tf = sim["T"] * cl.ts
+
+    print("\nLoaded sim keys:")
+    print({k: v.shape if isinstance(v, np.ndarray) else v for k, v in sim.items()})
+
+    # 1) Plot time series from the loaded sim
+    if plot:
+        if save_timeseries:
+            if out_dir is None:
+                out_dir = os.getcwd()
+            os.makedirs(out_dir, exist_ok=True)
+            saved = cl.plot_timeseries(
+                sim,
+                save=True,
+                out=os.path.join(out_dir, "loaded_sim"),
+                fmt="pdf"
+            )
+            print("\nSaved timeseries plots:")
+            for name, path in saved.items():
+                print(f"  {name}: {path}")
+        else:
+            cl.plot_timeseries(sim)
+
+    # 2) Cost from Z
+    sim_cost = cl.simulate_Z_cost(Z=sim["Z"], plot=plot)
+    print("\nFinal closed-loop cost J =", sim_cost["J"])
+
+    # 3) SNR from Z and W
+    sim_snr = cl.simulate_ZW_snr(Z=sim["Z"], W=sim["W"], plot=plot)
+    print("Global SNR =", sim_snr["snr_db"], "dB")
+
+    return {
+        "sim": sim,
+        "cost": sim_cost,
+        "snr": sim_snr,
+    }
+
+
+# ------------------------------------------------------------------
+# Your existing generic inspection/plot functions can stay as they are
+# ------------------------------------------------------------------
 
 def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_key="step"):
     """
@@ -11,15 +110,6 @@ def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_ke
     - 1D array: single plot
     - 2D array: one subplot per column
     - higher-dimensional arrays: skipped with a warning
-
-    Parameters
-    ----------
-    npz_path : str
-        Path to the .npz file
-    out_dir : str or None
-        Output directory. If None, uses current working directory.
-    x_axis_key : str
-        Key to use as x-axis when compatible (default: 'step')
     """
     if out_dir is None:
         out_dir = os.getcwd()
@@ -28,7 +118,6 @@ def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_ke
 
     data = np.load(npz_path, allow_pickle=True)
 
-    # optional shared x-axis
     x_axis = None
     if x_axis_key in data.files:
         candidate_x = np.asarray(data[x_axis_key])
@@ -40,13 +129,9 @@ def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_ke
     for key in data.files:
         arr = np.asarray(data[key])
 
-        # sanitize filename
         safe_key = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in key)
         pdf_path = os.path.join(out_dir, f"{model}_{safe_key}.pdf")
 
-        # ----------------------------
-        # Case 1: scalar
-        # ----------------------------
         if arr.ndim == 0:
             fig, ax = plt.subplots(figsize=(6, 3))
             ax.axis("off")
@@ -62,9 +147,6 @@ def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_ke
             print(f"[saved] {pdf_path}")
             continue
 
-        # ----------------------------
-        # Case 2: 1D array
-        # ----------------------------
         if arr.ndim == 1:
             fig, ax = plt.subplots(figsize=(10, 4))
 
@@ -85,9 +167,6 @@ def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_ke
             print(f"[saved] {pdf_path}")
             continue
 
-        # ----------------------------
-        # Case 3: 2D array
-        # ----------------------------
         if arr.ndim == 2:
             nrows, ncols = arr.shape
             fig, axes = plt.subplots(
@@ -119,32 +198,12 @@ def plot_all_npz_contents(npz_path, model="independent", out_dir=None, x_axis_ke
             print(f"[saved] {pdf_path}")
             continue
 
-        # ----------------------------
-        # Case 4: ndim > 2
-        # ----------------------------
         print(f"[skipped] {key}: ndim={arr.ndim} not supported")
 
 
 def inspect_npz(path, verbose=True):
-    """
-    Inspect contents of a .npz file.
-
-    Parameters
-    ----------
-    path : str
-        Path to the .npz file
-    verbose : bool
-        If True, prints detailed info
-
-    Returns
-    -------
-    data_dict : dict
-        Dictionary with arrays (name -> numpy array)
-    info_dict : dict
-        Metadata (shape, dtype, stats)
-    """
     data = np.load(path, allow_pickle=True)
-    
+
     data_dict = {}
     info_dict = {}
 
@@ -162,7 +221,6 @@ def inspect_npz(path, verbose=True):
             "ndim": arr.ndim
         }
 
-        # Try to compute stats if numeric
         if np.issubdtype(arr.dtype, np.number):
             info.update({
                 "min": float(np.min(arr)),
@@ -185,8 +243,23 @@ def inspect_npz(path, verbose=True):
 
 
 if __name__ == "__main__":
-    # Example usage
-    model = "correlated"  # or "correlated"
+    model = "correlated"  # or "independent"
     path = f"PaperLike_2W_{model}_MBD___closed_loop_run.npz"
-    #data_dict, info_dict = inspect_npz(path)
-    plot_all_npz_contents(path, model)
+
+    # 1) generic inspection if you want
+    # data_dict, info_dict = inspect_npz(path)
+
+    # 2) generic per-key plots if you still want them
+    # plot_all_npz_contents(path, model)
+
+    # 3) use Closed_Loop methods directly on the loaded sim
+    results = run_closed_loop_postprocessing(
+        npz_path=path,
+        out_dir=f"plots_{model}",
+        plot=True,
+        save_timeseries=True,
+    )
+
+    print("\nReturned summary:")
+    print("J      =", results["cost"]["J"])
+    print("SNR dB =", results["snr"]["snr_db"])

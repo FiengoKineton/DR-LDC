@@ -9,7 +9,7 @@ from utils___systems import Plant, Controller, Plant_cl
 from utils___ambiguity import Disturbances
 
 
-yaml_path="problem___parameters.yaml"
+yaml_path = Path(__file__).resolve().parent / "problem___parameters.yaml"
 if yaml is None:
     raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
 with open(yaml_path, "r", encoding="utf-8") as f:
