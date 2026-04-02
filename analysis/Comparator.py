@@ -204,7 +204,7 @@ class ResultsComparator:
         return t, X, Y, Z, U, Xc, W
 
     @staticmethod
-    def _plot_overlay_states(t, XM, XD, l, ts: float, title: str, save: bool, save_path: str):
+    def _plot_overlay_states(t, XM, XD, l, ts: float, title: str, save: bool, save_path: str, name: str):
         XM = np.atleast_2d(XM)
         XD = np.atleast_2d(XD)
         T = min(XM.shape[0], XD.shape[0])
@@ -220,7 +220,7 @@ class ResultsComparator:
             axes = [axes]
         for i, ax in enumerate(axes):
             ax.plot(t, XM[:, i], label="MBD", linewidth=1.6)
-            ax.plot(t, XD[:, i], label="DDD", linewidth=1.6, linestyle="--")
+            ax.plot(t, XD[:, i], label=f"{name}", linewidth=1.6, linestyle="--")
             ax.set_ylabel(f"{l}[{i}]")
             ax.grid(True, alpha=0.3)
         axes[-1].set_xlabel("time")
@@ -232,6 +232,96 @@ class ResultsComparator:
             os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
             fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
         #plt.show()
+
+    # ------------------------ helpers: single-run plots ------------------------
+
+    @staticmethod
+    def _plot_single_states(t, X, l, ts: float, title: str, save: bool, save_path: str, name: str):
+        X = np.asarray(X)
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+
+        T = X.shape[0]
+        t = (np.arange(T) if len(t) != T else np.asarray(t)[:T]) * ts
+        nx = X.shape[1]
+
+        fig, axes = plt.subplots(nx, 1, figsize=(10, max(3, 2 * nx)), sharex=True)
+        if nx == 1:
+            axes = [axes]
+
+        for i, ax in enumerate(axes):
+            ax.plot(t, X[:, i], label=name, linewidth=1.6)
+            ax.set_ylabel(f"{l}[{i}]")
+            ax.grid(True, alpha=0.3)
+
+        axes[-1].set_xlabel("time")
+        axes[0].set_title(title)
+        axes[0].legend(loc="best")
+        plt.tight_layout()
+
+        if save:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
+
+    def _plot_single_costs(self, t, K, title_inst, title_avg, save_inst, save_avg, save: bool = True, logy=False, name="run"):
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # Instantaneous
+        plt.figure(figsize=(8, 3.2))
+        plt.plot(t, K["inst"], label=name, linewidth=1.6)
+        plt.xlabel("t")
+        plt.ylabel(r"$\|z(t)\|^2$")
+        plt.title(title_inst)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        if logy:
+            plt.yscale("log")
+        if save:
+            plt.savefig(save_inst, bbox_inches="tight")
+
+        # Running average
+        K_final = float(np.asarray(K["running"])[-1]) if np.asarray(K["running"]).size > 0 else np.nan
+        plt.figure(figsize=(8, 3.2))
+        plt.plot(t, K["running"], label=f"{name}: {K_final:.3g}", linewidth=1.6)
+        plt.xlabel("t")
+        plt.ylabel(r"$\frac{1}{t}\sum_{k=0}^{t-1}\|z(k)\|^2$")
+        plt.title(title_avg)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        if logy:
+            plt.yscale("log")
+        if save:
+            plt.savefig(save_avg, bbox_inches="tight")
+
+    def _plot_single_snr_db(self, t, S, title, save_path, save: bool = True, name="run"):
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        def db_to_linear(db: float) -> float:
+            return float(10.0 ** (db / 10.0))
+
+        snr_db_t = np.asarray(S["snr_db_t"])
+        snr_db = float(S["snr_db"])
+        snr_lin = db_to_linear(snr_db)
+
+        plt.figure(figsize=(8, 3.2))
+        plt.plot(
+            t,
+            snr_db_t,
+            label=f"{name}: {snr_db:.2f} dB ({snr_lin:.2f})",
+            linewidth=1.6,
+        )
+        plt.xlabel("t")
+        plt.ylabel(r"$\mathrm{SNR}(t)\;[\mathrm{dB}]$")
+        plt.title(title)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+        if save:
+            plt.savefig(save_path, bbox_inches="tight")
+
+    # ------------------------ main comparison method ------------------------
 
     def _eig_stats(self, A: np.ndarray) -> dict:
         vals = np.linalg.eigvals(A)
@@ -488,7 +578,7 @@ class ResultsComparator:
         import matplotlib.pyplot as plt
         plt.figure(figsize=(8, 3.2))
         plt.plot(t, M["inst"], label="MBD", linewidth=1.6)
-        plt.plot(t, D["inst"], label="DDD", linewidth=1.6, linestyle="--")
+        plt.plot(t, D["inst"], label=f"{self.name}", linewidth=1.6, linestyle="--")
         plt.xlabel("t"); plt.ylabel(r"$\|z(t)\|^2$"); plt.title(title_inst); plt.grid(True, alpha=0.3); plt.legend()
         
         if logy: plt.yscale("log")
@@ -500,7 +590,7 @@ class ResultsComparator:
 
         plt.figure(figsize=(8, 3.2))
         plt.plot(t, M["running"], label=f"MBD: {M_final:.3g}", linewidth=1.6)
-        plt.plot(t, D["running"], label=f"DDD: {D_final:.3g}", linewidth=1.6, linestyle="--")
+        plt.plot(t, D["running"], label=f"{self.name}: {D_final:.3g}", linewidth=1.6, linestyle="--")
         plt.xlabel("t"); plt.ylabel(r"$\frac{1}{t}\sum_{k=0}^{t-1}\|z(k)\|^2$"); plt.title(title_avg); plt.grid(True, alpha=0.3); plt.legend()
 
         if logy: plt.yscale("log")
@@ -508,7 +598,7 @@ class ResultsComparator:
 
     def _plot_overlay_snr_db(self, t, M, D, title, save_path, save: bool = True):
         """
-        Overlay SNR(t) in dB for two runs (MBD vs DDD).
+        Overlay SNR(t) in dB for two runs (MBD vs {method}).
 
         M, D are dicts with keys:
             'snr_db_t' : (T,) SNR(t) in dB
@@ -537,7 +627,7 @@ class ResultsComparator:
         plt.plot(
             t,
             D_snr_t,
-            label=f"DDD: {D_db:.2f} dB ({D_lin:.2f})",
+            label=f"{self.name}: {D_db:.2f} dB ({D_lin:.2f})",
             linewidth=1.6,
             linestyle="--",
         )
@@ -550,7 +640,6 @@ class ResultsComparator:
 
         if save:
             plt.savefig(save_path, bbox_inches="tight")
-
 
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
@@ -569,6 +658,7 @@ class ResultsComparator:
         ID = ID.strip().lower()
         print(method)
         assert method in ("lmi", "base", "lmi-upd", "lmi-estm", "lmi-YoungSchur", "lmi-Young", "lmi-DeePC"), "method must be 'lmi' or 'baseline'"
+        self.name = method
 
         suffix = path_name.lstrip("/\\")
         if not (suffix.endswith("_MBD") or suffix.endswith("_DDD")):
@@ -862,24 +952,24 @@ class ResultsComparator:
 
             T = min(XM.shape[0], XD.shape[0])
 
-            title = f"{method.upper()} closed-loop: states (MBD vs DDD)"
+            title = f"{method.upper()} closed-loop: states (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_sys_states.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", self.ts, title, save=self.save, save_path=save_path)            
-            title = f"{method.upper()} closed-loop: cntrl states (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", self.ts, title, save=self.save, save_path=save_path, name=self.name)            
+            title = f"{method.upper()} closed-loop: cntrl states (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_ctrl_states.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", self.ts, title, save=self.save, save_path=save_path)
-            title = f"{method.upper()} closed-loop: inputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XcM, XcD, "xc", self.ts, title, save=self.save, save_path=save_path, name=self.name)
+            title = f"{method.upper()} closed-loop: inputs (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_ctrl_inputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", self.ts, title, save=self.save, save_path=save_path)
-            title = f"{method.upper()} closed-loop: outputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), UM, UD, "u", self.ts, title, save=self.save, save_path=save_path, name=self.name)
+            title = f"{method.upper()} closed-loop: outputs (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_sys_outputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", self.ts, title, save=self.save, save_path=save_path)            
-            title = f"{method.upper()} closed-loop: perf. outputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), YM, YD, "y", self.ts, title, save=self.save, save_path=save_path, name=self.name)            
+            title = f"{method.upper()} closed-loop: perf. outputs (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_perf_outputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
-            title = f"{method.upper()} closed-loop: disturbances at {percent}% (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path, name=self.name)
+            title = f"{method.upper()} closed-loop: disturbances at {percent}% (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_distrubance.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), WM, WD, "w", self.ts, title, save=self.save, save_path=save_path)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), WM, WD, "w", self.ts, title, save=self.save, save_path=save_path, name=self.name)
             if plot: plt.show()
 
         else:
@@ -906,12 +996,12 @@ class ResultsComparator:
             ZM_cost, ZD_cost = ZM, ZD  # for cost overlays later
             T = min(XM.shape[0], XD.shape[0])
 
-            title = f"{method.upper()} composite closed-loop: states (MBD vs DDD)"
+            title = f"{method.upper()} composite closed-loop: states (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_CL_sys_states.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", self.ts, title, save=self.save, save_path=save_path)            
-            title = f"{method.upper()} composite closed-loop: perf. outputs (MBD vs DDD)"
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), XM, XD, "x", self.ts, title, save=self.save, save_path=save_path, name=self.name)            
+            title = f"{method.upper()} composite closed-loop: perf. outputs (MBD vs {method})"
             save_path = run_dir / f"{base}_overlay_CL_perf_outputs.pdf"
-            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path)
+            self._plot_overlay_states(t if len(t) == T else np.arange(T), ZM, ZD, "z", self.ts, title, save=self.save, save_path=save_path, name=self.name)
             if plot: plt.show()
 
         else:
@@ -942,8 +1032,8 @@ class ResultsComparator:
 
             use_log = _log_condition(KM["running"][:T_cost]) or _log_condition(KD["running"][:T_cost])
 
-            title_i = f"{method.upper()} cost: instantaneous (MBD vs DDD)"
-            title_a = f"{method.upper()} cost: running average (MBD vs DDD)"
+            title_i = f"{method.upper()} cost: instantaneous (MBD vs {method})"
+            title_a = f"{method.upper()} cost: running average (MBD vs {method})"
             save_i  = run_dir / f"{base}_overlay_cost_instantaneous.pdf"
             save_a  = run_dir / f"{base}_overlay_cost_running_avg.pdf"
             self._plot_overlay_costs(
@@ -957,7 +1047,7 @@ class ResultsComparator:
             print("\n[warn] Missing cost NPZ for one/both runs; skipping cost overlays.")
 
 
-        # ======================= SNR OVERLAY (MBD vs DDD) ======================= #
+        # ======================= SNR OVERLAY (MBD vs {method}) ======================= #
         if s_mbd.exists() and s_ddd.exists():
             if not re_evaluate:
                 SM = self._load_snr_npz(s_mbd)
@@ -979,7 +1069,7 @@ class ResultsComparator:
             T_snr = min(SM["T"], SD["T"])
             t_snr = np.arange(T_snr) * self.ts
 
-            title_snr = f"{method.upper()} SNR: Z vs W at {percent}% (MBD vs DDD)"
+            title_snr = f"{method.upper()} SNR: Z vs W at {percent}% (MBD vs {method})"
             save_snr  = run_dir / f"{base}_overlay_snr_ZW_dB.pdf"
 
             self._plot_overlay_snr_db(
@@ -1172,5 +1262,325 @@ class ResultsComparator:
         print(f"baseline.rho(Acl) ≈ {meta_b.get('spectral_radius_Acl')}")
         print(f"lmi     .rho(Acl) ≈ {meta_l.get('spectral_radius_Acl')}")
         print(f"lmi.status = {meta_l.get('status')}, objective ≈ {meta_l.get('objective')}, model = {meta_l.get('model')}, gamma = {meta_l.get('gamma')}")
+        return report
+
+    # ------------------------ public: single MBD or single DDD ------------------------
+
+    def plot_single_mbd_or_ddd(
+        self,
+        *,
+        path_name: str,
+        method: str = "lmi",
+        ID: str = "temp",
+        which: str = None,          # "MBD" or "DDD"
+        plot: bool = True,
+        re_evaluate: bool = False,
+        init_cond: str = "rand",
+        percent: int = 1,
+    ) -> dict:
+        """
+        Plot exactly the same family of figures as compare_mbd_vs_ddd,
+        but for only one run: either MBD or DDD.
+
+        Example path_name:
+            "my_case_MBD"
+            "my_case_DDD"
+
+        Or explicitly:
+            path_name="my_case", which="MBD"
+            path_name="my_case", which="DDD"
+        """
+        method = method.strip()
+        ID = ID.strip().lower()
+        assert method in ("lmi", "base", "lmi-upd", "lmi-estm", "lmi-YoungSchur", "lmi-Young", "lmi-DeePC")
+
+        self.name = method
+
+        path_obj = Path(path_name)
+        suffix = path_obj.name   # only last component, not full path
+
+        inferred = None
+        if suffix.endswith("_MBD"):
+            inferred = "MBD"
+            base = suffix[:-4]   # remove "_MBD"
+        elif suffix.endswith("_DDD"):
+            inferred = "DDD"
+            base = suffix[:-4]   # remove "_DDD"
+        else:
+            base = suffix
+
+        which = (which or inferred or "").upper()
+        if which not in ("MBD", "DDD"):
+            raise ValueError("You must specify which='MBD' or which='DDD', or pass path_name ending with '_MBD' / '_DDD'.")
+
+        run_dir = self.out_root / method / f"run_{ID}"
+
+        j_run = run_dir / f"{base}_{which}___results_run.json"
+        z_run = run_dir / f"{base}_{which}___closed_loop_run.npz"
+        c_run = run_dir / f"{base}_{which}___closed_loop_composite.npz"
+        k_run = run_dir / f"{base}_{which}___closed_loop_run_cost.npz"
+        s_run = run_dir / f"{base}_{which}___closed_loop_snr.npz"
+
+        #print(run_dir, base, which); sys.exit(0)
+        if not j_run.exists():
+            raise FileNotFoundError(f"Missing JSON: {j_run}")
+
+        J = self._load_json(j_run)
+
+        def _ctrl_from_any(J):
+            if "controller" in J:
+                return self._controller_from_dict(J["controller"])
+            if "recovered_controller" in J:
+                return self._controller_from_dict(J["recovered_controller"])
+            raise KeyError("No controller found in JSON payload.")
+
+        def _Sigma_from_any(J):
+            if "disturbance" in J:
+                return np.array(J["disturbance"]["Sigma_nom"], dtype=float)
+            raise KeyError("No Sigma found in JSON payload.")
+
+        def _plnt_from_any(J):
+            if "plant" in J:
+                return self._plant_from_dict(J["plant"])
+            raise KeyError("No plant found in JSON payload.")
+
+        def _plnt_cl_from_any(J):
+            if "composite_closed_loop" in J:
+                return self._plant_cl_from_dict(J["composite_closed_loop"])
+            raise KeyError("No composite_closed_loop found in JSON payload.")
+
+        ctrl = _ctrl_from_any(J)
+        plnt = _plnt_from_any(J)
+        plnt_cl = _plnt_cl_from_any(J)
+        Sigma = _Sigma_from_any(J)
+        gamma = float(J.get("meta", {}).get("gamma", J.get("achieved_gamma")))
+        obj = J.get("meta", {}).get("objective", J.get("optimized_cost"))
+
+        api = MatricesAPI()
+        p_run = Plant(
+            A=plnt.A, Bu=plnt.Bu, Bw=plnt.Bw, Cy=plnt.Cy, Dyw=plnt.Dyw,
+            Cz=plnt.Cz, Dzu=plnt.Dzu, Dzw=plnt.Dzw
+        )
+        c_run_obj = Controller(Ac=ctrl.Ac, Bc=ctrl.Bc, Cc=ctrl.Cc, Dc=ctrl.Dc)
+
+        if plot:
+            print(f"\n=== Matrices {which} ===")
+            api.print_plant(plant=p_run)
+            api.print_controller(ctrl=c_run_obj)
+            api.print_plant_cl(plant_cl=plnt_cl)
+
+        kpis = {}
+        comp_kpis = {}
+
+        # -------------------- closed-loop run --------------------
+        if z_run.exists():
+            if not re_evaluate:
+                data = np.load(z_run, allow_pickle=True)
+                t, X, Y, Z, U, Xc, W = self._npz_extract_states(data)
+            else:
+                cl = Closed_Loop()
+                print(f"simulating closed loop of {which}...")
+                sim = cl.simulate_closed_loop(
+                    plant=p_run, ctrl=c_run_obj, Sigma_w=Sigma, gamma=gamma, init_cond=init_cond
+                )
+                t = sim["step"]
+                X = sim["X"]
+                Xc = sim["Xc"]
+                U = sim["U"]
+                Y = sim["Y"]
+                Z = sim["Z"]
+                W = sim["W"]
+
+            kpis = {
+                "x":  self._stream_stats(X, "x"),
+                "xc": self._stream_stats(Xc, "xc"),
+                "u":  self._stream_stats(U, "u"),
+                "y":  self._stream_stats(Y, "y"),
+                "z":  self._stream_stats(Z, "z"),
+                "w":  self._stream_stats(W, "w"),
+            }
+
+            title = f"{method.upper()} closed-loop: states ({which})"
+            save_path = run_dir / f"{base}_{which}_sys_states.pdf"
+            self._plot_single_states(t, X, "x", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            title = f"{method.upper()} closed-loop: cntrl states ({which})"
+            save_path = run_dir / f"{base}_{which}_ctrl_states.pdf"
+            self._plot_single_states(t, Xc, "xc", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            title = f"{method.upper()} closed-loop: inputs ({which})"
+            save_path = run_dir / f"{base}_{which}_ctrl_inputs.pdf"
+            self._plot_single_states(t, U, "u", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            title = f"{method.upper()} closed-loop: outputs ({which})"
+            save_path = run_dir / f"{base}_{which}_sys_outputs.pdf"
+            self._plot_single_states(t, Y, "y", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            title = f"{method.upper()} closed-loop: perf. outputs ({which})"
+            save_path = run_dir / f"{base}_{which}_perf_outputs.pdf"
+            self._plot_single_states(t, Z, "z", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            title = f"{method.upper()} closed-loop: disturbances at {percent}% ({which})"
+            save_path = run_dir / f"{base}_{which}_disturbance.pdf"
+            self._plot_single_states(t, W, "w", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            if plot:
+                plt.show()
+        else:
+            print(f"\n[warn] Missing NPZ for {which}; skipping closed-loop plots.")
+
+        # -------------------- composite closed-loop --------------------
+        if c_run.exists():
+            if not re_evaluate:
+                data = np.load(c_run, allow_pickle=True)
+                t_c, Xc_cl, _, Zc_cl, *_ = self._npz_extract_states(data)
+            else:
+                cl = Closed_Loop()
+                print(f"simulating composite closed loop of {which}...")
+                sim = cl.simulate_composite(Pcl=plnt_cl, Sigma_w=Sigma, gamma=gamma, init_cond=init_cond)
+                t_c = sim["step"]
+                Xc_cl = sim["X"]
+                Zc_cl = sim["Z"]
+
+            comp_kpis = {
+                "x": self._stream_stats(Xc_cl, "x"),
+                "z": self._stream_stats(Zc_cl, "z"),
+            }
+
+            title = f"{method.upper()} composite closed-loop: states ({which})"
+            save_path = run_dir / f"{base}_{which}_CL_sys_states.pdf"
+            self._plot_single_states(t_c, Xc_cl, "x", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            title = f"{method.upper()} composite closed-loop: perf. outputs ({which})"
+            save_path = run_dir / f"{base}_{which}_CL_perf_outputs.pdf"
+            self._plot_single_states(t_c, Zc_cl, "z", self.ts, title, save=self.save, save_path=save_path, name=which)
+
+            if plot:
+                plt.show()
+
+            Z_for_cost = Zc_cl
+        else:
+            print(f"\n[warn] Missing composite NPZ for {which}; skipping composite plots.")
+            Z_for_cost = None
+
+        # -------------------- cost --------------------
+        cost_summary = {}
+        if k_run.exists():
+            if not re_evaluate:
+                K = self._load_cost_npz(k_run)
+            else:
+                if Z_for_cost is None:
+                    raise RuntimeError("Cannot re-evaluate cost without composite Z.")
+                cl = Closed_Loop()
+                print(f"simulating cost of {which}...")
+                K = cl.simulate_Z_cost(Z=Z_for_cost, plot=plot)
+
+            T_cost = K["T"]
+            t_cost = np.arange(T_cost) * self.ts
+
+            def _log_condition(arr):
+                if len(arr) == 0:
+                    return False
+                if not np.all(arr > 0):
+                    return False
+                return np.max(arr) > 5 * arr[-1]
+
+            use_log = _log_condition(K["running"])
+
+            title_i = f"{method.upper()} cost: instantaneous ({which})"
+            title_a = f"{method.upper()} cost: running average ({which})"
+            save_i = run_dir / f"{base}_{which}_cost_instantaneous.pdf"
+            save_a = run_dir / f"{base}_{which}_cost_running_avg.pdf"
+
+            self._plot_single_costs(
+                t_cost,
+                {"inst": K["inst"], "running": K["running"]},
+                title_i,
+                title_a,
+                save_i,
+                save_a,
+                save=self.save,
+                logy=use_log,
+                name=which,
+            )
+
+            cost_summary = {"J": K["J"], "T": K["T"]}
+
+            if plot:
+                plt.show()
+        else:
+            print(f"\n[warn] Missing cost NPZ for {which}; skipping cost plots.")
+
+        # -------------------- snr --------------------
+        snr_summary = {}
+        if s_run.exists():
+            if not re_evaluate:
+                S = self._load_snr_npz(s_run)
+            else:
+                if z_run.exists() and "Z" in locals() and "W" in locals():
+                    cl = Closed_Loop()
+                    print(f"simulating SNR of {which} (Z vs W)...")
+                    S = cl.simulate_ZW_snr(Z=Z, W=W, plot=plot)
+                    if self.save:
+                        np.savez(s_run, **S)
+                else:
+                    raise RuntimeError("Cannot re-evaluate SNR without Z and W.")
+
+            T_snr = S["T"]
+            t_snr = np.arange(T_snr) * self.ts
+
+            title_snr = f"{method.upper()} SNR: Z vs W at {percent}% ({which})"
+            save_snr = run_dir / f"{base}_{which}_snr_ZW_dB.pdf"
+
+            self._plot_single_snr_db(
+                t_snr,
+                {"snr_db_t": S["snr_db_t"], "snr_db": S["snr_db"]},
+                title_snr,
+                save_snr,
+                save=self.save,
+                name=which,
+            )
+
+            snr_summary = {"snr_db": S["snr_db"], "T": S["T"]}
+
+            if plot:
+                plt.show()
+        else:
+            print(f"\n[warn] Missing SNR NPZ for {which}; skipping SNR plots.")
+
+        report = {
+            "paths": {
+                "json": str(j_run),
+                "run_npz": str(z_run),
+                "comp_npz": str(c_run),
+                "cost_npz": str(k_run),
+                "snr_npz": str(s_run),
+            },
+            "meta": {
+                "method": method,
+                "which": which,
+                "run_meta": J.get("meta", {}),
+                "objective": obj,
+            },
+            "stability": self._eig_stats(plnt_cl.Acl),
+            "timeseries_kpis": {
+                "run": kpis,
+                "composite": comp_kpis,
+            },
+            "time_average_cost": cost_summary,
+            "snr": snr_summary,
+            "Matrices": {
+                "Controller": self.controller_to_dict(c_run_obj),
+                "Composite Plant": self.plant_cl_to_dict(plnt_cl),
+                "Plant": self.plant_to_dict(p_run),
+            },
+        }
+
+        if self.save:
+            out_single = run_dir / f"{base}_{which}___single_run_report.json"
+            with open(out_single, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+            print(f"[single] saved summary: {out_single}")
+
         return report
 

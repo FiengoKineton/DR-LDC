@@ -12,7 +12,6 @@ from utils import _generate_dir, Noise      # directory.py
 
 
 
-
 # ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
 
 def run_exp(
@@ -24,6 +23,7 @@ def run_exp(
         COST: bool = False, 
         info: bool = False, 
         N_sims: int = None, 
+        SINGLE_RUN: bool = False,
         ):
     
     #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
@@ -34,7 +34,7 @@ def run_exp(
     #args = parser.parse_args()
 
     p = cfg.get("params", {})
-    out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
+    out_base = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
 
 
@@ -71,11 +71,11 @@ def run_exp(
     # ----------------------------------------------------------------------
     if _comp:
         from analysis.Comparator import ResultsComparator
-        cmp = ResultsComparator(out_root=out, save=_save, ts=_ts)
+        cmp = ResultsComparator(out_root=out_base, save=_save, ts=_ts)
         return cmp.compare_mbd_vs_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond, percent=_percent)
         # cmp.compare_baseline_vs_lmi(path_name=path_name, plot=True)
     else:
-        out = out / f"{_method}" / f"run_{_runID}"
+        out = out_base / f"{_method}" / f"run_{_runID}"
         out.mkdir(parents=True, exist_ok=True)
         out = out / path_name
         out = out.as_posix()
@@ -92,6 +92,13 @@ def run_exp(
         if COST or info:
             return opt._return_final_infos(), _model, out
         
+        if SINGLE_RUN: 
+            from analysis.Comparator import ResultsComparator
+            cmp = ResultsComparator(out_root=out_base, save=_save, ts=_ts)
+            cmp.plot_single_mbd_or_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond, percent=_percent)
+            return opt._return_final_infos(), _model, out
+        
+
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
 

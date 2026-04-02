@@ -4,7 +4,7 @@ from .systems import Plant, Controller, Plant_cl, Plant_k, Noise, Data, DROLMIRe
 
 
 __all__ = [
-    "_generate_dir",                # directory.py
-    "select_gamma",                 # gamma_selection.py
+    "_generate_dir",
+    "select_gamma",
     "Plant", "Controller", "Plant_cl", "Plant_k", "Noise", "Data", "DROLMIResult", "DROLMIResultUpd",
 ]

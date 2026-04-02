@@ -3,10 +3,10 @@
 
 This repository implements two pipelines for discrete-time output-feedback controller synthesis and evaluation:
 
-1. **Baseline** — stochastic H₂ optimization via Monte Carlo simulation.  
-2. **DRO-LMI** — distributionally-robust control synthesis via convex LMIs and controller recovery.
+1. **Baseline** — stochastic H₂ optimization via Monte Carlo simulation  
+2. **DRO-LMI** — distributionally-robust control synthesis via convex LMIs and controller recovery  
 
-Both produce controllers for the same plant model and evaluate closed-loop performance.
+Both pipelines operate on the same plant model and share simulation and evaluation tools.
 
 ---
 
@@ -15,142 +15,169 @@ Both produce controllers for the same plant model and evaluate closed-loop perfo
 ```
 .
 ├── main.py                     # CLI entry point
-├── problem___baseline.py       # Baseline H₂ optimization (Monte Carlo + L-BFGS-B)
-├── problem___dro_lmi.py        # Distributionally-Robust LMI formulation & solver
-├── problem___parameters.yaml   # Central configuration (dimensions, solver, ambiguity, etc.)
+├── config/                     # Configuration handling
+│   ├── loader.py
+│   └── problem___parameters.yaml
 │
-├── utilis___systems.py         # Plant & controller data structures
-├── utilis___matrices.py        # Closed-loop composition and controller recovery
-├── utilis___simulate.py        # Simulation and plotting utilities
+├── controllers/                # All control design methods
+│   ├── baseline.py
+│   ├── dro_lmi.py
+│   ├── dro_deepc.py
+│   ├── dro_young.py
+│   ├── dro_youngschur.py
+│   ├── dro_estm.py
+│   └── non_convex/             # Experimental / non-convex methods (e.g. WFL)
 │
-└── out/                        # Folder created automatically for JSON/NPZ artifacts
+├── core/                       # Core pipeline logic
+│   ├── run.py                  # Main orchestration
+│   ├── matrices.py             # Closed-loop matrix construction
+│   └── recover.py              # Controller recovery from LMI variables
+│
+├── disturbances/               # Disturbance modeling (Wasserstein, Gaussian, etc.)
+│   ├── disturbances.py
+│   ├── _wasserstein.py
+│   ├── _metric_2w.py
+│   ├── _gaussian.py
+│   └── _zero.py
+│
+├── simulate/                   # Simulation pipeline
+│   ├── open_loop.py
+│   ├── closed_loop.py
+│   └── initial_conditions.py
+│
+├── analysis/                   # Evaluation and metrics
+│   ├── Comparator.py
+│   ├── SNR.py
+│   ├── Nsims_eval.py
+│   ├── Nsims_mat.py
+│   └── find_opt_gamma.py
+│
+├── utils/                      # Shared utilities
+│   ├── systems.py              # Plant / Controller classes
+│   ├── directory.py            # Output management
+│   ├── plot.py
+│   └── gamma_selection.py
+│
+├── experiments/                # Experiment configs / runs
+├── docs/                       # Documentation / reports
+├── .gitignore
+└── README.md
 ```
-
----
-
-## Optimal γ by parameter combination
-
-The optimization produced the following γ values for `method="lmi"` with `model="correlated"`.  
-If the combo isn’t listed (different `model` or `method`), γ is taken from the config at `ambiguity.gamma`.
-
-| method | model       | stabilise | use_set_out_mats | runID                       | γ (opt)            |
-|:------:|:-----------:|:---------:|:----------------:|:----------------------------|:-------------------|
-| lmi    | correlated  | true      | true             | Opt&SetOutMats&Stabilise    | 0.41640786499873816 |
-| lmi    | correlated  | true      | false            | Opt&Stabilise               | 0.6180339887498949  |
-| lmi    | correlated  | false     | true             | Opt&SetOutMats              | 0.06888370749726605 |
-| lmi    | correlated  | false     | false            | Opt                          | 0.9016994374947425  |
-| lmi    | independent | —         | —                | —                            | `ambiguity.gamma`   |
-| other  | —           | —         | —                | —                            | `ambiguity.gamma`   |
-
 
 ---
 
 ## ⚙️ How It Works
 
 ### Overview
-The repository supports two synthesis modes:
 
-| Mode | Description | Run Command |
-|------|--------------|--------------|
-| **Baseline** | Minimizes expected output energy under Gaussian disturbance using Monte Carlo rollouts. | `python main.py --base` |
-| **DRO-LMI** | Solves a distributionally-robust H₂ problem using LMIs and recovers a controller. | `python main.py --lmi` |
+| Mode | Description | Command |
+|------|------------|--------|
+| **Baseline** | Monte Carlo H₂ optimization | `python main.py --base` |
+| **DRO-LMI** | Distributionally robust LMI synthesis | `python main.py --lmi` |
 
 ---
 
-## 🧩 System Diagram
+## 🔄 Pipeline Overview
 
 ```mermaid
 flowchart TD
-    P1["problem___parameters.yaml"] --> A1["utils___systems.py<br/>Plant &amp; Controller classes"]
-    A1 --> A0["utils___simulate.py<br/>Gather OpenLoop Data"]
-    A0 --> A2["utils___matrices.py<br/>Compose (A,B,C,D)"]
-    A2 --> A3["problem___baseline.py<br/>Monte Carlo Optimization"]
-    A2 --> A4["problem___dro_lmi.py<br/>DRO-LMI Synthesis"]
-    A3 --> S1["utils___simulate.py<br/>Closed-Loop Simulation"]
-    A4 --> R1["Recover Controller"]
-    R1 --> S1
-    S1 --> OUT["out/artifacts/ <br/>JSON + NPZ + PDF"]
+    CFG["config/problem___parameters.yaml"] --> CORE["core/run.py"]
+
+    CORE --> SYS["utils/systems.py"]
+    CORE --> DIST["disturbances/"]
+
+    SYS --> SIM0["simulate/open_loop.py"]
+    SIM0 --> MAT["core/matrices.py"]
+
+    MAT --> CTRL1["controllers/baseline.py"]
+    MAT --> CTRL2["controllers/dro_lmi.py"]
+
+    CTRL1 --> SIM1["simulate/closed_loop.py"]
+    CTRL2 --> REC["core/recover.py"]
+    REC --> SIM1
+
+    SIM1 --> ANALYSIS["analysis/"]
+    ANALYSIS --> OUT["outputs (JSON / NPZ / plots)"]
 ```
 
 ---
 
 ## 🧠 Baseline Monte-Carlo H₂ Method
 
-**Goal:**  
-Minimize  
-\[
-J = \mathbb{E}\big[ \|z_t\|^2 \big]
-\]
-for the closed-loop system under white noise \( w_t \).
+**Goal:**
+J = E[||z_t||²]
 
 **Procedure:**
-1. Randomly initialize controller matrices \( A_c,B_c,C_c,D_c \).  
-2. Compose the closed-loop dynamics \((\mathcal{A}, \mathcal{B}, \mathcal{C}, \mathcal{D})\).  
-3. Simulate for multiple trajectories and compute empirical H₂ cost.  
-4. Optimize parameters with **L-BFGS-B**.  
-5. Penalize instability and project back into stable region if necessary.
-
-**Artifacts:**
-- JSON: cost, plant/controller matrices, stability info.  
-- NPZ: trajectories and numerical data.  
-- Plots: state, control input, output evolution.
+1. Initialize controller parameters  
+2. Build closed-loop matrices via `core/matrices.py`  
+3. Simulate trajectories (`simulate/closed_loop.py`)  
+4. Estimate cost via Monte Carlo  
+5. Optimize with L-BFGS-B  
+6. Penalize instability if needed  
 
 ---
 
 ## 🧮 DRO-LMI Method
 
 **Goal:**  
-Design a controller minimizing the worst-case H₂ cost under covariance uncertainty within a Wasserstein-2 ball.
+Minimize worst-case H₂ cost under a Wasserstein ambiguity set.
 
 **Steps:**
-1. Construct the **block matrices**  
-   \[
-   \mathbb{P}, \mathbb{A}, \mathbb{B}, \mathbb{C}, \mathbb{D}
-   \]
-   using the plant and ambiguity model (correlated or independent).
-2. Formulate LMIs with decision variables \( X, Y, Q, \lambda, K, L, M, N \).  
-3. Solve using **MOSEK** or **SCS** (configured in YAML).  
-4. Recover a realizable controller \((A_c,B_c,C_c,D_c)\) via structured least squares.  
-5. Simulate and store results as JSON/NPZ artifacts.
+1. Construct lifted matrices (`core/matrices.py`)  
+2. Define LMI constraints (controllers/dro_*.py)  
+3. Solve via CVXPY (MOSEK / SCS)  
+4. Recover controller (`core/recover.py`)  
+5. Simulate and evaluate  
 
 ---
 
-## 📊 Configuration (problem___parameters.yaml)
+## 🌊 Disturbance Modeling
 
-Key fields:
+Handled in `disturbances/`:
 
-| Field | Description |
-|--------|--------------|
-| `params.dimensions` | System sizes (`nx`, `nw`, `nu`, `ny`). |
-| `params.outputs.mode` | Output configuration for cost definition. |
-| `params.ambiguity` | Wasserstein radius `gamma` and regularization `alpha`. |
-| `params.solver` | Choose between `MOSEK` or `SCS`. |
-| `params.plant` | Randomization seed and scaling for system generation. |
+- Gaussian nominal models  
+- 2-Wasserstein ambiguity sets  
+- Independent vs correlated noise  
+- Projection and sampling utilities  
+
+---
+
+## 📊 Analysis & Metrics
+
+Implemented in `analysis/`:
+
+- Closed-loop cost J  
+- Signal-to-noise ratio (SNR)  
+- Multi-simulation statistics  
+- Optimal γ search utilities  
+
+---
+
+## ⚙️ Configuration
+
+Main file:
+
+config/problem___parameters.yaml
 
 ---
 
 ## ▶️ Running Experiments
 
-### Baseline Optimization
-```bash
+### Baseline
 python main.py --base
-```
-Artifacts stored in `out/artifacts/baseline/`.
 
-### DRO-LMI Synthesis
-```bash
+### DRO-LMI
 python main.py --lmi
-```
-Artifacts stored in `out/artifacts/lmi/`.
 
 ---
 
 ## 📦 Outputs
 
-Each run generates:
-- `*.json` → parameters, matrices, metadata  
-- `*.npz` → trajectories and arrays  
-- `.pdf` plots under the same directory  
+Generated automatically:
+
+- .json → metadata  
+- .npz → trajectories  
+- .pdf → plots  
 
 ---
 
@@ -158,13 +185,19 @@ Each run generates:
 
 - Python ≥ 3.10  
 - NumPy, SciPy, Matplotlib  
-- CVXPY with a solver (MOSEK or SCS)  
-- PyYAML for configuration  
+- CVXPY (MOSEK or SCS)  
+- PyYAML  
+
+---
+
+## 🧾 Notes
+
+- `_OLD/` is deprecated and ignored  
+- `__pycache__/` is excluded via `.gitignore`  
+- Non-convex methods are experimental  
 
 ---
 
 ## 🧾 Citation
 
-If used in research or coursework, please acknowledge this repository as:
-
-> Hybrid Baseline & DRO-LMI Pipeline for Robust Output-Feedback Control (2025)
+Hybrid Baseline & DRO-LMI Pipeline for Robust Output-Feedback Control (2025)

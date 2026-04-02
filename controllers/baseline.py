@@ -308,9 +308,3 @@ class baseline_optim_problem():
     def get_snr_vars(self):
         return self.plant, self.ctrl, self.sim, self.Sigma_nom
 
-
-# ------------------------- MAIN SCRIPT ENTRY POINT ----------------------
-
-if __name__ == "__main__":
-    Sigma_nom, base_cost, msg, cost_opt, rho, ctrl_opt, plant = run_once()
-    np.set_printoptions(suppress=True, linewidth=140, precision=4)

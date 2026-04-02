@@ -6,9 +6,6 @@ from numpy.linalg import cholesky
 from config import cfg
 
 
-
-
-
 # =====================================================================================
 
 class WassersteinAmbiguitySet:

@@ -78,3 +78,65 @@ def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict, path: str):
         with open(final_path, "w", encoding="utf-8") as f:
             f.write(table_str)
 
+
+
+def print_infos(m: str, info: dict, path: str = None, from_data: bool = False):
+    """
+    Pretty-print AND save a single summary table for either MBD or DDD.
+    """
+    metrics = [
+        ("J",               "Cost J"),
+        ("obj",             "Objective"),
+        ("lamda",           "λ"),
+        ("rho",             "ρ"),
+        ("snr",             "SNR [dB]"),
+        ("time",            "Time [s]"),
+        ("attempts",        "Attempts"),
+        ("stress",          "Stress"),
+        ("ratio_violation", "Violations [%]"),
+        ("solver",          "Solver"),
+    ]
+
+    run_name = "DDD" if from_data else "MBD"
+
+    def fmt(v):
+        if v is None:
+            return "-"
+        if isinstance(v, (int, float)):
+            return f"{v:.4g}"
+        return str(v)
+
+    lines = []
+    lines.append("\n" + "=" * 70)
+    lines.append(f" {m} summary ".center(70, "="))
+    lines.append("=" * 70)
+
+    header = f"{'Metric':<20}{run_name:>20}"
+    lines.append(header)
+    lines.append("-" * 70)
+
+    for key, label in metrics:
+        v = info.get(key, None)
+        line = f"{label:<20}{fmt(v):>20}"
+        lines.append(line)
+
+    lines.append("=" * 70 + "\n")
+    table_str = "\n".join(lines)
+
+    print(table_str)
+
+    if path is not None:
+        path = path.rstrip("/")
+
+        if path.endswith("_MBD"):
+            path = path[:-4]
+        elif path.endswith("_DDD"):
+            path = path[:-4]
+
+        final_path = f"{path}_{run_name}_summary.txt"
+
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+
+        with open(final_path, "w", encoding="utf-8") as f:
+            f.write(table_str)
+

@@ -1,13 +1,12 @@
 import sys
 
 from analysis import (
-    print_infos_comparison,                         # print_info.py
+    print_infos_comparison, print_infos,            # print_info.py
     MutipleRunsEvaluation, NsimSweep_FROM_DATA,     # Nsims_eval.py  
 )
 from config import cfg                              # loader.py
 from core import run_exp                            # run.py
 from utils import select_gamma                      # gamma_selection.py
-
 
 # ----------------------------------------------------------------------------------
 
@@ -15,12 +14,10 @@ if __name__ == "__main__":
     p = cfg.get("params", {})
     gamma = select_gamma(p)
 
-
     if bool(p.get("FIND", 0)):
         from analysis.find_opt_gamma import opt_gamma
         opt_gamma(run_fn=run_exp)
         sys.exit(0)
-
 
     COST = bool(p.get("COST", 0))
     if not COST and not bool(p.get("test_Nsims", 0)):
@@ -32,7 +29,9 @@ if __name__ == "__main__":
 
             print_infos_comparison(m, infos_mbd, infos_ddd, o)
         else:
-            run_exp(gamma=gamma)
+            info, m, o = run_exp(gamma=gamma, SINGLE_RUN=True)
+            print_infos(m, info, o, bool(p.get("FROM_DATA", 0)))
+
     else: 
         if not bool(p.get("test_Nsims", 0)):
             MutipleRunsEvaluation(p=p, run_fn=run_exp, gamma=gamma, COST=COST, N=100)
@@ -45,5 +44,4 @@ if __name__ == "__main__":
                 40,  50,  65,               # Larger-sample variance reduction
                 80, 100, 120, 150           # High-data (plateau) regime
             ]
-            
             NsimSweep_FROM_DATA(p=p, run_fn=run_exp, gamma=gamma, COST=COST, runs_per_N=10, N_sims_values=N_sims_values)
