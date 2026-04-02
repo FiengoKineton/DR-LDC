@@ -3,7 +3,6 @@ import numpy as np
 from numpy.linalg import eigvals
 from scipy.linalg import solve_discrete_lyapunov
 import matplotlib.pyplot as plt
-import sys
 
 class SNRAnalyzer:
     """

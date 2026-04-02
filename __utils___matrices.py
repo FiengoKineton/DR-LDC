@@ -2,21 +2,20 @@ import __main__
 import re, json, yaml, sys
 import numpy as np
 from scipy.linalg import expm
-from utils___systems import Plant, Controller, Plant_cl, Data, Plant_k
+
 from typing import Tuple, List
 from numpy.linalg import norm
-from utils___simulate import Open_Loop
 from pathlib import Path
 from scipy.linalg import solve_sylvester
-from utils___ambiguity import Disturbances
+
+from core import (
+    Plant, Controller, Plant_cl, Data, Plant_k,         # systems.py
+)   
+from config import cfg
+from disturbances import Disturbances
+from __utils___simulate import Open_Loop
 
 
-
-yaml_path = Path(__file__).resolve().parent / "problem___parameters.yaml"
-if yaml is None: 
-    raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-with open(yaml_path, "r", encoding="utf-8") as f:
-    cfg = yaml.safe_load(f)
 
 inp = bool(cfg.get("params", {}).get("inp", 0))
 

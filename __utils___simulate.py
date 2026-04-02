@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-import argparse, csv, yaml, sys
+import argparse, csv
 import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 from typing import Optional, Dict, Any, Iterable
 
-from utils___systems import Plant, Controller, Plant_cl
-from utils___ambiguity import Disturbances
 
+from config import cfg                                  # loader.py
+from core import Plant, Controller, Plant_cl            # systems.py
+from disturbances import Disturbances                   # disturbances.py
 
-yaml_path = Path(__file__).resolve().parent / "problem___parameters.yaml"
-if yaml is None:
-    raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-with open(yaml_path, "r", encoding="utf-8") as f:
-    cfg = yaml.safe_load(f)
 
 
 
@@ -46,7 +42,7 @@ class Closed_Loop():
     
     def test(self):
         # Use the same plant as the optimization example (seed=7)
-        from utils___matrices import MatricesAPI
+        from core import MatricesAPI
         api = MatricesAPI()
         plant, ctrl = api.get_system()
 
@@ -718,7 +714,7 @@ class Open_Loop():
         self.ts = self.p.get("simulation", {}).get("ts", 0.05)
         self.Tf = self.p.get("simulation", {}).get("TotTime", 0.05)
 
-        from utils___matrices import MatricesAPI
+        from core import MatricesAPI
         api = MatricesAPI()
         plant, _ = api.get_system(FROM_DATA=False, gamma=gamma)
 
@@ -1025,7 +1021,7 @@ class Open_Loop():
 
         csv_path = str(self.csv_path)
         print(f"\n[DDD] Loading CSV: {csv_path}")
-        from utils___matrices import MatricesAPI
+        from core import MatricesAPI
         api = MatricesAPI()
         nx, nw, nu, ny, nz = api.get_dimensions_from_yaml()
 

@@ -12,12 +12,14 @@ make an optmisation problem based on the value of gamma such that i run
 
 
 import math, time, sys, yaml, csv, os, datetime
-from pathlib import Path
 import numpy as np
+
 from typing import Callable, Dict, Any, Tuple, List
+from pathlib import Path
 
 from main import main
-from utils___simulate import Open_Loop
+from simulate import Open_Loop
+
 
 # ----------------------------- wiring to your pipeline -----------------------------
 

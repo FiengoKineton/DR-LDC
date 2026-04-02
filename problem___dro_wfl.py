@@ -1,9 +1,13 @@
-import sys, numpy as np, casadi as ca
-from utils___systems import DROLMIResult, Noise
-from utils___matrices import MatricesAPI
-from utils___ambiguity import Disturbances
-from utils___simulate import Open_Loop
+import sys
+import numpy as np, casadi as ca
 from scipy.signal import savgol_filter
+
+from core import (
+    DROLMIResult, Noise,            # systems.py
+    MatricesAPI,                    # matrices.py
+)
+from disturbances import Disturbances
+from simulate import Open_Loop
 
 
 # =============================================================================================== #

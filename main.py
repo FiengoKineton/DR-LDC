@@ -1,19 +1,21 @@
 # main.py
-import yaml, os, sys
-import numpy as np
-from pathlib import Path
+import sys
+import os, numpy as np, pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import pandas as pd
 
-
+from pathlib import Path
 from matplotlib.lines import Line2D
 from problem___baseline import baseline_optim_problem
 from problem___dro_lmi import lmi_pipeline_optim_problem
 
-from utils___systems import Noise
-from utils___SolutionComparison import ResultsComparator
-from utils___SNR import SNRAnalyzer
+from config import cfg              # loader.py
+from core import Noise              # systems.py
+from analysis import (
+    SNRAnalyzer,                    # SNR.py
+    ResultsComparator,              # Comparator.py
+    print_infos_comparison,         # print_info.py
+)
 
 
 
@@ -27,11 +29,6 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
     #parser.add_argument("--p", action="store_true", help="Force Plot")
     #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
     #args = parser.parse_args()
-
-    if yaml is None:
-        raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-    with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
 
     p = cfg.get("params", {})
     out = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
@@ -67,7 +64,7 @@ def main(gamma: float = None, FROM_DATA: bool = None, comp: bool = None, plot: b
         else:
             _model = m
 
-        if _method=="lmi":
+        if _method=="lmi" and ALL:
             if _upd:
                 if _nonConvex: 
                     _method = "lmi-nonConvex"       # WFL
@@ -922,91 +919,9 @@ def NsimSweep_FROM_DATA(
         plt.show()
 
 
-def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict, path: str):
-    """
-    Pretty-print AND save a comparison table between MBD and DDD info dicts.
-
-    Args:
-        m: title (e.g., "2W_independent")
-        infos_mbd: dict for MBD
-        infos_ddd: dict for DDD
-        path: full file path (e.g., "results/summary.txt")
-    """
-
-    metrics = [
-        ("J",               "Cost J"),
-        ("obj",             "Objective"),
-        ("lamda",           "λ"),
-        ("rho",             "ρ"),
-        ("snr",             "SNR [dB]"),
-        ("time",            "Time [s]"),
-        ("attempts",        "Attempts"),
-        ("stress",          "Stress"),
-        ("ratio_violation", "Violations [%]"),
-        ("solver",          "Solver"),
-    ]
-
-    def fmt(v):
-        if isinstance(v, (int, float)):
-            return f"{v:.4g}"
-        return str(v)
-
-    # === BUILD STRING ===
-    lines = []
-
-    lines.append("\n" + "=" * 70)
-    lines.append(f" {m} summary ".center(70, "="))
-    lines.append("=" * 70)
-
-    header = f"{'Metric':<15}{'MBD':>15}{'DDD':>15}{'DDD - MBD':>15}"
-    lines.append(header)
-    lines.append("-" * 70)
-
-    for key, label in metrics:
-        v_m = infos_mbd.get(key, None)
-        v_d = infos_ddd.get(key, None)
-
-        if isinstance(v_m, (int, float)) and isinstance(v_d, (int, float)):
-            diff = v_d - v_m
-            diff_str = f"{diff:+.3g}"
-        else:
-            diff_str = ""
-
-        line = f"{label:<15}{fmt(v_m):>15}{fmt(v_d):>15}{diff_str:>15}"
-        lines.append(line)
-
-    lines.append("=" * 70 + "\n")
-
-    # join everything
-    table_str = "\n".join(lines)
-
-    # === PRINT ===
-    print(table_str)
-
-    # === SAVE TO FILE ===
-    if path is not None:
-        path = path.rstrip("/")
-
-        # remove trailing "_MBD" if present
-        if path.endswith("_MBD"):
-            path = path[:-4]
-
-        # final file path (same directory, just rename)
-        final_path = f"{path}_summary.txt"
-
-        os.makedirs(os.path.dirname(final_path), exist_ok=True)
-
-        with open(final_path, "w", encoding="utf-8") as f:
-            f.write(table_str)
-
 # ----------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    if yaml is None:
-        raise ImportError("PyYAML not available. Install with `pip install pyyaml`.")
-    with open("problem___parameters.yaml", "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-
     p = cfg.get("params", {})
     gamma = select_gamma(p)
 

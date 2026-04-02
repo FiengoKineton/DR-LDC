@@ -1,14 +1,15 @@
+import sys
 import json, numpy as np
-from utils___matrices import compose_closed_loop
 
 from numpy.linalg import eigvals
 from scipy.optimize import minimize
-from utils___systems import Plant, Controller
 from pathlib import Path
 
-from utils___systems import Plant, Controller, Plant_cl, Noise
-from utils___simulate import Closed_Loop 
-from utils___matrices import Recover, MatricesAPI, compose_closed_loop
+from core import (
+    Plant, Controller, Plant_cl,            # systems.py     
+    MatricesAPI, compose_closed_loop,       # matrices.py       
+)
+from simulate import Closed_Loop 
 
 
 # ------------------------- SUPPORTING FUNCTIONS FOR OPTIMIZATION --------
