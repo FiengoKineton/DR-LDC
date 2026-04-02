@@ -26,12 +26,11 @@ if __name__ == "__main__":
             infos_mbd, m, o = run_exp(FROM_DATA=False, gamma=gamma, comp=False, ALL=ALL, info=True)
             infos_ddd, _, _ = run_exp(FROM_DATA=True, gamma=gamma, comp=False, ALL=ALL, info=True)
             run_exp(comp=True, gamma=gamma, ALL=ALL)
-
             print_infos_comparison(m, infos_mbd, infos_ddd, o)
         else:
             info, m, o = run_exp(gamma=gamma, SINGLE_RUN=True)
             print_infos(m, info, o, bool(p.get("FROM_DATA", 0)))
-
+    
     else: 
         if not bool(p.get("test_Nsims", 0)):
             MutipleRunsEvaluation(p=p, run_fn=run_exp, gamma=gamma, COST=COST, N=100)

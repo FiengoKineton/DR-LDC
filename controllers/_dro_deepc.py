@@ -229,7 +229,7 @@ def DeePC_dro_lmi(                      # (Gx, Gy, Gz) written
         try: 
             v = float(c.violation())
             violation_values.append(v)
-            print(c, "violation:", c.violation())
+            #print(c, "violation:", c.violation())
             if v > 1e-6:    violations += 1
         except Exception as e:
             pass
