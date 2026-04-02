@@ -6,9 +6,8 @@ import matplotlib.pyplot as plt
 
 
 from config import cfg                                  # loader.py
-from core import Plant                                  # systems.py
 from disturbances import Disturbances                   # disturbances.py
-
+from utils import Plant                                 # systems.py
 
 from .initial_conditions import _initial_condition_from_eigenvalues
 

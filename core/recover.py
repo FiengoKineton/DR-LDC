@@ -3,8 +3,8 @@ import numpy as np
 from numpy.linalg import norm
 from scipy.linalg import solve_sylvester
 
-from core.systems import Plant, Controller
 from config import cfg
+from utils import Plant, Controller
 
 
 inp = bool(cfg.get("params", {}).get("inp", 0))

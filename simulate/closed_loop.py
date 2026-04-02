@@ -5,8 +5,8 @@ from typing import Optional, Dict, Any, Iterable
 
 
 from config import cfg                                  # loader.py
-from core import Plant, Controller, Plant_cl            # systems.py
 from disturbances import Disturbances                   # disturbances.py
+from utils import Plant, Controller, Plant_cl           # systems.py
 
 from .initial_conditions import _initial_condition_from_eigenvalues
 

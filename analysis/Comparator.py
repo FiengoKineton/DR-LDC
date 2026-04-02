@@ -5,10 +5,8 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Optional, Mapping
 
 
-from core import (
-    Plant, Controller, Plant_cl,            # systems.py
-    MatricesAPI,                            # matrices.py
-)
+from core import MatricesAPI
+from utils import Plant, Controller, Plant_cl
 from simulate import Closed_Loop
 
 

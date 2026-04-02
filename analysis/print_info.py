@@ -1,8 +1,6 @@
 import os
 
 
-
-
 def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict, path: str):
     """
     Pretty-print AND save a comparison table between MBD and DDD info dicts.

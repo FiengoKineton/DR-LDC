@@ -1,0 +1,7 @@
+# Ignore ALL __pycache__ folders
+__pycache__/
+**/__pycache__/
+
+# Ignore ALL _OLD folders anywhere
+_OLD/
+**/_OLD/
