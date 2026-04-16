@@ -38,3 +38,36 @@ def _print_scale_dict(name, d):
     print(f"\n{name}")
     for k, v in d.items():
         print(f"  {k:<24}: {v}")
+
+
+def controllability_matrix(A, B, T):
+    """
+    Build the finite-horizon controllability matrix:
+    [A^{T-1}B, A^{T-2}B, ..., B]
+
+    Parameters
+    ----------
+    A : (nx, nx)
+    B : (nx, nu)
+    T : int
+
+    Returns
+    -------
+    C_T : (nx, T*nu)
+    """
+    C_blocks = []
+
+    A_power = np.eye(A.shape[0])
+    powers = [A_power]
+
+    # Precompute powers of A up to A^{T-1}
+    for _ in range(1, T):
+        A_power = A_power @ A
+        powers.append(A_power)
+
+    # Build blocks: A^{T-1}B ... B
+    for k in reversed(range(T)):
+        C_blocks.append(powers[k] @ B)
+
+    C_T = np.hstack(C_blocks)
+    return C_T

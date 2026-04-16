@@ -93,31 +93,6 @@ class Young_dro_lmi:
 
     # -------------------------------------------------------------------------------------- #
 
-    def simulate_datasets(self):
-        self.estimator.simulate_datasets()
-        self._sync_from_estimator()
-        return self.estimator.datasets
-
-    def select_dataset(self):
-        out = self.estimator.select_dataset()
-        self._sync_from_estimator()
-        return out
-
-    def estimate_state_mats(self):
-        out = self.estimator.estimate_state_mats()
-        self._sync_from_estimator()
-        return out
-
-    def estimate_disturbance_model(self, mode=None, eta=None):
-        out = self.estimator.estimate_disturbance_model(mode=mode, eta=eta)
-        self._sync_from_estimator()
-        return out
-
-    def estimate_output_mats(self):
-        out = self.estimator.estimate_output_mats()
-        self._sync_from_estimator()
-        return out
-
     def _sync_from_estimator(self):
         """
         Copy relevant estimated/simulated quantities from the estimator
@@ -125,6 +100,7 @@ class Young_dro_lmi:
         self.Bu, self.Bw, etc.
         """
         est = self.estimator
+        est.eval()  # ensure all estimates are up to date
 
         self.datasets = est.datasets
         self.avg = est.avg
@@ -157,8 +133,49 @@ class Young_dro_lmi:
         self.Sigma_nom = est.Sigma_nom
 
         self.beta = est.beta
+        self.beta_a = est.beta_a
+        self.beta_b = est.beta_b
         self.gamma = est.gamma
         self.var = est.var
+
+        # ================= DEBUG PRINTS =================
+        print("\n\n\n========== SYNC FROM ESTIMATOR ==========")
+
+        print("\n--- Dimensions ---")
+        print(f"T  : {self.T}")
+        print(f"nx : {self.nx}, nu : {self.nu}, ny : {self.ny}, nz : {self.nz}, nw : {self.nw}")
+
+        print("\n--- Data shapes ---")
+        print(f"x        : {None if self.x is None else self.x.shape}")
+        print(f"x_next   : {None if self.x_next is None else self.x_next.shape}")
+        print(f"u        : {None if self.u is None else self.u.shape}")
+        print(f"y        : {None if self.y is None else self.y.shape}")
+        print(f"z        : {None if self.z is None else self.z.shape}")
+
+        print("\n--- System matrices ---")
+        print(f"Ax : {None if self.Ax is None else self.Ax.shape}")
+        print(f"Bu : {None if self.Bu is None else self.Bu.shape}")
+        print(f"Bw : {None if self.Bw is None else self.Bw.shape}")
+
+        print(f"Cy  : {None if self.Cy is None else self.Cy.shape}")
+        print(f"Dyw : {None if self.Dyw is None else self.Dyw.shape}")
+        print(f"Cz  : {None if self.Cz is None else self.Cz.shape}")
+        print(f"Dzu : {None if self.Dzu is None else self.Dzu.shape}")
+        print(f"Dzw : {None if self.Dzw is None else self.Dzw.shape}")
+
+        print("\n--- Noise / DRO ---")
+        print(f"R          : {None if self.R is None else self.R.shape}")
+        print(f"w          : {None if self.w is None else self.w.shape}")
+        print(f"Sigma_nom  : {None if self.Sigma_nom is None else self.Sigma_nom.shape}")
+
+        print("\n--- Scalars ---")
+        print(f"beta   : {self.beta}")
+        print(f"beta_a : {self.beta_a}")
+        print(f"beta_b : {self.beta_b}")
+        print(f"gamma  : {self.gamma}")
+        print(f"var    : {self.var}")
+
+        print("=========================================\n")
 
     # -------------------------------------------------------------------------------------- #
 
@@ -329,9 +346,8 @@ class Young_dro_lmi:
 
         if approach == "Young":
             Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
-            beta_a, beta_b = self.beta * np.sqrt(nx/(nx+nu)), self.beta * np.sqrt(nu/(nx+nu))
-            beta_aa, beta_ab = np.sqrt(1 + X_norm**2 + Y_norm**2) * beta_a, np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
-            print(f"Beta: {self.beta}\nComputed beta_a: {beta_a}, beta_b: {beta_b} \nComputed beta_aa: {beta_aa}, beta_ab: {beta_ab}")
+            beta_aa, beta_ab = np.sqrt(1 + X_norm**2 + Y_norm**2) * self.beta_a, np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * self.beta_b
+            print(f"Beta: {self.beta}\nComputed beta_a: {self.beta_a}, beta_b: {self.beta_b} \nComputed beta_aa: {beta_aa}, beta_ab: {beta_ab}")
 
             beta_AA = cp.Parameter(nonneg=True, value=float(np.clip(beta_aa, 0.0, 1e3)))
             beta_AB = cp.Parameter(nonneg=True, value=float(np.clip(beta_ab, 0.0, 1e3)))
@@ -375,11 +391,8 @@ class Young_dro_lmi:
             w_A = np.maximum(w_A, 1e-6)
             w_B = np.mean(w_A)
 
-            # ... your existing code that computes beta, beta_a, beta_b ...
-            beta_a, beta_b = self.beta * np.sqrt(nx/(nx+nu)), self.beta * np.sqrt(nu/(nx+nu))
-
             # 2) per-direction β for the A-part: scale β_a with weights
-            beta_AA_dir_np = np.asarray(beta_a * w_A, dtype=float)  # shape (nx,)
+            beta_AA_dir_np = np.asarray(self.beta_a * w_A, dtype=float)  # shape (nx,)
 
             # 3) rotate the selector S_AA into U_A basis so each slack acts along an eigendirection
             #    Original S_AA had shape (2nx x nx) with block [I; 0]. Keep the same but rotate columns.
@@ -395,7 +408,7 @@ class Young_dro_lmi:
 
 
             Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
-            beta_ab = w_B * beta_b #np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
+            beta_ab = w_B * self.beta_b #np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
             beta_AB = cp.Parameter(nonneg=True, value=float(np.clip(beta_ab, 0.0, 1e3)))
 
             # 5) epigraphs for each direction:
@@ -487,8 +500,8 @@ class Young_dro_lmi:
         self.adds = {
             "beta_AA": beta_AA,
             "beta_AB": beta_AB,
-            "beta_a": beta_a,
-            "beta_b": beta_b,
+            "beta_a": self.beta_a,
+            "beta_b": self.beta_b,
             "beta": self.beta,
             "beta_ab": beta_ab,
             "s_AA": s_AA,
@@ -558,11 +571,7 @@ class Young_dro_lmi:
     # -------------------------------------------------------------------------------------- #
 
     def run(self):
-        self.simulate_datasets()
-        self.select_dataset()
-        self.estimate_state_mats()
-        self.estimate_disturbance_model()
-        self.estimate_output_mats()
+        self._sync_from_estimator()  # ensure we have the latest estimates before building the problem
         self.build_problem()
         self.solve()
         return self._build_return_tuple()

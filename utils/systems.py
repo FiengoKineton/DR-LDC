@@ -202,6 +202,7 @@ class YoungDROConfig:
     bw_eta: float = 0.95
     solver_order: tuple = ("MOSEK", "SCS")
     verbose: bool = True
+    delta: float = 0.05
 
 
 @dataclass
@@ -235,4 +236,3 @@ class EstimatedSystem:
 
     beta: float
 
-    

@@ -41,7 +41,7 @@ class lmi_pipeline_optim_problem():
         #########################
         N_sims = int(params.get("N_sims", 1)) if N_sims is None else N_sims
 
-        delta = 0.05
+        delta = float(params.get("N_sims", 0.05))
         nx = params.get("plant", {}).get("nx", 4)
         nu = params.get("plant", {}).get("nu", 2)
         N_sims = int(np.floor(8 * (nx + nu) + 16 * np.log(4/delta))) + 1
@@ -132,8 +132,9 @@ class lmi_pipeline_optim_problem():
                                     model=model,
                                     approach=approach,
                                     N_sims=N_sims,
-                                    mu=1e-4,
+                                    mu=1e-3,
                                     real_Z_mats=real_Z_mats,
+                                    delta=delta,
                                 )
 
                                 YoungSolver = Young_dro_lmi(api=api, vals=(upd, FROM_DATA, plot), noise=noise, config=Young_cfg)

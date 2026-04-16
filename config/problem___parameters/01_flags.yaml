@@ -4,6 +4,7 @@ plot: 0                                                                       # 
 inp: 0                                                                        # VAR ------------------------------ true or false
 re_evaluate: 0                                                                # VAR ------------------------------ true or false
 N_sims: 1                                                                     # VAR ------------------------------ int(\geq 1)
+delta: 0.05                                                                   # VAR ------------------------------ float(0, 1)
 
 ALL: 1                                                                        # VAR ------------------------------ true or false
 COST: 0                                                                       # VAR ------------------------------ true or false

@@ -2,11 +2,10 @@ import sys, numpy as np
 
 from disturbances import Disturbances
 from simulate import Open_Loop
-from utils.helpers import _pseudo_inv
+from utils.helpers import _pseudo_inv, controllability_matrix
 
 
-
-
+# =============================================================================================== #
 
 class Data_Estimator_and_Simulator:
     def __init__(self, api, vals, noise, cfg):
@@ -22,7 +21,7 @@ class Data_Estimator_and_Simulator:
         self.datasets = None
         self.avg = None
 
-        self.x = self.u = self.y = self.z = self.x_next = None
+        self.x = self.u = self.y = self.z = self.x_next = self.w = None
         self.T = self.nx = self.nu = self.ny = self.nz = self.nw = None
 
         self.Ax = self.Bu = self.Bw = None
@@ -31,15 +30,19 @@ class Data_Estimator_and_Simulator:
         self.R = None
         self.w = None
         self.beta = None
+        self.beta_a = None
+        self.beta_b = None
         self.gamma_est = None
         self.bw_info = None
 
+        self.eps = 1e-6
+
+    # ------------------------------------------------------------------------- #
 
     def simulate_datasets(self):
         op = Open_Loop(MAKE_DATA=False, EVAL_FROM_PATH=False, DATASETS=True, N=self.cfg.N_sims)
         self.datasets = op.datasets
         return self.datasets
-
 
     def select_dataset(self):
         from analysis import select_representative_run
@@ -68,13 +71,7 @@ class Data_Estimator_and_Simulator:
 
         return self.avg
     
-
-    def evaluate_beta(self):
-
-        # OLD (wrong) 
-        self.beta = np.linalg.norm(self.R, "fro") / max(self.smin, 1e-12)
-
-
+    # ------------------------------------------------------------------------- #
 
     def estimate_state_mats(self):
         if self.x is None:
@@ -90,27 +87,26 @@ class Data_Estimator_and_Simulator:
         self.smin = float(ss[-1]) if ss.size else 0.0
 
         self.R = self.x_next - (self.Ax @ self.x + self.Bu @ self.u)
-        self.beta = self.evaluate_beta()
 
-        return self.Ax, self.Bu, self.R, self.beta
-    
+        return self.Ax, self.Bu, self.R
+
     def estimate_disturbance_model(self, mode: str | None = None, eta: float | None = None):
         if self.Ax is None or self.Bu is None:
             self.estimate_state_mats()
 
         mode = mode or self.cfg.bw_mode
         eta = eta or self.cfg.bw_eta
+        R = self.x_next - (self.Ax @ self.x + self.Bu @ self.u)
 
-        Bw, R, Sigma_w_hat, info = self._estimate_Bw_from_residuals(
-            Ax_hat=self.Ax,
-            Bu_hat=self.Bu,
+        Bw, nw, _, info = self._estimate_Bw_from_residuals(
+            R=R,
             eta=eta,
             mode=mode,
         )
 
         self.Bw = Bw
         self.R = R
-        self.nw = Bw.shape[1]
+        self.nw = nw #Bw.shape[1]
 
         self.w = _pseudo_inv(self.Bw) @ self.R
         d = Disturbances(n=self.nw)
@@ -157,6 +153,75 @@ class Data_Estimator_and_Simulator:
 
         return self.Cy, self.Dyw, self.Cz, self.Dzu, self.Dzw
        
+    def evaluate_beta(self):
+        """# OLD (wrong) 
+        self.beta = np.linalg.norm(self.R, "fro") / max(self.smin, 1e-12)
+        self.beta_a = self.beta * np.sqrt(self.nx/(self.nx+self.nu))
+        self.beta_b = self.beta * np.sqrt(self.nu/(self.nx+self.nu))
+        """
+
+        full_datasets = self.datasets
+        nx, nu, nw, T = self.nx, self.nu, self.nw, self.T-1
+        N_sims = self.cfg.N_sims
+        delta = self.cfg.delta if hasattr(self.cfg, "delta") else 0.05
+
+        S1 = np.zeros((nx, nx+nu), dtype=float)
+        S2 = np.zeros((nx+nu, nx+nu), dtype=float)
+        for data in full_datasets:
+            X_reg = np.asarray(data["X_reg"], dtype=float)
+            U_reg = np.asarray(data["U_reg"], dtype=float)
+            X_next = np.asarray(data["X_next"], dtype=float)
+
+            Phi = np.vstack([X_reg, U_reg])
+            S1 += X_next @ Phi.T
+            S2 += Phi @ Phi.T
+        
+        S2 += self.eps * np.eye(nx + nu)
+        Theta = S1 @ np.linalg.inv(S2)
+        Ax, Bu = Theta[:, :nx], Theta[:, nx:]
+
+        sum_r, sum_u = np.zeros((nx,T), dtype=float), 0.0
+        count_r, count_u = 0, 0
+
+        for data in full_datasets:
+            X_reg = np.asarray(data["X_reg"], dtype=float)
+            U_reg = np.asarray(data["U_reg"], dtype=float)
+            X_next = np.asarray(data["X_next"], dtype=float)
+
+            R_i = X_next - (Ax @ X_reg + Bu @ U_reg)
+            sum_r += R_i
+            count_r += 1
+
+            U_c = U_reg - np.mean(U_reg, axis=1, keepdims=True)
+            sum_u += np.sum(U_c**2)
+            count_u += U_c.shape[1]
+
+        R = sum_r / max(count_r, 1) 
+        #Bw, nw, *_ = self._estimate_Bw_from_residuals(R)
+
+        R_c = R - np.mean(R, axis=1, keepdims=True)
+        sigma_U = np.sqrt(sum_u / max(count_u, 1) + self.eps)
+        sigma_W = np.sqrt(np.sum(R_c**2) / max(R_c.shape[1], 1) + self.eps)
+        sigma_u = np.sqrt(sigma_U)
+        sigma_w = np.sqrt(sigma_W)
+
+        G_T = controllability_matrix(Ax, Bu, T)
+        F_T = controllability_matrix(Ax, np.eye(nx), T)
+
+        M = sigma_U * (G_T @ G_T.T) + sigma_W * (F_T @ F_T.T)
+        eigvals = np.linalg.eigvalsh(M)
+        lambda_min = max(eigvals[0], self.eps)
+
+        self.beta = 16 * sigma_w *  np.sqrt((nx+2*nu)/N_sims * np.log(36/delta))
+
+        self.beta_a = self.beta / sigma_w #np.sqrt(lambda_min)
+        self.beta_b = self.beta / sigma_u
+
+        print(f"Estimated Bw with nw={nw} using {N_sims} simulations (delta={delta})")
+        print(f"sigma_u = {sigma_u}, sigma_w = {sigma_w}, lambda_min = {lambda_min}")
+        print(f"beta_a = {self.beta_a}, beta_b = {self.beta_b}")
+
+    # ------------------------------------------------------------------------- #
 
     def _residual_anisotropy_weights(self, R, *, floor=1e-12, mode="sqrt"):
         nx, T = R.shape
@@ -178,17 +243,14 @@ class Data_Estimator_and_Simulator:
         w = w / max(np.max(w), 1e-18)
         return U, s, w
     
-
     def _estimate_Bw_from_residuals(
         self,
-        Ax_hat,
-        Bu_hat,
+        R,
         eta=0.95,
         eps=1e-12,
         mode="default",
         Sigma_w_known=None,
     ):
-        R = self.x_next - (Ax_hat @ self.x + Bu_hat @ self.u)
         nx, T = R.shape
 
         S = (R @ R.T) / max(T, 1)
@@ -245,5 +307,16 @@ class Data_Estimator_and_Simulator:
             "energy": float(np.sum(sp)) / total if total > 0 else 0.0,
             "s_vals": s,
         }
-        return Bw_hat, R, Sigma_w_hat, info
+        return Bw_hat, Bw_hat.shape[1], Sigma_w_hat, info
 
+    # ------------------------------------------------------------------------- #
+
+    def eval(self):
+        self.simulate_datasets()
+        self.select_dataset()
+        self.estimate_state_mats()
+        self.estimate_disturbance_model()
+        self.estimate_output_mats()
+        self.evaluate_beta()
+
+# =============================================================================================== #
