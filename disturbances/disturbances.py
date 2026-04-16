@@ -1,6 +1,6 @@
 import numpy as np, matplotlib.pyplot as plt
 
-from config import cfg
+from config import get_cfg
 from ._wasserstein import WassersteinAmbiguitySet
 from ._metric_2w import Metric2Wasserstein
 from ._gaussian import GaussianNoise
@@ -17,6 +17,8 @@ class Disturbances:
     You can call dist.sample(T=...) regardless of which model you selected.
     """
     def __init__(self, gamma: float = None, model: str = None, n: int = None, var: float = None, ellipse: bool = None, AfterBefore: bool = None):
+        
+        cfg = get_cfg()
         p   = cfg.get("params", {})
         amb = p.get("ambiguity", {})
         model = amb.get("model", "W2") if model is None else model

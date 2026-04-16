@@ -3,10 +3,11 @@ import numpy as np
 from numpy.linalg import norm
 from scipy.linalg import solve_sylvester
 
-from config import cfg
+from config import get_cfg
 from utils import Plant, Controller
 
 
+cfg = get_cfg()
 inp = bool(cfg.get("params", {}).get("inp", 0))
 
 

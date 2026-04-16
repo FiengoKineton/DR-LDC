@@ -1,0 +1,11 @@
+
+mode: "A"                                                                   # set | (penalize states & inputs directly) if B then (penalize measured output & inputs)
+
+Qx_diag: [1.0, 1.0]                                                         # set
+Ru_diag: [1.0]                                                              # set
+Wy_diag: [1.0, 1.0]                                                         # set
+
+
+measured:
+  select: "first"                                                           # set | or "random"
+  dyw_zero: 1                                                               # set | Dyw = 0 unless you really measure w

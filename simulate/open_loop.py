@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-from config import cfg                                  # loader.py
+from config import get_cfg                              # loader.py
 from disturbances import Disturbances                   # disturbances.py
 from utils import Plant                                 # systems.py
 
@@ -16,6 +16,8 @@ from .initial_conditions import _initial_condition_from_eigenvalues
 
 class Open_Loop():
     def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, DATASETS=False, gamma: float = None, p: bool = False, x0_mode: str = None, s: bool = None, N: int = None):
+        
+        cfg = get_cfg()
         p = cfg.get("params", {})
         self.p = p
         out = self.p.get("directories", {}).get("data", "./out/data/session_")

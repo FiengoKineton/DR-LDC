@@ -3,7 +3,7 @@ import sys
 import numpy as np
 from pathlib import Path
 
-from config import cfg                      # loader.py
+from config import get_cfg                      # loader.py
 from controllers import (
     baseline_optim_problem,                 # baseline.py
     lmi_pipeline_optim_problem,             # dro_lmi.py
@@ -33,7 +33,7 @@ def run_exp(
     #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
     #args = parser.parse_args()
 
-    p = cfg.get("params", {})
+    p = get_cfg().get("params", {})
     out_base = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
     FROM_DATA = bool(p.get("FROM_DATA", False)) if FROM_DATA is None else FROM_DATA
 

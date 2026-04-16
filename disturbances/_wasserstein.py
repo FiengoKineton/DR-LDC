@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 from scipy.linalg import sqrtm
 from numpy.linalg import cholesky
-from config import cfg
+from config import get_cfg
 
 
 # =====================================================================================
@@ -15,7 +15,7 @@ class WassersteinAmbiguitySet:
     - W_cor: arbitrary temporal correlation but each marginal in the ball
     """
     def __init__(self, gamma: float = None, ellipse: bool = False, n: int = None, var: float = None, alpha: float = 1.5):
-
+        cfg = get_cfg()
         p = cfg.get("params", {})
         set = p.get("ambiguity", {})
         sim = p.get("simulation", {})

@@ -2,7 +2,7 @@ import numpy as np, matplotlib.pyplot as plt
 
 from numpy.linalg import cholesky
 from scipy.linalg import sqrtm
-from config import cfg
+from config import get_cfg
 
 
 
@@ -115,7 +115,7 @@ class Metric2Wasserstein:
         rng : np.random.Generator, optional
             RNG used for all sampling.
         """
-
+        cfg = get_cfg()
         p = cfg.get("params", {})
         set = p.get("ambiguity", {})
         sim = p.get("simulation", {})

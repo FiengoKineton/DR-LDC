@@ -1,0 +1,6 @@
+
+use_bc: 0                                                                   # set | not used yet
+use_iv: 0                                                                   # set | not used yet
+zero_mean: 0                                                                # set | leave it at 0
+X_iv_path: "data/experiment_iv_states.csv"                                  # set | not used yet
+stabilise: 0                                                                # set | leave it at 0

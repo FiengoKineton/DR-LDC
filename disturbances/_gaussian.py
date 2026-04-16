@@ -1,13 +1,14 @@
 import numpy as np
 
 from numpy.linalg import cholesky
-from config import cfg
+from config import get_cfg
 
 
 # =====================================================================================
 
 class GaussianNoise:
     def __init__(self, n: int = None, var: float = None):
+        cfg = get_cfg()
         p   = cfg.get("params", {})
         amb = p.get("ambiguity", {})
         sim = p.get("simulation", {})

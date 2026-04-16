@@ -6,14 +6,14 @@ from typing import Tuple, List
 import numpy as np
 from scipy.linalg import expm
 
-from config import cfg
+from config import get_cfg
 from disturbances import Disturbances
 from simulate import Open_Loop
 from utils import Plant, Plant_k, Plant_cl, Data, Controller
 
 
 
-
+cfg = get_cfg()
 inp = bool(cfg.get("params", {}).get("inp", 0))
 
 # ------------------------- COMPOSE MATRICES FROM LMI --------------------------

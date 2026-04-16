@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from typing import Optional, Dict, Any, Iterable
 
 
-from config import cfg                                  # loader.py
+from config import get_cfg                              # loader.py
 from disturbances import Disturbances                   # disturbances.py
 from utils import Plant, Controller, Plant_cl           # systems.py
 
@@ -15,6 +15,7 @@ from .initial_conditions import _initial_condition_from_eigenvalues
 
 class Closed_Loop():
     def __init__(self, TEST=False):
+        cfg = get_cfg()
         self.p = cfg.get("params", {})
         sim = self.p.get("simulation", {})
         self.Tf = sim.get("TotTime", 25)

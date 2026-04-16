@@ -189,3 +189,50 @@ class DROLMIResultUpd:
     def _get_l(self):
         return self.lamda
     
+
+@dataclass
+class YoungDROConfig:
+    model: str = "correlated"
+    eps: float = 1e-5
+    mu: float = 1e-3
+    approach: str = "Young"
+    real_Z_mats: bool = False
+    N_sims: int = 1
+    bw_mode: str = "factor"
+    bw_eta: float = 0.95
+    solver_order: tuple = ("MOSEK", "SCS")
+    verbose: bool = True
+
+
+@dataclass
+class EstimatedSystem:
+    x: np.ndarray
+    u: np.ndarray
+    y: np.ndarray
+    z: np.ndarray
+    x_next: np.ndarray
+
+    Ax: np.ndarray
+    Bu: np.ndarray
+    Bw: np.ndarray
+
+    Cy: np.ndarray
+    Dyw: np.ndarray
+    Cz: np.ndarray
+    Dzu: np.ndarray
+    Dzw: np.ndarray
+
+    Sigma_nom: np.ndarray
+    R: np.ndarray
+    w: np.ndarray
+
+    T: int
+    nx: int
+    nu: int
+    ny: int
+    nz: int
+    nw: int
+
+    beta: float
+
+    

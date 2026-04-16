@@ -5,7 +5,7 @@ from pathlib import Path
 
 from core import MatricesAPI, compose_closed_loop, Recover      # matrices.py
 from simulate import Closed_Loop
-from utils import Plant, Plant_cl, Controller, Noise
+from utils import Plant, Plant_cl, Controller, Noise, YoungDROConfig
 
 from ._dro_base import Baseline_dro_lmi
 from ._dro_deepc import DeePC_dro_lmi
@@ -35,9 +35,16 @@ class lmi_pipeline_optim_problem():
         old = bool(params.get("old_upd", 1))
         inp = bool(params.get("inp", 0))
         estm_only = bool(params.get("estm_only", 0))
-        N_sims = int(params.get("N_sims", 1)) if N_sims is None else N_sims
         non_convex = bool(params.get("non_convex", 0))
         Nsims_mats = bool(params.get("Nsims_mats", 0))
+
+        #########################
+        N_sims = int(params.get("N_sims", 1)) if N_sims is None else N_sims
+
+        delta = 0.05
+        nx = params.get("plant", {}).get("nx", 4)
+        nu = params.get("plant", {}).get("nu", 2)
+        N_sims = int(np.floor(8 * (nx + nu) + 16 * np.log(4/delta))) + 1
 
 
         if Nsims_mats:
@@ -120,7 +127,19 @@ class lmi_pipeline_optim_problem():
                                 }
                             else:
                                 real_Z_mats = False
-                                res, plant, Sigma_nom, other, num_violations = Young_dro_lmi(
+
+                                Young_cfg = YoungDROConfig(
+                                    model=model,
+                                    approach=approach,
+                                    N_sims=N_sims,
+                                    mu=1e-4,
+                                    real_Z_mats=real_Z_mats,
+                                )
+
+                                YoungSolver = Young_dro_lmi(api=api, vals=(upd, FROM_DATA, plot), noise=noise, config=Young_cfg)
+                                res, plant, Sigma_nom, other, num_violations = YoungSolver.run()
+
+                                """res, plant, Sigma_nom, other, num_violations = Young_dro_lmi(
                                     api=api,
                                     vals=(upd, FROM_DATA, plot),
                                     noise=noise,
@@ -128,7 +147,8 @@ class lmi_pipeline_optim_problem():
                                     approach=approach,
                                     real_Z_mats=real_Z_mats,
                                     N_sims=N_sims,
-                                ) 
+                                ) """
+
                                 problem_params = {
                                     "Methodology": approach,
                                     "FROM_DATA": FROM_DATA, # True

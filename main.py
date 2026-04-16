@@ -4,13 +4,14 @@ from analysis import (
     print_infos_comparison, print_infos,            # print_info.py
     MutipleRunsEvaluation, NsimSweep_FROM_DATA,     # Nsims_eval.py  
 )
-from config import cfg                              # loader.py
+from config import get_cfg                          # loader.py
 from core import run_exp                            # run.py
 from utils import select_gamma                      # gamma_selection.py
 
 # ----------------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    cfg = get_cfg()
     p = cfg.get("params", {})
     gamma = select_gamma(p)
 

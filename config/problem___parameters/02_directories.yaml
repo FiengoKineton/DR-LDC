@@ -1,0 +1,4 @@
+
+data: "./experiments/data/session_"                                                 # set
+artifacts: "./experiments/artifacts/"                                               # set
+runID: "test_Iso"

@@ -1,0 +1,4 @@
+
+ts: 0.05                                                                    # set
+TotTime: 100                                                                # set
+init_cond: "e1"                                                             # VAR ------------------------------ ("zeros", "rand", "e1", "from_eig")

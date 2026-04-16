@@ -1,10 +1,11 @@
 import numpy as np
-from config import cfg
+from config import get_cfg
 
 # =====================================================================================
 
 class WithoutNoise:
     def __init__(self):
+        cfg = get_cfg()
         p = cfg.get("params", {})
         sim = p.get("simulation", {})
         Tf = sim.get("TotTime", 100)

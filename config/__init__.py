@@ -1,3 +1,3 @@
-from .loader import cfg
+from .runtime import get_cfg
 
-__all__ = ["cfg"]
+__all__ = ["get_cfg"]

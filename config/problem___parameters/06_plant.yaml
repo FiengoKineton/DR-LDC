@@ -1,0 +1,9 @@
+
+A_mat:  [[0.9,0.1,0,0],[0,0.88,0.1,0],[0,0,0.86,0.1],[0,0,0,0.84]]          # set
+Bu_mat: [[0.3,0.0],[0.0,0.3],[0.1,-0.2],[0.0,0.1]]                          # set
+Bw_mat: [[1,0],[0,1],[0,0],[0,0]]                                           # set
+
+Bw_mode: ident                                                              # set | may be var (ident or specified)
+type: PaperLike                                                             # set
+seed: 42                                                                    # set
+A: {eig_min: 0.7, eig_max: 0.95}                                            # set  
