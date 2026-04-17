@@ -13,8 +13,8 @@ def print_infos_comparison(m: str, infos_mbd: dict, infos_ddd: dict, path: str):
     """
 
     metrics = [
-        ("J",               "Cost J"),
-        ("obj",             "Objective"),
+        ("J",               "Cost"),    # Cost J
+        ("obj",             "J"),       # Objective
         ("lamda",           "λ"),
         ("rho",             "ρ"),
         ("snr",             "SNR [dB]"),
@@ -85,8 +85,8 @@ def print_infos(m: str, info: dict, path: str = None, from_data: bool = False):
     Pretty-print AND save a single summary table for either MBD or DDD.
     """
     metrics = [
-        ("J",               "Cost J"),
-        ("obj",             "Objective"),
+        ("J",               "Cost"),    # Cost J
+        ("obj",             "J"),       # Objective
         ("lamda",           "λ"),
         ("rho",             "ρ"),
         ("snr",             "SNR [dB]"),

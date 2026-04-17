@@ -345,7 +345,8 @@ class Young_dro_lmi:
         reg = 0.0
 
         if approach == "Young":
-            Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
+            Cy_norm, M_norm, N_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 1.0
+            X_norm = 2.5e5 #3.0
             beta_aa, beta_ab = np.sqrt(1 + X_norm**2 + Y_norm**2) * self.beta_a, np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * self.beta_b
             print(f"Beta: {self.beta}\nComputed beta_a: {self.beta_a}, beta_b: {self.beta_b} \nComputed beta_aa: {beta_aa}, beta_ab: {beta_ab}")
 
