@@ -11,8 +11,7 @@ from controllers import (
 from utils import _generate_dir, Noise      # directory.py
 
 
-
-# ------------------------- MAIN SCRIPT ENTRY POINT -------------------------------
+# =============================================================================================== #
 
 def run_exp(
         gamma: float = None, 
@@ -25,13 +24,7 @@ def run_exp(
         N_sims: int = None, 
         SINGLE_RUN: bool = False,
         ):
-    
-    #parser = argparse.ArgumentParser(description="DRO LMI Optimization")
-    #parser.add_argument("--comp", action="store_true", help="Run comparison btw baseline and LMI pipeline")
-    #parser.add_argument("--base", action="store_true", help="Run baseline optimization")
-    #parser.add_argument("--p", action="store_true", help="Force Plot")
-    #parser.add_argument("--lmi", action="store_true", help="Run LMI pipeline optimization")
-    #args = parser.parse_args()
+
 
     p = get_cfg().get("params", {})
     out_base = Path(p.get("directories", {}).get("artifacts", "./out/artifacts/")).with_suffix("")#.as_posix()
@@ -48,9 +41,7 @@ def run_exp(
 
     _percent = int(p.get("ambiguity", {}).get("percent", 1)*100)
     
-
-    # ----------------------------------------------------------------------
-
+    # ------------------------------------------------------------------------------------------- #
 
     m, path_name, (_method, _runID, _model) = _generate_dir(p, ALL, FROM_DATA)
 
@@ -67,8 +58,8 @@ def run_exp(
 
     noise = Noise(Sigma_nom=Sigma_nom, avrg=0, var=var, n=n, gamma=gamma)
 
+    # ------------------------------------------------------------------------------------------- #
 
-    # ----------------------------------------------------------------------
     if _comp:
         from analysis.Comparator import ResultsComparator
         cmp = ResultsComparator(out_root=out_base, save=_save, ts=_ts)
@@ -98,6 +89,7 @@ def run_exp(
             cmp.plot_single_mbd_or_ddd(path_name=path_name, method=_method, ID=_runID, plot=_plot, re_evaluate=_re_evaluate, init_cond=_init_cond, percent=_percent)
             return opt._return_final_infos(), _model, out
         
+    # ------------------------------------------------------------------------------------------- #
 
     if bool(p.get("SNR", 1)): 
         plant, ctrl, sim, Sigma = opt.get_snr_vars()
@@ -128,4 +120,4 @@ def run_exp(
         # 4) Plot worst/best SNR bands
         an.plot_worst_best_lines()
 
-
+# =============================================================================================== #

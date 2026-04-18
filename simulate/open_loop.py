@@ -12,7 +12,7 @@ from utils import Plant                                 # systems.py
 from .initial_conditions import _initial_condition_from_eigenvalues
 
 
-## ------------------------- OPEN-LOOP SIMULATION CLASS ----------------------------
+# =============================================================================================== #
 
 class Open_Loop():
     def __init__(self, MAKE_DATA=True, EVAL_FROM_PATH=True, DATASETS=False, gamma: float = None, p: bool = False, x0_mode: str = None, s: bool = None, N: int = None):
@@ -55,6 +55,7 @@ class Open_Loop():
                 metrics = self.plot_est_vs_truth(x0_mode="e1" if x0_mode is None else x0_mode, show=True if s is None else s)
                 print("\n[PLT] Plotting completed. Metrics:", metrics)
     
+    # ------------------------------------------------------------------------------------------- #
 
     def make_multiple_data(self, plant: Plant, N: int = 5, gamma: float = None, Sigma: np.ndarray = None):
         datasets = []
@@ -283,6 +284,7 @@ class Open_Loop():
         data["rows"] = np.asarray(rows)
         return data
 
+    # ------------------------------------------------------------------------------------------- #
 
     def evaluate_from_path(
         self, 
@@ -442,7 +444,6 @@ class Open_Loop():
 
 
         return plant_est
-
 
     def plot_est_vs_truth(self, x0_mode="e1", seed=0, show=True):
         """
@@ -619,4 +620,4 @@ class Open_Loop():
         out = {"metrics": metrics, "dimension_checks": dim_checks}
         return out
 
-
+# =============================================================================================== #

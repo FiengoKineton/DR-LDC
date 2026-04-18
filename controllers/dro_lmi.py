@@ -104,8 +104,6 @@ class lmi_pipeline_optim_problem():
                 reg_fro, reg_beta = True, True
 
                 if not non_convex:
-
-                    # 2) Solve DRO-LMI (choose "correlated" or "independent")
                     if not estm_only:
                         if old:
                             if approach == "DeePC":
@@ -139,16 +137,6 @@ class lmi_pipeline_optim_problem():
 
                                 YoungSolver = Young_dro_lmi(api=api, vals=(upd, FROM_DATA, plot), noise=noise, config=Young_cfg)
                                 res, plant, Sigma_nom, other, num_violations = YoungSolver.run()
-
-                                """res, plant, Sigma_nom, other, num_violations = Young_dro_lmi(
-                                    api=api,
-                                    vals=(upd, FROM_DATA, plot),
-                                    noise=noise,
-                                    model=model,
-                                    approach=approach,
-                                    real_Z_mats=real_Z_mats,
-                                    N_sims=N_sims,
-                                ) """
 
                                 problem_params = {
                                     "Methodology": approach,

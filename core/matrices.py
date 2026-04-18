@@ -12,11 +12,11 @@ from simulate import Open_Loop
 from utils import Plant, Plant_k, Plant_cl, Data, Controller
 
 
-
 cfg = get_cfg()
 inp = bool(cfg.get("params", {}).get("inp", 0))
 
-# ------------------------- COMPOSE MATRICES FROM LMI --------------------------
+
+# =========== COMPOSE MATRICES FROM LMI ========================================================= #
 
 def compose_closed_loop(plant: Plant, ctrl: Controller):
     """
@@ -53,8 +53,7 @@ def compose_closed_loop(plant: Plant, ctrl: Controller):
 
     return A_cl, B_cl, C_cl, D_cl
 
-
-# ------------------------- PUBLIC API -----------------------------------------
+# =============================================================================================== #
 
 class MatricesAPI():
     def __init__(self):
@@ -901,4 +900,4 @@ class MatricesAPI():
         print(f"Dc [{ctrl.Dc.shape}]:\n", ctrl.Dc)
         print("\n\n")
 
-
+# =============================================================================================== #

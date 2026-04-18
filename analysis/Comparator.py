@@ -10,6 +10,7 @@ from utils import Plant, Controller, Plant_cl
 from simulate import Closed_Loop
 
 
+# =============================================================================================== #
 
 class ResultsComparator:
     def __init__(self, out_root: str, save: bool = True, ts: float = 0.05):
@@ -1584,3 +1585,4 @@ class ResultsComparator:
 
         return report
 
+# =============================================================================================== #

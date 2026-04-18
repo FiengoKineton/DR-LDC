@@ -11,7 +11,7 @@ from utils import Plant, Controller, Plant_cl           # systems.py
 from .initial_conditions import _initial_condition_from_eigenvalues
 
 
-## ------------------------- CLOSED-LOOP SIMULATION CLASS --------------------------
+# =============================================================================================== #
 
 class Closed_Loop():
     def __init__(self, TEST=False):
@@ -23,38 +23,12 @@ class Closed_Loop():
 
         if TEST: self.test()
     
+    # ------------------------------------------------------------------------------------------- #
+
     def test(self):
-        # Use the same plant as the optimization example (seed=7)
         from core import MatricesAPI
         api = MatricesAPI()
         plant, ctrl = api.get_system()
-
-        """Ac = np.array([
-            [ 0.3449, -0.4085,  0.    ,  0.    ],
-            [-0.4279,  0.4803,  0.    ,  0.    ],
-            [ 0.    ,  0.    ,  0.    ,  0.    ],
-            [ 0.    ,  0.    ,  0.    ,  0.    ],
-        ], dtype=float)
-
-        Bc = np.array([
-            [ 0.2538, -0.2417],
-            [-0.2802,  0.3522],
-            [ 0.    ,  0.    ],
-            [ 0.    ,  0.    ],
-        ], dtype=float)
-
-        Cc = np.array([
-            [ 0.1093, -0.0614,  0.    ,  0.    ],
-            [ 0.1129, -0.0553,  0.    ,  0.    ],
-        ], dtype=float)
-
-        Dc = np.array([
-            [-1.0166,  0.1460],
-            [-1.0123,  0.1628],
-        ], dtype=float)
-
-        ctrl = Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc)
-        """
 
         sim = self.simulate_closed_loop(plant, ctrl)
         print("Simulated shapes:",
@@ -64,6 +38,12 @@ class Closed_Loop():
         print(f"Saved time series to {out}")
 
         self.plot_timeseries(sim)
+
+    def save_npz(self, sim, fname="cl_timeseries.npz"):
+        np.savez_compressed(fname, **sim)
+        return fname
+
+    # ------------------------------------------------------------------------------------------- #
 
     def simulate_closed_loop(self, plant: Plant,
                             ctrl: Controller,
@@ -138,22 +118,7 @@ class Closed_Loop():
             W = W.reshape(T, 1)
 
         if W.shape[1] == nw:
-            # Great. Use directly.
             pass
-        """else:
-            # Case 2: mismatch. DO NOT "average columns".
-            # Sample *state-space* disturbance then project onto span(Bw_hat).
-            # Build a target state covariance. Easiest defensible choice:
-            #   Sigma_state = Bw_hat Bw_hat^T (+ tiny isotropic pad).
-            eps = 1e-6
-            Sigma_state = Bw @ Bw.T + eps * np.eye(nx)
-
-            # Sample state disturbances with that covariance (shape: T x nx)
-            D = wass.sample(T=T, Sigma=Sigma_state)
-
-            # Project each d_t onto col(Bw_hat) via pseudoinverse
-            Bw_pinv = np.linalg.pinv(Bw)     # (nw_hat x nx)
-            W = (D @ Bw_pinv.T)                  # (T x nw_hat)"""
         
         for t in range(T):
             w = W[t, :].reshape(nw, 1) # (L @ rng.standard_normal((nw, 1))).astype(float)
@@ -181,7 +146,98 @@ class Closed_Loop():
             "x_0": x_0, "xc_0": xc_0,
         }
     
+    def simulate_composite(self, Pcl: Plant_cl, Sigma_w: np.ndarray = None, gamma: float = 0.5, init_cond: str = "zeros") -> Dict[str, Any]:
+        """
+        Simulate the composed system:
+            X_{t+1} = Acl X_t + Bcl w_t
+            z_t     = Ccl X_t + Dcl w_t
+        with X_0 = 0 (or provided X0).
 
+        Args:
+            Pcl: Plant_cl with (Acl,Bcl,Ccl,Dcl)
+            W: disturbance trajectory (T, nw). If provided, overrides Sigma_w.
+            Sigma_w: covariance of w_t (nw,nw), i.i.d. Gaussian if W is None.
+            seed: RNG seed when sampling w_t.
+            X0: initial state (nX,) or (nX,1). Defaults to zeros.
+
+        Returns dict with:
+            'X' (T, nX), 'Z' (T, nz), 'W' (T, nw),
+            sizes and timing metadata.
+        """
+
+        A = np.asarray(Pcl.Acl, dtype=float)
+        B = np.asarray(Pcl.Bcl, dtype=float)
+        C = np.asarray(Pcl.Ccl, dtype=float)
+        D = np.asarray(Pcl.Dcl, dtype=float)
+
+        nX = A.shape[0]
+        nw = B.shape[1]
+        nz = C.shape[0]
+
+        # Horizon
+        T = int(round(self.Tf / self.ts))
+        if T <= 0:
+            raise ValueError("Non-positive simulation horizon. Check Tf and ts.")
+
+        # Initial condition
+        if init_cond == "zeros":
+            x = np.zeros((nX, 1))
+        elif init_cond == "from_eig":           
+            x = _initial_condition_from_eigenvalues(A)
+        elif init_cond == "e1":
+            x = np.zeros((nX, 1))
+            x[0, 0] = 1.0
+        else:   # rand
+            rng = np.random.default_rng()
+            x = rng.standard_normal((nX, 1))        
+
+        # Disturbance generation
+        wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
+        W = wass.sample(T=T, Sigma=Sigma_w)
+        if W.ndim == 1:
+            W = W.reshape(T, 1)
+
+        if W.shape[1] == nw:
+            # Great. Use directly.
+            pass
+        """else:
+            # Case 2: mismatch. DO NOT "average columns".
+            # Sample *state-space* disturbance then project onto span(Bw_hat).
+            # Build a target state covariance. Easiest defensible choice:
+            #   Sigma_state = Bw_hat Bw_hat^T (+ tiny isotropic pad).
+            eps = 1e-6
+            Sigma_state = B @ B.T + eps * np.eye(nX)
+
+            # Sample state disturbances with that covariance (shape: T x nx)
+            d = wass.sample(T=T, Sigma=Sigma_state)
+
+            # Project each d_t onto col(Bw_hat) via pseudoinverse
+            B_pinv = np.linalg.pinv(B)     # (nw_hat x nx)
+            W = (d @ B_pinv.T)                  # (T x nw_hat)"""
+
+        # Storage
+        X = np.zeros((T, nX))
+        Z = np.zeros((T, nz))
+        step = np.zeros((T,), dtype=int)
+
+        # Rollout
+        for t in range(T):
+            w = W[t, :].reshape(nw, 1)
+            z = C @ x + D @ w
+            X[t, :] = x.ravel()
+            Z[t, :] = z.ravel()
+            step[t] = t
+            x = A @ x + B @ w
+
+        return {
+            "X": X,               # (T, nX)
+            "Z": Z,               # (T, nz)
+            "W": W,               # (T, nw)
+            "T": T, "ts": self.ts, "step": step,
+            "nX": nX, "nw": nw, "nz": nz,
+        }
+
+    # ------------------------------------------------------------------------------------------- #
 
     def simulate_Z_cost(self, Z: np.ndarray, Q: np.ndarray = None, plot: bool = True):
         """
@@ -387,7 +443,7 @@ class Closed_Loop():
             "T": T,
         }
 
-            
+    # ------------------------------------------------------------------------------------------- #            
 
     def plot_timeseries(self, sim, save: bool = False, out: str = None, fmt: str = "pdf", dpi: int = 300, tight: bool = True):
         T = sim["T"]
@@ -462,101 +518,6 @@ class Closed_Loop():
 
         plt.show()
         if save: return saved
-
-    def save_npz(self, sim, fname="cl_timeseries.npz"):
-        np.savez_compressed(fname, **sim)
-        return fname
-
-    def simulate_composite(self, Pcl: Plant_cl, Sigma_w: np.ndarray = None, gamma: float = 0.5, init_cond: str = "zeros") -> Dict[str, Any]:
-        """
-        Simulate the composed system:
-            X_{t+1} = Acl X_t + Bcl w_t
-            z_t     = Ccl X_t + Dcl w_t
-        with X_0 = 0 (or provided X0).
-
-        Args:
-            Pcl: Plant_cl with (Acl,Bcl,Ccl,Dcl)
-            W: disturbance trajectory (T, nw). If provided, overrides Sigma_w.
-            Sigma_w: covariance of w_t (nw,nw), i.i.d. Gaussian if W is None.
-            seed: RNG seed when sampling w_t.
-            X0: initial state (nX,) or (nX,1). Defaults to zeros.
-
-        Returns dict with:
-            'X' (T, nX), 'Z' (T, nz), 'W' (T, nw),
-            sizes and timing metadata.
-        """
-
-        A = np.asarray(Pcl.Acl, dtype=float)
-        B = np.asarray(Pcl.Bcl, dtype=float)
-        C = np.asarray(Pcl.Ccl, dtype=float)
-        D = np.asarray(Pcl.Dcl, dtype=float)
-
-        nX = A.shape[0]
-        nw = B.shape[1]
-        nz = C.shape[0]
-
-        # Horizon
-        T = int(round(self.Tf / self.ts))
-        if T <= 0:
-            raise ValueError("Non-positive simulation horizon. Check Tf and ts.")
-
-        # Initial condition
-        if init_cond == "zeros":
-            x = np.zeros((nX, 1))
-        elif init_cond == "from_eig":           
-            x = _initial_condition_from_eigenvalues(A)
-        elif init_cond == "e1":
-            x = np.zeros((nX, 1))
-            x[0, 0] = 1.0
-        else:   # rand
-            rng = np.random.default_rng()
-            x = rng.standard_normal((nX, 1))        
-
-        # Disturbance generation
-        wass = Disturbances(gamma=gamma, n=Sigma_w[0].size, var=1)
-        W = wass.sample(T=T, Sigma=Sigma_w)
-        if W.ndim == 1:
-            W = W.reshape(T, 1)
-
-        if W.shape[1] == nw:
-            # Great. Use directly.
-            pass
-        """else:
-            # Case 2: mismatch. DO NOT "average columns".
-            # Sample *state-space* disturbance then project onto span(Bw_hat).
-            # Build a target state covariance. Easiest defensible choice:
-            #   Sigma_state = Bw_hat Bw_hat^T (+ tiny isotropic pad).
-            eps = 1e-6
-            Sigma_state = B @ B.T + eps * np.eye(nX)
-
-            # Sample state disturbances with that covariance (shape: T x nx)
-            d = wass.sample(T=T, Sigma=Sigma_state)
-
-            # Project each d_t onto col(Bw_hat) via pseudoinverse
-            B_pinv = np.linalg.pinv(B)     # (nw_hat x nx)
-            W = (d @ B_pinv.T)                  # (T x nw_hat)"""
-
-        # Storage
-        X = np.zeros((T, nX))
-        Z = np.zeros((T, nz))
-        step = np.zeros((T,), dtype=int)
-
-        # Rollout
-        for t in range(T):
-            w = W[t, :].reshape(nw, 1)
-            z = C @ x + D @ w
-            X[t, :] = x.ravel()
-            Z[t, :] = z.ravel()
-            step[t] = t
-            x = A @ x + B @ w
-
-        return {
-            "X": X,               # (T, nX)
-            "Z": Z,               # (T, nz)
-            "W": W,               # (T, nw)
-            "T": T, "ts": self.ts, "step": step,
-            "nX": nX, "nw": nw, "nz": nz,
-        }
 
     def plot_composite(self,
                         sim: dict,
@@ -668,4 +629,4 @@ class Closed_Loop():
         plt.show()
         if save: return saved
 
-
+# =============================================================================================== #

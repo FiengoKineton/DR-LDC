@@ -12,7 +12,7 @@ inp = bool(cfg.get("params", {}).get("inp", 0))
 
 
 
-# ------------------------- RECOVER ERR MAT (YOUNG) --------------------------
+# ====== RECOVER ERR MAT (YOUNG) ================================================================ #
 
 def recover_deltas(P, X, Y, M, N, Cy, 
                    Ahat, Buhat,
@@ -129,7 +129,7 @@ def recover_deltas(P, X, Y, M, N, Cy,
     DeltaB = np.real_if_close(DeltaB)
     return DeltaA, DeltaB, EAB_of(DeltaB, M, N, Cy), EAA_of(DeltaA, X, Y)
 
-# ------------------------- RECOVER MATRICES FROM CLOSED-LOOP ------------------
+# ====== RECOVER MATRICES FROM CLOSED-LOOP ====================================================== #
 
 class Recover():
     def __init__(self):
@@ -233,4 +233,4 @@ class Recover():
 
         return Controller(Ac=Ac, Bc=Bc, Cc=Cc, Dc=Dc), res
 
-
+# =============================================================================================== #
