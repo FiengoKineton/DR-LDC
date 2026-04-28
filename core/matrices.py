@@ -85,9 +85,13 @@ class MatricesAPI():
             print("\nBuilding system from data...\n\n")
             return self.make_matrices_from_data(gamma=gamma, upd=upd, **kwargs)
         else:
-            if self.p.get("plant", {}).get("type", None) == "PaperLike":
+            type = self.p.get("plant", {}).get("type", None)
+            if type == "PaperLike":
                 print("\nBuilding paper-like system...\n\n")
                 return self.make_paper_like_system()
+            elif type == "Car":
+                print("\nBuilding car system...\n\n")
+                return self.make_half_car_system() 
             else:
                 print("\nBuilding example system from YAML...\n\n")
                 return self.make_example_system()
@@ -845,6 +849,133 @@ class MatricesAPI():
 
         plant = Plant(A=A, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
         ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
+        return plant, ctrl0
+
+    def make_half_car_system(self):
+        """
+        Half-car active suspension model (linearized, discrete-time)
+
+        States:
+            x = [z_s, z_s_dot, theta, theta_dot, z_uf, z_uf_dot, z_ur, z_ur_dot]
+
+        Inputs:
+            u = active suspension force
+
+        Disturbances:
+            w = [road_front, road_rear]
+        """
+
+        import numpy as np
+        from scipy.linalg import expm
+
+        # ================= PARAMETERS =================
+        ms = 300      # sprung mass (kg)
+        Iyy = 600     # pitch inertia (kg*m^2)
+        muf = 60      # front unsprung mass
+        mur = 60      # rear unsprung mass
+
+        ksf = 2e4     # front suspension stiffness
+        ksr = 2e4     # rear suspension stiffness
+        csf = 1500    # front damping
+        csr = 1500    # rear damping
+
+        ktf = 2e5     # tire stiffness front
+        ktr = 2e5     # tire stiffness rear
+
+        lf = 1.2      # CG → front axle
+        lr = 1.6      # CG → rear axle
+
+        # ================= CONTINUOUS MODEL =================
+        nx = 8
+
+        A = np.zeros((nx, nx))
+        B = np.zeros((nx, 1))
+        E = np.zeros((nx, 2))  # disturbances
+
+        # --- states ---
+        # 0 z_s, 1 z_s_dot
+        # 2 theta, 3 theta_dot
+        # 4 z_uf, 5 z_uf_dot
+        # 6 z_ur, 7 z_ur_dot
+
+        # kinematics
+        A[0,1] = 1
+        A[2,3] = 1
+        A[4,5] = 1
+        A[6,7] = 1
+
+        # dynamics (simplified but realistic structure)
+
+        # z_s_ddot
+        A[1,0] = -(ksf + ksr)/ms
+        A[1,2] = -(ksf*lf - ksr*lr)/ms
+        A[1,4] = ksf/ms
+        A[1,6] = ksr/ms
+        A[1,1] = -(csf + csr)/ms
+        A[1,3] = -(csf*lf - csr*lr)/ms
+        A[1,5] = csf/ms
+        A[1,7] = csr/ms
+
+        # theta_ddot
+        A[3,0] = -(ksf*lf - ksr*lr)/Iyy
+        A[3,2] = -(ksf*lf**2 + ksr*lr**2)/Iyy
+        A[3,4] = ksf*lf/Iyy
+        A[3,6] = -ksr*lr/Iyy
+        A[3,1] = -(csf*lf - csr*lr)/Iyy
+        A[3,3] = -(csf*lf**2 + csr*lr**2)/Iyy
+        A[3,5] = csf*lf/Iyy
+        A[3,7] = -csr*lr/Iyy
+
+        # front wheel
+        A[5,0] = ksf/muf
+        A[5,2] = ksf*lf/muf
+        A[5,4] = -(ksf + ktf)/muf
+        A[5,1] = csf/muf
+        A[5,3] = csf*lf/muf
+        A[5,5] = -csf/muf
+
+        # rear wheel
+        A[7,0] = ksr/mur
+        A[7,2] = -ksr*lr/mur
+        A[7,6] = -(ksr + ktr)/mur
+        A[7,1] = csr/mur
+        A[7,3] = -csr*lr/mur
+        A[7,7] = -csr/mur
+
+        # ================= INPUT =================
+        # active suspension force acts on sprung mass
+        B[1,0] = 1/ms
+        B[3,0] = 0.0   # simplified (can extend later)
+
+        # ================= DISTURBANCES =================
+        # road inputs (front & rear)
+        E[5,0] = ktf/muf
+        E[7,1] = ktr/mur
+
+        # ================= DISCRETIZATION =================
+        dt = self.p.get("simulation", {}).get("ts", 0.05)
+
+        def discretize(Ac, Bc):
+            n, m = Bc.shape
+            M = np.block([[Ac, Bc], [np.zeros((m, n)), np.zeros((m, m))]])
+            Phi = expm(M * dt)
+            return Phi[:n,:n], Phi[:n,n:]
+
+        A_d = expm(A * dt)
+        _, Bu = discretize(A, B)
+        _, Bw = discretize(A, E)
+
+        Bw = Bw / np.sqrt(dt)
+
+        # ================= OUTPUT MATRICES =================
+        Cz, Dzw, Dzu, Cy, Dyw = self.build_out_matrices()
+
+        nx, _, nu, ny, _ = self.get_dimensions_from_yaml()
+        Ac0, Bc0, Cc0, Dc0 = self.build_initial_Mc(nxc=nx, ny=ny, nu=nu)
+
+        plant = Plant(A=A_d, Bw=Bw, Bu=Bu, Cz=Cz, Dzw=Dzw, Dzu=Dzu, Cy=Cy, Dyw=Dyw)
+        ctrl0 = Controller(Ac=Ac0, Bc=Bc0, Cc=Cc0, Dc=Dc0)
+
         return plant, ctrl0
 
     def _augment_matrices(self, B_w, D_vw, D_yw, var: float = 0, Sigma_nom: np.ndarray = None, N: tuple = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, np.ndarray]:

@@ -5,7 +5,8 @@ from core import MatricesAPI, recover_deltas
 from utils import DROLMIResult, Noise, YoungDROConfig
 from utils.helpers import I, Z, negdef, _val, _safe_scalar, _print_header, _print_scale_dict
 
-from ._sim_and_estm import Data_Estimator_and_Simulator
+from .SimEstm import Data_Estimator_and_Simulator
+from .Solvers import SolverManager
 
 
 # =============================================================================================== #
@@ -89,7 +90,6 @@ class Young_dro_lmi:
         self.result = None
         self.other = None
         self.violations = None
-
 
     # -------------------------------------------------------------------------------------- #
 
@@ -344,9 +344,10 @@ class Young_dro_lmi:
         obj_dro = cp.trace(Q @ self.Sigma_nom) + lam * (gamma ** 2)
         reg = 0.0
 
+        Cy_norm, M_norm, N_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 1.0
+        X_norm = 2.5e5 #3.0
+
         if approach == "Young":
-            Cy_norm, M_norm, N_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 1.0
-            X_norm = 2.5e5 #3.0
             beta_aa, beta_ab = np.sqrt(1 + X_norm**2 + Y_norm**2) * self.beta_a, np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * self.beta_b
             print(f"Beta: {self.beta}\nComputed beta_a: {self.beta_a}, beta_b: {self.beta_b} \nComputed beta_aa: {beta_aa}, beta_ab: {beta_ab}")
 
@@ -367,8 +368,9 @@ class Young_dro_lmi:
             tP, consP = self._spectral_norm_epigraph(P, "P") 
 
             # Reg
-            mhu_AA = mhu_AB = rhoK = rhoL = rhoM = rhoN = mu
-            rhoP = 0 #1e-7
+            mhu_AA = mhu_AB = mu
+            rhoK = rhoL = rhoM = rhoN = mu #/10
+            rhoP = mu*0
             reg += mhu_AA * (s_AA + tau_AA / beta_aa**2) + mhu_AB * (s_AB + tau_AB / beta_ab**2)
             reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN
             reg += rhoP * tP * (beta_aa + beta_ab)**2
@@ -387,7 +389,7 @@ class Young_dro_lmi:
         
         elif approach == "Mats":
             # 1) residual anisotropy (directions and weights)
-            U_A, _, w_A = self._residual_anisotropy_weights(self.R, floor=1e-12, mode="sqrt")
+            U_A, _, w_A = self.estimator._residual_anisotropy_weights(self.R, floor=1e-12, mode="sqrt")
             # Optional: cap tiny directions to avoid numerical issues
             w_A = np.maximum(w_A, 1e-6)
             w_B = np.mean(w_A)
@@ -408,7 +410,7 @@ class Young_dro_lmi:
             beta_AA = cp.Parameter(nx, nonneg=True, value=beta_AA_dir_np)
 
 
-            Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
+            #Cy_norm, M_norm, N_norm, X_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 3.0, 1.0 # 2.5e5, 1.0
             beta_ab = w_B * self.beta_b #np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * beta_b
             beta_AB = cp.Parameter(nonneg=True, value=float(np.clip(beta_ab, 0.0, 1e3)))
 
@@ -451,6 +453,7 @@ class Young_dro_lmi:
             reg += rhoK * tK + rhoL * tL + rhoM * tM + rhoN * tN #+ mu * tP * (cp.sum(beta_AA) + beta_AB)**2
 
             cons += consK + consL + consM + consN     # += consP
+        
         else:
             pass
 
@@ -525,50 +528,25 @@ class Young_dro_lmi:
         if self.problem is None:
             self.build_problem()
 
-        success = False
-        used_solver = None
+        solver = SolverManager(
+            solver_order=self.cfg.solver_order,
+            verbose=self.cfg.verbose
+        )
 
-        for solver_name in self.cfg.solver_order:
-            try:
-                if solver_name == "MOSEK":
-                    if self.cfg.verbose:
-                        print("\nAttempting to solve with MOSEK...")
-                    self.problem.solve(
-                        solver=cp.MOSEK,
-                        verbose=self.cfg.verbose,
-                        mosek_params={
-                            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-7,
-                            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-7,
-                            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-7,
-                            'MSK_IPAR_INTPNT_SCALING': 1,
-                        }
-                    )
+        sol = solver.solve(self.problem)
 
-                elif solver_name == "SCS":
-                    if self.cfg.verbose:
-                        print("\nAttempting to solve with SCS...")
-                    self.problem.solve(
-                        solver=cp.SCS,
-                        verbose=self.cfg.verbose,
-                        eps=1e-4,
-                        max_iters=10000
-                    )
+        used_solver = sol["solver"]
+        self.problem = sol["problem"]
 
-                if self.problem.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-                    used_solver = solver_name
-                    success = True
-                    break
-
-            except Exception as e:
-                print(f"{solver_name} error: {e}")
-
-        if not success:
+        if not sol["success"]:
             print("Optimization error: all solvers failed.")
-            used_solver = "FAILED"
 
         self._postprocess(used_solver)
+        print(f"\nSolver: {used_solver}, Status: {self.problem.status}, Objective value: {self.problem.value}")
+        #input("Press Enter to continue...")
+
         return self.result
-    
+
     # -------------------------------------------------------------------------------------- #
 
     def run(self):

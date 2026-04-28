@@ -134,6 +134,24 @@ def apply_terminal_overrides(cfg: dict) -> dict:
     single_run = False
     analysis_mode = False
 
+    # ================= PLANT SELECTION =================
+    plant_type = ask_choice(
+        "Which plant system?",
+        ["PaperLike", "Car"],
+        default="PaperLike"
+    )
+
+    p["plant_type"] = plant_type  # store for later use
+
+    # modify dimensions ONLY if Car is selected
+    if plant_type == "Car":
+        if "core" not in p:
+            p["core"] = {}
+        if "dimensions" not in p["core"]:
+            p["core"]["dimensions"] = {}
+
+        p["core"]["dimensions"]["nx"] = 8
+
     if not full_run:
         mode = ask_choice(
             "Select mode",

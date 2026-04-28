@@ -130,7 +130,7 @@ class lmi_pipeline_optim_problem():
                                     model=model,
                                     approach=approach,
                                     N_sims=N_sims,
-                                    mu=5e-2,
+                                    mu=5e-1,
                                     real_Z_mats=real_Z_mats,
                                     delta=delta,
                                 )

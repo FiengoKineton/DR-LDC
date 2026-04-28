@@ -642,6 +642,448 @@ class ResultsComparator:
         if save:
             plt.savefig(save_path, bbox_inches="tight")
 
+    # ------------------------ helpers: error trajectories ------------------------
+
+    def _compute_avg_error_traj(self, A, B, burn_in=0):
+        """
+        Returns a single trajectory e_rms(t) from two (T,n) arrays.
+        """
+        if A is None or B is None:
+            return None
+
+        A = np.asarray(A)
+        B = np.asarray(B)
+
+        if A.ndim == 1:
+            A = A.reshape(-1, 1)
+        if B.ndim == 1:
+            B = B.reshape(-1, 1)
+
+        T = min(A.shape[0], B.shape[0])
+        A = A[:T]
+        B = B[:T]
+
+        if burn_in > 0:
+            A = A[burn_in:]
+            B = B[burn_in:]
+
+        E = A - B  # (T, n)
+
+        # RMS across channels → (T,)
+        e_rms = np.sqrt(np.mean(E**2, axis=1))
+
+        return e_rms
+
+    def _plot_avg_error_bundle(self, t, errors_dict, title, save_path, save=True):
+        """
+        errors_dict = {
+            "x": e_x,
+            "u": e_u,
+            "y": e_y,
+            "z": e_z,
+            ...
+        }
+        each e_* is (T,)
+        """
+        import matplotlib.pyplot as plt
+
+        keys = [k for k, v in errors_dict.items() if v is not None]
+
+        if not keys:
+            print("[warn] No error trajectories to plot.")
+            return
+
+        fig, axes = plt.subplots(len(keys), 1, figsize=(10, 2.5 * len(keys)), sharex=True)
+
+        if len(keys) == 1:
+            axes = [axes]
+
+        for ax, k in zip(axes, keys):
+            e = errors_dict[k]
+            T = len(e)
+            tt = (np.arange(T) if len(t) != T else t[:T]) * self.ts
+
+            ax.plot(tt, e, linewidth=1.6)
+            ax.set_ylabel(f"e_{k}(t)")
+            ax.grid(True, alpha=0.3)
+
+        axes[-1].set_xlabel("time")
+        axes[0].set_title(title)
+
+        plt.tight_layout()
+
+        if save:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+        # plt.show() optional
+
+    def _smooth_and_derivative(self, U, window=11, poly=2):
+        """
+        Smooth U and compute derivative.
+        Uses Savitzky-Golay (better than moving average for derivatives).
+        """
+        from scipy.signal import savgol_filter
+
+        U = np.asarray(U)
+        if U.ndim == 1:
+            U = U.reshape(-1, 1)
+
+        # Ensure odd window
+        if window % 2 == 0:
+            window += 1
+
+        U_smooth = savgol_filter(U, window_length=window, polyorder=poly, axis=0)
+        dU = np.gradient(U_smooth, axis=0) / self.ts
+
+        return U_smooth, dU
+
+    def _classify_trend(self, dU, thresholds=(0.01, 0.05)):
+        """
+        Classify derivative into discrete trend levels.
+
+        thresholds = (low, high)
+
+        Returns integer labels:
+            -2 strong decrease
+            -1 mild decrease
+            0 flat
+            1 mild increase
+            2 strong increase
+        """
+        low, high = thresholds
+
+        trend = np.zeros_like(dU)
+
+        trend[dU > high] = 2
+        trend[(dU > low) & (dU <= high)] = 1
+        trend[(dU < -low) & (dU >= -high)] = -1
+        trend[dU < -high] = -2
+
+        return trend
+
+    def _plot_input_trend_comparison(
+        self,
+        t,
+        UM,
+        UD,
+        title,
+        save_path,
+        save=True,
+    ):
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        UM = np.asarray(UM)
+        UD = np.asarray(UD)
+
+        if UM.ndim == 1:
+            UM = UM.reshape(-1, 1)
+        if UD.ndim == 1:
+            UD = UD.reshape(-1, 1)
+
+        T = min(UM.shape[0], UD.shape[0])
+        UM = UM[:T]
+        UD = UD[:T]
+
+        t = (np.arange(T) if len(t) != T else t[:T]) * self.ts
+
+        nu = min(UM.shape[1], UD.shape[1])
+
+        fig, axes = plt.subplots(nu, 1, figsize=(12, 3 * nu), sharex=True)
+        if nu == 1:
+            axes = [axes]
+
+        for i, ax in enumerate(axes):
+            # --- Smooth + derivative ---
+            uM_s, dM = self._smooth_and_derivative(UM[:, i])
+            uD_s, dD = self._smooth_and_derivative(UD[:, i])
+
+            dM = dM.flatten()
+            dD = dD.flatten()
+
+            # --- classify ---
+            trendM = self._classify_trend(dM)
+            trendD = self._classify_trend(dD)
+
+            # --- plot signals ---
+            ax.plot(t, uM_s, label="MBD", linewidth=1.6)
+            ax.plot(t, uD_s, label=f"{self.name}", linestyle="--", linewidth=1.6)
+
+            # --- background coloring ---
+            for k in range(T - 1):
+                # MBD trend color
+                if trendM[k] > 0:
+                    color = "green"
+                    alpha = 0.05 + 0.05 * abs(trendM[k])
+                elif trendM[k] < 0:
+                    color = "red"
+                    alpha = 0.05 + 0.05 * abs(trendM[k])
+                else:
+                    continue
+
+                ax.axvspan(t[k], t[k+1], color=color, alpha=alpha)
+
+            # --- disagreement highlight ---
+            disagreement = trendM != trendD
+            for k in range(T - 1):
+                if disagreement[k]:
+                    ax.axvspan(t[k], t[k+1], color="gray", alpha=0.15)
+
+            ax.set_ylabel(f"u[{i}]")
+            ax.grid(True, alpha=0.3)
+
+        axes[0].set_title(title)
+        axes[-1].set_xlabel("time")
+        axes[0].legend()
+
+        plt.tight_layout()
+
+        if save:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    def _smooth_signal(self, U, window=None, poly=3):
+        from scipy.signal import savgol_filter
+        import numpy as np
+
+        U = np.asarray(U)
+
+        # flatten safely
+        if U.ndim > 1:
+            U = U.reshape(U.shape[0], -1)
+        else:
+            U = U.reshape(-1, 1)
+
+        T = U.shape[0]
+
+        # --- dynamic window ---
+        if window is None:
+            window = max(5, T // 20)   # your idea, but safe minimum
+
+        # --- enforce constraints ---
+        if window >= T:
+            window = T - 1
+
+        if window % 2 == 0:
+            window += 1
+
+        # ensure window is still valid
+        if window < poly + 2:
+            window = poly + 3  # must be odd anyway
+            if window % 2 == 0:
+                window += 1
+
+        # final guard (very short signals)
+        if window >= T:
+            return U.squeeze()  # skip smoothing
+
+        # --- smoothing ---
+        U_smooth = savgol_filter(U, window_length=window, polyorder=min(poly, window - 1), axis=0)
+
+        return U_smooth.squeeze()
+
+    def _trend_levels(self, dU, low=0.01, high=0.05):
+        """
+        Returns:
+            -2 strong decrease
+            -1 mild decrease
+            0 flat
+            1 mild increase
+            2 strong increase
+        """
+        trend = np.zeros_like(dU)
+
+        trend[dU > high] = 2
+        trend[(dU > low) & (dU <= high)] = 1
+        trend[(dU < -low) & (dU >= -high)] = -1
+        trend[dU < -high] = -2
+
+        return trend
+
+    def _trend_to_color(self, val):
+        if val == 2:
+            return "#08306b"   # dark blue
+        elif val == 1:
+            return "#6baed6"   # light blue
+        elif val == -1:
+            return "#fdae6b"   # light orange
+        elif val == -2:
+            return "#cb181d"   # red
+        else:
+            return "gray"
+
+    def _plot_colored_trend_line(self, ax, t, u, trend, label, lw=2):
+        for k in range(len(t) - 1):
+            color = self._trend_to_color(trend[k])
+            ax.plot(t[k:k+2], u[k:k+2], color=color, linewidth=lw)
+
+        # legend proxies
+        ax.plot([], [], color="#08306b", label=f"{label} strong ↑")
+        ax.plot([], [], color="#6baed6", label=f"{label} mild ↑")
+        ax.plot([], [], color="#fdae6b", label=f"{label} mild ↓")
+        ax.plot([], [], color="#cb181d", label=f"{label} strong ↓")
+
+    def _find_intervals(self, mask):
+        """
+        mask: boolean array
+        returns list of (start, end)
+        """
+        intervals = []
+        in_block = False
+        start = 0
+
+        for i, val in enumerate(mask):
+            if val and not in_block:
+                in_block = True
+                start = i
+            elif not val and in_block:
+                intervals.append((start, i))
+                in_block = False
+
+        if in_block:
+            intervals.append((start, len(mask)-1))
+
+        return intervals
+
+    def _plot_input_trend_clean(self, t, UM, UD, title, save_path, save=True):
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        UM = np.asarray(UM)
+        UD = np.asarray(UD)
+
+        if UM.ndim == 1:
+            UM = UM.reshape(-1, 1)
+        if UD.ndim == 1:
+            UD = UD.reshape(-1, 1)
+
+        T = min(UM.shape[0], UD.shape[0])
+        UM = UM[:T]
+        UD = UD[:T]
+
+        t = (np.arange(T) if len(t) != T else t[:T]) * self.ts
+
+        nu = min(UM.shape[1], UD.shape[1])
+
+        fig, axes = plt.subplots(nu, 1, figsize=(12, 3 * nu), sharex=True)
+        if nu == 1:
+            axes = [axes]
+
+        for i, ax in enumerate(axes):
+
+            # --- smooth ---
+            uM = self._smooth_signal(UM[:, i]).reshape(-1)
+            uD = self._smooth_signal(UD[:, i]).reshape(-1)
+
+            # --- derivative ---
+            dM = np.gradient(uM) / self.ts
+            dD = np.gradient(uD) / self.ts
+
+            # --- trend ---
+            trendM = self._trend_levels(dM)
+            trendD = self._trend_levels(dD)
+
+            # --- colored lines ---
+            self._plot_colored_trend_line(ax, t, uM, trendM, "MBD")
+            self._plot_colored_trend_line(ax, t, uD, trendD, self.name, linewidth=1.5)
+
+            # --- disagreement regions ---
+            disagree = trendM != trendD
+            intervals = self._find_intervals(disagree)
+
+            for s, e in intervals:
+                ax.axvspan(t[s], t[e], color="lightgray", alpha=0.3)
+
+            ax.set_ylabel(f"u[{i}]")
+            ax.grid(True, alpha=0.3)
+
+        axes[0].set_title(title)
+        axes[-1].set_xlabel("time")
+        axes[0].legend()
+
+        plt.tight_layout()
+
+        if save:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    def _plot_input_trend_two_subplots(self, t, UM, UD, title, save_path, save=True):
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        UM = np.asarray(UM)
+        UD = np.asarray(UD)
+
+        if UM.ndim == 1:
+            UM = UM.reshape(-1, 1)
+        if UD.ndim == 1:
+            UD = UD.reshape(-1, 1)
+
+        T = min(UM.shape[0], UD.shape[0])
+        UM = UM[:T]
+        UD = UD[:T]
+
+        t = (np.arange(T) if len(t) != T else t[:T]) * self.ts
+
+        nu = min(UM.shape[1], UD.shape[1])
+
+        fig, axes = plt.subplots(2 * nu, 1, figsize=(12, 4 * nu), sharex=True)
+
+        if nu == 1:
+            axes = list(axes)
+
+        for i in range(nu):
+
+            ax_m = axes[2*i]
+            ax_d = axes[2*i + 1]
+
+            # --- smooth ---
+            uM = self._smooth_signal(UM[:, i]).reshape(-1)
+            uD = self._smooth_signal(UD[:, i]).reshape(-1)
+
+            if len(uM) < 3 or len(uD) < 3:
+                continue
+
+            # --- derivative ---
+            dM = np.gradient(uM) / self.ts
+            dD = np.gradient(uD) / self.ts
+
+            # --- trend ---
+            trendM = self._trend_levels(dM)
+            trendD = self._trend_levels(dD)
+
+            # --- disagreement ---
+            disagree = trendM != trendD
+            intervals = self._find_intervals(disagree)
+
+            # ===================== MBD =====================
+            self._plot_colored_trend_line(ax_m, t, uM, trendM, "MBD")
+
+            for s, e in intervals:
+                ax_m.axvspan(t[s], t[e], color="lightgray", alpha=0.3)
+
+            ax_m.set_ylabel(f"MBD u[{i}]")
+            ax_m.grid(True, alpha=0.3)
+
+            # ===================== DDD =====================
+            self._plot_colored_trend_line(ax_d, t, uD, trendD, self.name)
+
+            for s, e in intervals:
+                ax_d.axvspan(t[s], t[e], color="lightgray", alpha=0.3)
+
+            ax_d.set_ylabel(f"{self.name} u[{i}]")
+            ax_d.grid(True, alpha=0.3)
+
+        axes[0].set_title(title)
+        axes[-1].set_xlabel("time")
+
+        plt.tight_layout()
+
+        if save:
+            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
     # ------------------------ public: MBD vs DDD (same method) ------------------------
 
     def compare_mbd_vs_ddd(self, *, path_name: str, method: str = "lmi", ID: str = "temp", plot: bool = True, re_evaluate: bool = False,
@@ -1086,7 +1528,47 @@ class ResultsComparator:
         else:
             print("\n[warn] Missing SNR NPZ for one/both runs; skipping SNR overlays.")
 
-        
+
+
+        # ---- Average error trajectories ----
+        e_x  = self._compute_avg_error_traj(XM, XD, burn_in=burn_in)
+        e_xc = self._compute_avg_error_traj(XcM, XcD, burn_in=burn_in)
+        e_u  = self._compute_avg_error_traj(UM, UD, burn_in=burn_in)
+        e_y  = self._compute_avg_error_traj(YM, YD, burn_in=burn_in)
+        e_z  = self._compute_avg_error_traj(ZM, ZD, burn_in=burn_in)
+
+        errors_bundle = {
+            "x": e_x,
+            "xc": e_xc,
+            "u": e_u,
+            "y": e_y,
+            "z": e_z,
+        }
+
+        title = f"{method.upper()} average error trajectories (MBD vs {method})"
+        save_path = run_dir / f"{base}_avg_error_bundle.pdf"
+
+        self._plot_avg_error_bundle(
+            t,
+            errors_bundle,
+            title,
+            save_path,
+            save=self.save
+        )
+
+        title = f"{method.upper()} input trend comparison (MBD vs {method})"
+        save_path = run_dir / f"{base}_input_trend_comparison.pdf"
+
+        #self._plot_input_trend_comparison(
+        self._plot_input_trend_two_subplots(
+            t,
+            UM,
+            UD,
+            title,
+            save_path,
+            save=self.save
+        )
+
 
         # Assemble report
         report = {

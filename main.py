@@ -1,5 +1,4 @@
 import sys
-
 from analysis import (
     print_infos_comparison, print_infos,            # print_info.py
     MutipleRunsEvaluation, NsimSweep_FROM_DATA,     # Nsims_eval.py  
@@ -11,8 +10,7 @@ from utils import select_gamma                      # gamma_selection.py
 # ----------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    cfg = get_cfg()
-    p = cfg.get("params", {})
+    p = get_cfg().get("params", {})
     gamma = select_gamma(p)
 
     if bool(p.get("FIND", 0)):
@@ -38,8 +36,8 @@ if __name__ == "__main__":
         else: 
             COST = True
             N_sims_values = [
-                1,   2,   3,   5,          # Emergence of structure
-                8,  12,  16,               # Early stability range
+                1,   2,   3,   5,           # Emergence of structure
+                8,  12,  16,                # Early stability range
                 20,  25,  30,               # Practical medoid stability region
                 40,  50,  65,               # Larger-sample variance reduction
                 80, 100, 120, 150           # High-data (plateau) regime
