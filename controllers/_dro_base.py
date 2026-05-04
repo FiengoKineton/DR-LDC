@@ -2,7 +2,7 @@ import sys
 import numpy as np, cvxpy as cp
 
 from core import MatricesAPI
-from utils import Plant, DROLMIResult, Noise
+from utils import Plant, DROLMIResult, Noise, matrix_norms
 
 
 
@@ -239,6 +239,14 @@ def Baseline_dro_lmi(
         Pbar=Pbar_val, Abar=Abar_val, Bbar=Bbar_val, Cbar=Cbar_val, Dbar=Dbar_val, 
         Tp = Tp, P=Tp_t_inv @ Pbar_val @ Tp_inv
     )
+
+
+    """# Apply to your matrices
+    matrix_norms(M_val, "M")
+    matrix_norms(N_val, "N")
+    matrix_norms(X_val, "X")
+    matrix_norms(Y_val, "Y")
+    sys.exit(0)#"""
 
     return dro, (violations, total_constraints)
 

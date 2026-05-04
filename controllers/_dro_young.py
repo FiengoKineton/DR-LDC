@@ -2,8 +2,10 @@ import sys
 import numpy as np, cvxpy as cp
 
 from core import MatricesAPI, recover_deltas
-from utils import DROLMIResult, Noise, YoungDROConfig
-from utils.helpers import I, Z, negdef, _val, _safe_scalar, _print_header, _print_scale_dict
+from utils import (
+    DROLMIResult, Noise, YoungDROConfig,
+    I, Z, negdef, _val, _safe_scalar, _print_header, _print_scale_dict,
+)
 
 from .SimEstm import Data_Estimator_and_Simulator
 from .Solvers import SolverManager
@@ -344,8 +346,14 @@ class Young_dro_lmi:
         obj_dro = cp.trace(Q @ self.Sigma_nom) + lam * (gamma ** 2)
         reg = 0.0
 
-        Cy_norm, M_norm, N_norm, Y_norm = np.linalg.norm(self.Cy, 2), 0.15, 0.6, 1.0
-        X_norm = 2.5e5 #3.0
+
+        Cy_norm = np.linalg.norm(self.Cy, 2)
+        if model.lower() in ["correlated", "corr", "1"]:
+            M_norm, N_norm, Y_norm, X_norm = 0.1, 0.27, 0.76, 2e5
+        else: 
+            M_norm, N_norm, Y_norm, X_norm = 0.15, 0.2, 1.0, 8e3 #3.0
+        
+        
 
         if approach == "Young":
             beta_aa, beta_ab = np.sqrt(1 + X_norm**2 + Y_norm**2) * self.beta_a, np.sqrt(M_norm**2 + N_norm**2 * Cy_norm**2) * self.beta_b
@@ -455,7 +463,7 @@ class Young_dro_lmi:
             cons += consK + consL + consM + consN     # += consP
         
         else:
-            pass
+            raise ValueError("approach must be 'Young' or 'Mats'.")
 
 
         obj = obj_dro + reg
